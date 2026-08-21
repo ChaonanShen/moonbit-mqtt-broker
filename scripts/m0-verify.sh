@@ -21,7 +21,7 @@ moon run --target native src/cmd/codec_gate
 tests/integration/m0_connect.sh
 
 package_files="$(moon package --list 2>&1)"
-if grep -Eq '(\.local\.md|node_modules|test-results|\.env)' <<<"${package_files}"; then
+if grep -Eq '(\.local\.|node_modules|test-results|\.env)' <<<"${package_files}"; then
   echo 'Mooncakes package contains an excluded local or generated file' >&2
   exit 1
 fi

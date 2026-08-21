@@ -1,4 +1,4 @@
-*.local.md
+*.local.*
 tools/codec_oracle/node_modules
 tests/integration/node_modules
 test-results
