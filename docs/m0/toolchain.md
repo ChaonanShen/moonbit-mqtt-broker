@@ -42,3 +42,7 @@ The upstream repository did not expose a `0.1.0` tag at verification time, so
 the moving GitHub HEAD is not asserted to be identical to the registry
 artifact. Upgrades change one pinned variable at a time and rerun the full
 codec and runtime gates.
+
+The pinned `moon package` reports that `--dry-run` is not implemented. M0 uses
+its non-publishing `moon package --list` equivalent to validate the manifest
+and audit packaged paths; CI never invokes `moon publish`.
