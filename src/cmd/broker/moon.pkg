@@ -1,1 +1,12 @@
+import {
+  "ChaonanShen/moonbit-mqtt-broker/server",
+  "moonbitlang/async",
+  "moonbitlang/core/env",
+  "moonbitlang/core/string",
+}
+
 pkgtype(kind: "executable")
+
+options(
+  targets: { "main.mbt": [ "native" ] },
+)

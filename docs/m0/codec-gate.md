@@ -3,8 +3,8 @@
 ## Decision
 
 `zbhzs1/moonbit-mqtt@0.1.0` passes the offline Native codec gate and is the M0
-candidate backend. This is a preliminary **Go** decision; it becomes final only
-after the MQTT.js and Mosquitto CONNECT smoke tests pass.
+backend. The **Go** decision is final for M0: both MQTT.js 5.15.2 and Mosquitto
+2.0.18 subsequently completed a real TCP MQTT 3.1.1 CONNECT → CONNACK exchange.
 
 The project exposes only its own `Packet`, `PacketId`, `CodecError`, and
 `PacketDirection` types. Candidate types and string errors remain private to

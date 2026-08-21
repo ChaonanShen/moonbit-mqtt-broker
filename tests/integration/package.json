@@ -1,0 +1,8 @@
+{
+  "name": "moonbit-mqtt-broker-integration",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "mqtt": "5.15.2"
+  }
+}
