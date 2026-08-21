@@ -1,0 +1,4 @@
+// MQTT topic validation and matching is deliberately independent of transport.
+import {
+  "moonbitlang/core/encoding/utf8",
+}
