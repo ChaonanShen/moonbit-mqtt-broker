@@ -1,1 +1,3 @@
-// The protocol boundary is dependency-free; codec backends stay private.
+import {
+  "zbhzs1/moonbit-mqtt" @candidate,
+}
