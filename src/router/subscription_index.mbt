@@ -131,6 +131,18 @@ pub fn SubscriptionIndex::subscription_count_for(
 }
 
 ///|
+/// Returns a sorted snapshot for BrokerState invariant validation.
+fn SubscriptionIndex::client_ids(
+  self : SubscriptionIndex,
+) -> Array[@session.ClientId] {
+  let result = self.by_client.keys().collect()
+  result.sort_by(fn(left, right) {
+    compare_utf8_for_sort(left.value(), right.value())
+  })
+  result
+}
+
+///|
 /// Finds each client once, combining overlapping matching filters with max QoS.
 pub fn SubscriptionIndex::matches(
   self : SubscriptionIndex,
@@ -163,6 +175,9 @@ pub fn SubscriptionIndex::matches(
 
 ///|
 pub fn SubscriptionIndex::check_invariants(self : SubscriptionIndex) -> Bool {
+  if self.count < 0 {
+    return false
+  }
   let mut forward_count = 0
   for entry in self.by_filter {
     let (filter, clients) = entry
@@ -182,5 +197,26 @@ pub fn SubscriptionIndex::check_invariants(self : SubscriptionIndex) -> Bool {
       }
     }
   }
-  forward_count == self.count
+  let mut reverse_count = 0
+  for entry in self.by_client {
+    let (client_id, filters) = entry
+    if filters.length() == 0 {
+      return false
+    }
+    for entry in filters {
+      let (filter, qos) = entry
+      match self.by_filter.get(filter) {
+        Some(clients) =>
+          match clients.get(client_id) {
+            Some(forward_qos) if forward_qos == qos =>
+              reverse_count = reverse_count + 1
+            _ => return false
+          }
+        None => return false
+      }
+    }
+  }
+  forward_count == self.count &&
+  reverse_count == self.count &&
+  forward_count == reverse_count
 }

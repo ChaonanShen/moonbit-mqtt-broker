@@ -193,10 +193,24 @@ pub fn BrokerState::check_invariants(
   if !self.subscriptions.check_invariants() {
     return Err(InvariantViolation("subscription index is inconsistent"))
   }
+  if self.subscriptions.subscription_count() < 0 || self.retained.count() < 0 {
+    return Err(InvariantViolation("resource count is negative"))
+  }
   if self.subscriptions.subscription_count() >
-    self.config.max_subscriptions_total ||
-    self.retained.count() > self.config.max_retained_messages {
-    return Err(InvariantViolation("resource limit exceeded"))
+    self.config.max_subscriptions_total {
+    return Err(InvariantViolation("total subscription limit exceeded"))
+  }
+  if self.retained.count() > self.config.max_retained_messages {
+    return Err(InvariantViolation("retained message limit exceeded"))
+  }
+  for client_id in self.subscriptions.client_ids() {
+    if self.sessions.get(client_id) is None {
+      return Err(InvariantViolation("subscription references missing session"))
+    }
+    if self.subscriptions.subscription_count_for(client_id) >
+      self.config.max_subscriptions_per_session {
+      return Err(InvariantViolation("per-session subscription limit exceeded"))
+    }
   }
   Ok(())
 }
