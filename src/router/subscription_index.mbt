@@ -156,13 +156,7 @@ pub fn SubscriptionIndex::matches(
     result.push({ client_id, qos })
   }
   result.sort_by(fn(left, right) {
-    if left.client_id.value() < right.client_id.value() {
-      1
-    } else if left.client_id.value() > right.client_id.value() {
-      -1
-    } else {
-      0
-    }
+    compare_utf8_for_sort(left.client_id.value(), right.client_id.value())
   })
   result
 }
