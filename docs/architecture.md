@@ -40,3 +40,14 @@ Topic filters and names are validated before events are created. Overlapping
 filters are merged once per client at the highest subscription QoS. Retained
 storage is bounded: a new topic at capacity rejects the whole publish, while
 replacement and deletion remain allowed.
+
+All client delivery actions and retained replays use ascending lexical order of
+the original UTF-8 bytes. The ordering is independent of Map iteration,
+insertion order, locale, case folding, and Unicode normalization.
+
+`SubscriptionIndex` maintains both `filter → clients` and `client → filters`
+indexes. Its invariant checker proves both directions contain the same nonempty
+buckets, QoS values, and pair count. `BrokerState::check_invariants` additionally
+rejects subscriptions without a Session and verifies per-session, total
+subscription, and retained-message limits. These checks are exercised through
+white-box corruption tests and a deterministic 10,000-transition regression.
