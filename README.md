@@ -42,9 +42,8 @@ scripts/moon-docker.sh run --target native src/cmd/broker -- \
 tests. The current service deliberately closes connections that send any
 unsupported packet flow.
 
-See [compatibility](docs/compatibility.md),
-[architecture](docs/architecture.md), and the
-[M0 verification record](docs/m0/verification.md) for exact scope.
+See [compatibility](docs/compatibility.md) and
+[architecture](docs/architecture.md) for exact scope.
 
 ## License
 
