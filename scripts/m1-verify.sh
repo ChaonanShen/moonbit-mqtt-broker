@@ -5,6 +5,26 @@ cd "${REPO_ROOT}"
 scripts/m0-verify.sh
 moon fmt --check
 moon check --target native
+
+readonly M1_TEST_COUNT="$(grep -Rh '^test "' src/topic src/session src/router | wc -l | tr -d ' ')"
+if [ "${M1_TEST_COUNT}" -lt 24 ]; then
+  echo "M1 acceptance suite has only ${M1_TEST_COUNT} tests; expected at least 24" >&2
+  exit 1
+fi
+
+for required_test in \
+  'one thousand deterministic topic matches' \
+  'ten thousand deterministic router transitions' \
+  'router errors are atomic' \
+  'router containers do not alias caller state' \
+  'action ordering ignores insertion order' \
+  'subscription index rejects reverse-only corruption'; do
+  if ! grep -Rqs "test \"${required_test}\"" src/topic src/session src/router; then
+    echo "M1 acceptance test is missing: ${required_test}" >&2
+    exit 1
+  fi
+done
+
 moon test --target native
 moon build --target native
 if grep -REn 'async|socket|server|framing|filesystem|clock|random' src/topic src/session src/router; then
