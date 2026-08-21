@@ -1,1 +1,13 @@
+import {
+  "ChaonanShen/moonbit-mqtt-broker/protocol_adapter" @protocol,
+  "moonbitlang/async",
+  "moonbitlang/async/fs",
+  "moonbitlang/async/io",
+  "moonbitlang/core/json",
+}
+
 pkgtype(kind: "executable")
+
+options(
+  targets: { "main.mbt": [ "native" ] },
+)

@@ -1,0 +1,12 @@
+{
+  "name": "moonbit-mqtt-broker-codec-oracle",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "node generate_vectors.mjs",
+    "verify": "node verify_vectors.mjs"
+  },
+  "dependencies": {
+    "mqtt-packet": "9.0.2"
+  }
+}
