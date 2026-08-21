@@ -34,3 +34,26 @@ test "subscription index is bidirectional and merges matching qos" {
   assert_eq(index.subscription_count(), 1)
   assert_true(index.check_invariants())
 }
+
+///|
+test "action ordering ignores insertion order" {
+  let ordered_topic = topic("ordered")
+  let ordered_filter = filter("ordered")
+  let first = SubscriptionIndex::new()
+  for name in ["charlie", "éclair", "alice", "😀", "bob"] {
+    ignore(first.put(client(name), ordered_filter, @session.DeliveryQoS::QoS0))
+  }
+  let second = SubscriptionIndex::new()
+  for name in ["bob", "😀", "alice", "charlie", "éclair"] {
+    ignore(second.put(client(name), ordered_filter, @session.DeliveryQoS::QoS0))
+  }
+  let expected = ["alice", "bob", "charlie", "éclair", "😀"]
+  assert_eq(
+    first.matches(ordered_topic).map(fn(item) { item.client_id.value() }),
+    expected,
+  )
+  assert_eq(
+    second.matches(ordered_topic).map(fn(item) { item.client_id.value() }),
+    expected,
+  )
+}

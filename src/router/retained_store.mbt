@@ -72,13 +72,7 @@ pub fn RetainedStore::matching(
     }
   }
   result.sort_by(fn(left, right) {
-    if left.topic.value() < right.topic.value() {
-      1
-    } else if left.topic.value() > right.topic.value() {
-      -1
-    } else {
-      0
-    }
+    compare_utf8_for_sort(left.topic.value(), right.topic.value())
   })
   result
 }

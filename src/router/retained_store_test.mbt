@@ -25,3 +25,29 @@ test "retained store bounds new topics but permits replacement and deletion" {
   assert_eq(store.count(), 0)
   assert_eq(store.matching([retained_filter("#")]), [])
 }
+
+///|
+test "retained replay ordering ignores insertion order" {
+  let first = RetainedStore::new()
+  for name in ["z/topic", "é/topic", "a/topic", "😀/topic", "m/topic"] {
+    assert_true(
+      first.put(retained_topic(name), b"x", @session.DeliveryQoS::QoS0, 8),
+    )
+  }
+  let second = RetainedStore::new()
+  for name in ["m/topic", "😀/topic", "a/topic", "z/topic", "é/topic"] {
+    assert_true(
+      second.put(retained_topic(name), b"x", @session.DeliveryQoS::QoS0, 8),
+    )
+  }
+  let expected = ["a/topic", "m/topic", "z/topic", "é/topic", "😀/topic"]
+  let filters = [retained_filter("#")]
+  assert_eq(
+    first.matching(filters).map(fn(item) { item.topic.value() }),
+    expected,
+  )
+  assert_eq(
+    second.matching(filters).map(fn(item) { item.topic.value() }),
+    expected,
+  )
+}
