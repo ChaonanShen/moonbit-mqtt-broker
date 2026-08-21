@@ -1,0 +1,7 @@
+*.local.md
+tools/codec_oracle/node_modules
+test-results
+tmp
+*.log
+.env
+.env.*
