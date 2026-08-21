@@ -15,5 +15,30 @@ Build the toolchain image with `docker build -t moonbit-mqtt-broker-dev .` and
 run MoonBit commands through `scripts/moon-docker.sh`. Source code is bind
 mounted at `/workspace`; it is never copied into the image.
 
-The exact image digest, resolved dependency tree, and command output are
-recorded after the clean M0 verification run.
+The M0 image built on 2026-08-21 is Linux/amd64 with local image ID
+`sha256:77ace90061c9c871155913a3a8e5ec2fa7d02bde87123bbdfbb02a26c1afa954`.
+Its base resolves to
+`ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517`.
+
+`moon version --all` reports:
+
+```text
+moon 0.1.20260814 (a2de5b2 2026-08-14)
+moonc v0.10.8+8606a5800 (2026-08-14)
+moonrun 0.1.20260814 (a2de5b2 2026-08-14)
+```
+
+The resolved dependency tree is intentionally shallow:
+
+```text
+ChaonanShen/moonbit-mqtt-broker@0.1.0
+├─ moonbitlang/async -> moonbitlang/async@0.20.6
+└─ zbhzs1/moonbit-mqtt -> zbhzs1/moonbit-mqtt@0.1.0
+```
+
+For registry artifact traceability, the resolved candidate source file has
+SHA-256 `2e1dfb577709a843ea2a4b9b3f0c23650243ff1193dec8d70483d83c3764622a`.
+The upstream repository did not expose a `0.1.0` tag at verification time, so
+the moving GitHub HEAD is not asserted to be identical to the registry
+artifact. Upgrades change one pinned variable at a time and rerun the full
+codec and runtime gates.
