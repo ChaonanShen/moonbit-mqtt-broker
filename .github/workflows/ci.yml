@@ -1,0 +1,16 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  m0-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned Linux x86_64 toolchain
+        run: docker build --platform linux/amd64 --tag moonbit-mqtt-broker-dev .
+      - name: Run M0 verification
+        run: scripts/m0-verify-docker.sh

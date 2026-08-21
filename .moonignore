@@ -1,5 +1,6 @@
 *.local.md
 tools/codec_oracle/node_modules
+tests/integration/node_modules
 test-results
 tmp
 *.log
