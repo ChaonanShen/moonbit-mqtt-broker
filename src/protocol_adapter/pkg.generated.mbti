@@ -6,6 +6,12 @@ import {
 }
 
 // Values
+pub fn codec_backend() -> String
+
+pub fn decode_packet(Bytes) -> Result[Packet, CodecError]
+
+pub fn encode_packet(Packet) -> Result[Bytes, CodecError]
+
 pub fn validate_direction(Packet, PacketDirection) -> Result[Unit, CodecError]
 
 // Errors
