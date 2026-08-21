@@ -1,0 +1,14 @@
+.git
+_build
+target
+.moon
+.mooncakes
+node_modules
+coverage
+test-results
+tmp
+*.log
+*.tmp
+*.local.md
+.env
+.env.*

@@ -1,0 +1,1 @@
+// TCP stream framing deliberately does not depend on a codec backend.
