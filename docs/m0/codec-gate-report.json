@@ -1,6 +1,6 @@
 {
   "backend": "zbhzs1/moonbit-mqtt@0.1.0",
-  "decision": "go-pending-tcp-smoke",
+  "decision": "go",
   "valid_vectors": 1000,
   "malformed_vectors": 29,
   "semantic_differences": 0,

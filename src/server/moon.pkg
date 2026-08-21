@@ -1,1 +1,14 @@
-// The M0 server package is introduced after the protocol and framing gates.
+import {
+  "ChaonanShen/moonbit-mqtt-broker/framing",
+  "ChaonanShen/moonbit-mqtt-broker/protocol_adapter" @protocol,
+  "moonbitlang/async/io",
+  "moonbitlang/async/socket",
+}
+
+import {
+  "moonbitlang/async",
+} for "test"
+
+options(
+  targets: { "m0_server.mbt": [ "native" ], "m0_server_test.mbt": [ "native" ] },
+)

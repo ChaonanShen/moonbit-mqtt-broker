@@ -1,0 +1,19 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "ChaonanShen/moonbit-mqtt-broker/server"
+
+import {
+  "moonbitlang/async/socket",
+}
+
+// Values
+pub async fn run(String, Int, Bool) -> Unit
+
+pub async fn serve_one(@socket.TcpServer, Int) -> Unit
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits
