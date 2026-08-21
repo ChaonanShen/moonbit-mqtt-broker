@@ -15,8 +15,10 @@ Build the toolchain image with `docker build -t moonbit-mqtt-broker-dev .` and
 run MoonBit commands through `scripts/moon-docker.sh`. Source code is bind
 mounted at `/workspace`; it is never copied into the image.
 
-The M0 image built on 2026-08-21 is Linux/amd64 with local image ID
-`sha256:77ace90061c9c871155913a3a8e5ec2fa7d02bde87123bbdfbb02a26c1afa954`.
+The M0 image built on 2026-08-21 is Linux/amd64 with stable platform manifest
+`sha256:d232d08ba0c200a948aed69b23dd524c492e47c7cab46b135b1cc95fa8dd05cd`
+and config digest
+`sha256:2060712123baed3c266118354957798ba32c14ae5959e882abe51d81ba60cafa`.
 Its base resolves to
 `ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517`.
 

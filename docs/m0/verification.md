@@ -9,7 +9,8 @@ docker build --platform linux/amd64 -t moonbit-mqtt-broker-dev .
 scripts/m0-verify-docker.sh
 ```
 
-Observed results before final clean-checkout repetition:
+The same entry point passed twice consecutively from a clean working tree.
+Final observed results:
 
 - `moon fmt --check`, `moon check`, `moon test`, and `moon build` passed for
   Native; 30 MoonBit tests passed.
