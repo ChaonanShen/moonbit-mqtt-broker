@@ -4,6 +4,7 @@ target/
 _build/
 .mooncakes/
 node_modules/
+pkg.generated.mbti
 
 # Test, coverage, and temporary output
 coverage/
