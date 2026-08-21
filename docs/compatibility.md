@@ -8,9 +8,10 @@
 | Packet codec for planned QoS 0/1 families | Gated | Complete-frame API; not all flows are served yet |
 | MQTT.js 5.15.2 client CONNECT | Supported | MQTT protocol level 4 smoke-tested |
 | Mosquitto 2.0.18 client CONNECT | Supported | Accepted CONNACK smoke-tested |
-| PUBLISH/SUBSCRIBE routing | Not implemented | Planned for M1/M2 |
+| Topic validation and pure PUBLISH/SUBSCRIBE routing | Supported in Router core | Deterministic, transport-free M1 state machine |
 | Keep Alive / takeover / full connection state | Not implemented | Planned for M2 |
-| Retained / Will delivery | Not implemented | Planned for M1/M2 |
+| Retained delivery | Supported in Router core | Bounded retained store; network delivery awaits M2 |
+| Network PUBLISH/SUBSCRIBE / SUBACK / UNSUBACK | Not implemented | Planned for M2 transport integration |
 | QoS 1 PUBACK / inflight | Not implemented | Planned for M3 |
 | Persistent Session | Not implemented | Planned for M3 |
 | State across Broker restart | Not implemented | Planned for M4 |

@@ -1,5 +1,9 @@
 # Porting scope and provenance
 
+M1's topic matching, subscription indexing, retained-message handling, and pure
+event/action state machine are original MoonBit implementations guided by MQTT
+3.1.1 semantics. No Aedes source or test code was copied.
+
 The fixed primary reference is Aedes `v1.1.1`, commit
 `eac44f9920b49dd20eb0e83cc9d5c4b9038eb963` (MIT). M0 does not copy or adapt
 Aedes Broker, Client, Router, or handler source; it only freezes the future
