@@ -1,0 +1,130 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "ChaonanShen/moonbit-mqtt-broker/protocol_adapter"
+
+import {
+  "moonbitlang/core/debug",
+}
+
+// Values
+pub fn validate_direction(Packet, PacketDirection) -> Result[Unit, CodecError]
+
+// Errors
+
+// Types and methods
+pub(all) enum CodecError {
+  InvalidFixedHeader(String)
+  InvalidRemainingLength(String)
+  InvalidFlags(String)
+  InvalidProtocolName(String)
+  InvalidProtocolLevel(String)
+  InvalidUtf8(String)
+  InvalidPacketId(String)
+  InvalidPacketShape(String)
+  InvalidDirection(String)
+  TrailingBytes(String)
+  UnsupportedPacketType(String)
+  UnsupportedQoS(String)
+  PacketTooLarge(String)
+  BackendFailure(String)
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ConnackPacket {
+  session_present : Bool
+  return_code : ConnectReturnCode
+} derive(Eq, @debug.Debug)
+
+pub(all) struct ConnectPacket {
+  client_id : String
+  username : String?
+  password : Bytes?
+  keep_alive : Int
+  clean_session : Bool
+  will : WillMessage?
+} derive(Eq, @debug.Debug)
+
+pub(all) enum ConnectReturnCode {
+  Accepted
+  UnacceptableProtocolVersion
+  IdentifierRejected
+  ServerUnavailable
+  BadUsernameOrPassword
+  NotAuthorized
+} derive(Eq, @debug.Debug)
+
+pub(all) enum Packet {
+  Connect(ConnectPacket)
+  Connack(ConnackPacket)
+  Publish(PublishPacket)
+  Puback(PacketId)
+  Subscribe(SubscribePacket)
+  Suback(SubackPacket)
+  Unsubscribe(UnsubscribePacket)
+  Unsuback(PacketId)
+  Pingreq
+  Pingresp
+  Disconnect
+} derive(Eq, @debug.Debug)
+
+pub(all) enum PacketDirection {
+  ClientToServer
+  ServerToClient
+} derive(Eq, @debug.Debug)
+
+pub struct PacketId {
+  value : Int
+} derive(Eq, @debug.Debug)
+pub fn PacketId::new(Int) -> Result[Self, CodecError]
+pub fn PacketId::value(Self) -> Int
+
+pub(all) struct PublishPacket {
+  topic : String
+  payload : Bytes
+  qos : QoS
+  packet_id : PacketId?
+  dup : Bool
+  retain : Bool
+} derive(Eq, @debug.Debug)
+
+pub(all) enum QoS {
+  QoS0
+  QoS1
+  QoS2
+} derive(Eq, @debug.Debug)
+
+pub(all) struct SubackPacket {
+  packet_id : PacketId
+  return_codes : Array[SubackReturnCode]
+} derive(Eq, @debug.Debug)
+
+pub(all) enum SubackReturnCode {
+  GrantedQoS0
+  GrantedQoS1
+  GrantedQoS2
+  Failure
+} derive(Eq, @debug.Debug)
+
+pub(all) struct SubscribePacket {
+  packet_id : PacketId
+  subscriptions : Array[Subscription]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct Subscription {
+  topic_filter : String
+  requested_qos : QoS
+} derive(Eq, @debug.Debug)
+
+pub(all) struct UnsubscribePacket {
+  packet_id : PacketId
+  topic_filters : Array[String]
+} derive(Eq, @debug.Debug)
+
+pub(all) struct WillMessage {
+  topic : String
+  payload : Bytes
+  qos : QoS
+  retain : Bool
+} derive(Eq, @debug.Debug)
+
+// Type aliases
+
+// Traits
