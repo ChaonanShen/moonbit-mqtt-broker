@@ -107,6 +107,30 @@ fn packet_id_from_candidate(value : Int) -> Result[PacketId, CodecError] {
 }
 
 ///|
+fn validate_publish_contract(
+  packet : PublishPacket,
+) -> Result[Unit, CodecError] {
+  match packet.qos {
+    QoS0 => {
+      if packet.packet_id is Some(_) {
+        return Err(InvalidPacketId("QoS 0 PUBLISH must not carry packet id"))
+      }
+      if packet.dup {
+        return Err(InvalidFlags("QoS 0 PUBLISH must not set DUP"))
+      }
+      Ok(())
+    }
+    QoS1 =>
+      if packet.packet_id is None {
+        Err(InvalidPacketId("QoS 1 PUBLISH requires packet id"))
+      } else {
+        Ok(())
+      }
+    QoS2 => Err(UnsupportedQoS("QoS 2 is not supported"))
+  }
+}
+
+///|
 fn connect_code_from_candidate(
   code : @candidate.ConnackReturnCode,
 ) -> ConnectReturnCode {
@@ -221,16 +245,18 @@ fn candidate_decode_packet(frame : Bytes) -> Result[Packet, CodecError] {
           }
         None => None
       }
-      Ok(
-        Publish({
-          topic: publish.topic,
-          payload: publish.payload,
-          qos,
-          packet_id,
-          dup: publish.dup,
-          retain: publish.retain,
-        }),
-      )
+      let packet : PublishPacket = {
+        topic: publish.topic,
+        payload: publish.payload,
+        qos,
+        packet_id,
+        dup: publish.dup,
+        retain: publish.retain,
+      }
+      match validate_publish_contract(packet) {
+        Ok(_) => Ok(Publish(packet))
+        Err(error) => Err(error)
+      }
     }
     @candidate.Packet::PubackPacket(id) =>
       packet_id_from_candidate(id.message_id).map(packet_id => Puback(packet_id))
@@ -321,6 +347,10 @@ fn candidate_encode_packet(packet : Packet) -> Result[Bytes, CodecError] {
         return_code: connect_code_to_candidate(connack.return_code),
       })
     Publish(publish) => {
+      match validate_publish_contract(publish) {
+        Ok(_) => ()
+        Err(error) => return Err(error)
+      }
       let qos = match qos_to_candidate(publish.qos) {
         Ok(value) => value
         Err(error) => return Err(error)

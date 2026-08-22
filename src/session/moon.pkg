@@ -1,3 +1,4 @@
 import {
+  "ChaonanShen/moonbit-mqtt-broker/topic",
   "moonbitlang/core/encoding/utf8",
 }

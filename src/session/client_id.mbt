@@ -3,6 +3,14 @@ pub(all) enum SessionError {
   EmptyClientId
   EncodedLengthExceeded(Int)
   NullCharacter
+  InvalidPacketId(Int)
+  PacketIdExhausted
+  InvalidSessionLimit(String)
+  InflightLimitReached(Int)
+  PendingLimitReached(Int)
+  SessionAlreadyAttached
+  SessionNotAttached
+  SessionInvariantViolation(String)
 } derive(Eq, Debug)
 
 ///|
