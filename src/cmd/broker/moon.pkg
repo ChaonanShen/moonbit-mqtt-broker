@@ -1,4 +1,5 @@
 import {
+  "ChaonanShen/moonbit-mqtt-broker/router",
   "ChaonanShen/moonbit-mqtt-broker/server",
   "moonbitlang/async",
   "moonbitlang/core/env",

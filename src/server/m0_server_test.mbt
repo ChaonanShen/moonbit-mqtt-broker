@@ -22,6 +22,7 @@ async test "minimal loopback connect receives accepted connack" {
     defer client.close()
     client.write(minimal_connect("moonbit-loopback"))
     assert_eq(client.read_exactly(4), b"\x20\x02\x00\x00")
+    client.write(b"\xe0\x00")
     assert_eq(client.read_some(), None)
   }
 }
