@@ -282,6 +282,8 @@ test "publish qos is minimum of publish and maximum matching subscription" {
       payload: b"0",
       qos: @session.DeliveryQoS::QoS0,
       retain: false,
+      packet_id: None,
+      dup: false,
     }),
     BrokerAction::Deliver({
       recipient: low,
@@ -289,6 +291,8 @@ test "publish qos is minimum of publish and maximum matching subscription" {
       payload: b"0",
       qos: @session.DeliveryQoS::QoS0,
       retain: false,
+      packet_id: None,
+      dup: false,
     }),
   ])
   let qos1 = state
@@ -310,6 +314,8 @@ test "publish qos is minimum of publish and maximum matching subscription" {
       payload: b"1",
       qos: @session.DeliveryQoS::QoS1,
       retain: false,
+      packet_id: Some(@session.SessionPacketId::new(1).unwrap()),
+      dup: false,
     }),
   )
   assert_eq(
@@ -320,6 +326,8 @@ test "publish qos is minimum of publish and maximum matching subscription" {
       payload: b"1",
       qos: @session.DeliveryQoS::QoS0,
       retain: false,
+      packet_id: None,
+      dup: false,
     }),
   )
 }
@@ -375,6 +383,8 @@ test "publish routing covers exact plus hash empty levels and system topics" {
       payload: b"x",
       qos: @session.DeliveryQoS::QoS0,
       retain: false,
+      packet_id: None,
+      dup: false,
     }),
   ])
 }
@@ -473,6 +483,8 @@ test "retained replacement deletion replay and system wildcard rules" {
       payload: b"new",
       qos: @session.DeliveryQoS::QoS1,
       retain: true,
+      packet_id: Some(@session.SessionPacketId::new(1).unwrap()),
+      dup: false,
     }),
   )
   let deletion = state

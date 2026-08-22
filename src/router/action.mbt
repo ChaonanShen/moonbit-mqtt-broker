@@ -17,10 +17,20 @@ pub(all) struct UnsubscriptionsAppliedAction {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct DeliveryAcknowledgedAction {
+  client_id : @session.ClientId
+  packet_id : @session.SessionPacketId
+} derive(Eq, Debug)
+
+///|
 pub(all) enum BrokerAction {
   SessionCreated(@session.ClientId)
   SessionRemoved(@session.ClientId)
+  SessionAttached(@session.ClientId)
+  SessionDetached(@session.ClientId)
   SubscriptionsApplied(SubscriptionsAppliedAction)
   UnsubscriptionsApplied(UnsubscriptionsAppliedAction)
+  DeliveryAcknowledged(DeliveryAcknowledgedAction)
+  DeliveryDroppedResourceLimit(@session.ClientId)
   Deliver(RoutedDelivery)
 } derive(Eq, Debug)
