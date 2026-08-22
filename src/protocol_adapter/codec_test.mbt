@@ -88,6 +88,71 @@ test "publish wire header preserves retain dup and qos flags" {
 }
 
 ///|
+test "qos1 publish and puback preserve packet id and dup" {
+  let id = PacketId::new(65535).unwrap()
+  let publish = Packet::Publish({
+    topic: "m3/qos1",
+    payload: b"payload",
+    qos: QoS::QoS1,
+    packet_id: Some(id),
+    dup: true,
+    retain: false,
+  })
+  let encoded = encode_packet(publish).unwrap()
+  assert_eq(encoded[0], 0x3a)
+  assert_eq(decode_packet(encoded), Ok(publish))
+  assert_eq(
+    decode_packet(encode_packet(Packet::Puback(id)).unwrap()),
+    Ok(Puback(id)),
+  )
+}
+
+///|
+test "publish qos and packet id combinations are validated" {
+  let id = PacketId::new(7).unwrap()
+  assert_true(
+    encode_packet(
+      Publish({
+        topic: "invalid/qos0/id",
+        payload: b"x",
+        qos: QoS0,
+        packet_id: Some(id),
+        dup: false,
+        retain: false,
+      }),
+    )
+    is Err(InvalidPacketId(_)),
+  )
+  assert_true(
+    encode_packet(
+      Publish({
+        topic: "invalid/qos0/dup",
+        payload: b"x",
+        qos: QoS0,
+        packet_id: None,
+        dup: true,
+        retain: false,
+      }),
+    )
+    is Err(InvalidFlags(_)),
+  )
+  assert_true(
+    encode_packet(
+      Publish({
+        topic: "invalid/qos1/id",
+        payload: b"x",
+        qos: QoS1,
+        packet_id: None,
+        dup: false,
+        retain: false,
+      }),
+    )
+    is Err(InvalidPacketId(_)),
+  )
+  assert_true(decode_packet(b"\x32\x04\x00\x02a/") is Err(_))
+}
+
+///|
 test "adapter classifies malformed packets and qos2" {
   assert_true(decode_packet(b"\xc0\x00\x00") is Err(TrailingBytes(_)))
   assert_true(decode_packet(b"\xc0\x80\x00") is Err(InvalidRemainingLength(_)))
