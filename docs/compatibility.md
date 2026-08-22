@@ -4,7 +4,8 @@
 | --- | --- | --- |
 | Linux x86_64 Native build | Supported | Pinned Docker and CI path |
 | MQTT 3.1.1 CONNECT / CONNACK | Supported | Accepted CONNACK, `session_present=false` |
-| TCP split/sticky packet framing | Supported | Bounded three-state decoder |
+| TCP split/sticky packet framing | Supported | Capacity-aware reader plus bounded three-state decoder |
+| Equal packet/receive limits | Supported | 16/16 boundary covers complete CONNECT plus sticky PINGREQ |
 | Packet codec for planned QoS 0/1 families | Gated | Complete-frame adapter; M2 serves QoS 0 only |
 | MQTT.js 5.15.2 interoperability | Supported for M2 | QoS 0 pub/sub, retained, Will, takeover |
 | Mosquitto 2.0.18 interoperability | Supported for M2 | QoS 0 pub/sub and retained replay |
@@ -27,3 +28,8 @@ CONNECT must be the first packet. Malformed frames, oversize declarations,
 direction errors, duplicate CONNECT, inbound QoS 1 PUBLISH/PUBACK, or other
 unsupported flows close the connection. An inbound QoS 1 PUBLISH is rejected
 before routing or retained storage and receives no PUBACK.
+
+The receive-buffer limit applies to undecoded buffered bytes. Exact-limit
+packets, partial prefixes followed by sticky suffixes, and multiple pipelined
+control packets are covered over real TCP. Declared oversize and malformed
+packets continue to close before unbounded buffering.

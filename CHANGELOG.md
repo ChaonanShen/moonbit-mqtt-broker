@@ -12,6 +12,12 @@
   loopback regressions, and MQTT.js/Mosquitto interoperability gates.
 - Explicitly reject persistent sessions, QoS 1 Publish/PUBACK, and QoS 1 Will
   until M3 instead of silently downgrading them.
+- Fixed equal packet/receive-buffer handling so a complete packet can be
+  drained before an adjacent sticky packet is read.
+- Expanded the M2 acceptance gate with 55 server test blocks covering the full
+  Will close-reason matrix, stale generations, protocol-error Will, retained
+  deletion, slow consumers, supervisor first-terminal-wins, capacity-one event
+  queues, and exact/overflow packet boundaries.
 
 ## M0 - 2026-08-21
 
