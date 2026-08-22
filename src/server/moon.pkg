@@ -1,4 +1,5 @@
 import {
+  "moonbitlang/async",
   "ChaonanShen/moonbit-mqtt-broker/framing",
   "ChaonanShen/moonbit-mqtt-broker/protocol_adapter" @protocol,
   "ChaonanShen/moonbit-mqtt-broker/router",
@@ -7,10 +8,6 @@ import {
   "moonbitlang/async/io",
   "moonbitlang/async/socket",
 }
-
-import {
-  "moonbitlang/async",
-} for "test"
 
 options(
   targets: { "m0_server.mbt": [ "native" ], "m0_server_test.mbt": [ "native" ] },
