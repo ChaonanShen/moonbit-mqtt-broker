@@ -1,10 +1,11 @@
 # Porting scope and provenance
 
 M1's topic matching, subscription indexing, retained-message handling, and pure
-event/action state machine, together with M2's connection runtime, bounded
-driver, TCP supervisor, Will/Keep Alive/takeover behavior, and tests, are
-original MoonBit implementations guided by MQTT 3.1.1 semantics. No Aedes
-source or test code was copied.
+event/action state machine, M2's connection runtime, bounded driver, TCP
+supervisor, Will/Keep Alive/takeover behavior, and M3's Packet ID, QoS 1,
+persistent Session, offline queue, and Snapshot V1 implementation are original
+MoonBit code guided by MQTT 3.1.1 semantics. No Aedes source or test code was
+copied.
 
 The fixed primary reference is Aedes `v1.1.1`, commit
 `eac44f9920b49dd20eb0e83cc9d5c4b9038eb963` (MIT). M0 does not copy or adapt
@@ -26,7 +27,8 @@ the Broker. MQTT.js and Mosquitto are interoperability clients, not source
 ports.
 
 The normative protocol reference is the OASIS MQTT Version 3.1.1 final
-specification and errata. M2 implements clean Session lifecycle, QoS 0 routing,
-Retained, QoS 0 Will, Keep Alive, and takeover. It does not implement QoS 1
-inflight/PUBACK, persistent Sessions, snapshots, authentication, plugins,
-bridges, or clustering.
+specification and errata. M3 implements QoS 0/1 routing, PUBACK/inflight,
+Retained, QoS 0/1 Will, clean and persistent Session lifecycle, Keep Alive,
+takeover, offline QoS 1, reconnect DUP replay, and a pure Snapshot V1 boundary.
+It does not implement snapshot files or process-restart restoration,
+authentication, plugins, bridges, or clustering.

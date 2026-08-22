@@ -1,5 +1,20 @@
 # Changelog
 
+## M3 - 2026-08-22
+
+- Added inbound and outbound MQTT 3.1.1 QoS 1 with same-ID PUBACK, per-Session
+  Packet ID allocation, ordered inflight ownership, and pending FIFO promotion.
+- Added `clean_session=false`, complete `session_present` behavior, persistent
+  subscriptions, bounded offline QoS 1, and original-ID `DUP=1` reconnect replay.
+- Added QoS 1 Will routing/Retained behavior and clean/persistent takeover,
+  disconnect, stale-generation, and resource-exhaustion semantics.
+- Added per-Session and total Session/inflight/pending limits with atomic
+  client-publication failure and isolated no-origin resource drops.
+- Added deterministic, versioned Snapshot V1 pure import/export with complete
+  validation, alias isolation, and restored-state injection before accept.
+- Added raw TCP, MQTT.js, and Mosquitto QoS 1/persistent-session gates plus the
+  reproducible M3 Docker verifier.
+
 ## M2 - 2026-08-22
 
 - Added a deterministic BrokerRuntime and bounded RouterDriver with unique
@@ -14,10 +29,13 @@
   until M3 instead of silently downgrading them.
 - Fixed equal packet/receive-buffer handling so a complete packet can be
   drained before an adjacent sticky packet is read.
-- Expanded the M2 acceptance gate with 55 server test blocks covering the full
+- Expanded the M2 acceptance gate with 58 server test blocks covering the full
   Will close-reason matrix, stale generations, protocol-error Will, retained
   deletion, slow consumers, supervisor first-terminal-wins, capacity-one event
   queues, and exact/overflow packet boundaries.
+- Added deterministic reader/writer failure classification, simultaneous
+  reader/writer/closer termination, Queue-close wakeup, and healthy-client
+  isolation coverage for transport I/O failures.
 
 ## M0 - 2026-08-21
 
