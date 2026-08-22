@@ -10,8 +10,12 @@ node --version
 moon update
 npm ci --prefix tools/codec_oracle --ignore-scripts
 npm ci --prefix tests/integration --ignore-scripts
+
+fixture_snapshot="$(mktemp -d)"
+trap 'rm -rf "${fixture_snapshot}"' EXIT
+cp -a tests/fixtures/codec/. "${fixture_snapshot}/"
 npm run generate --prefix tools/codec_oracle
-git diff --exit-code -- tests/fixtures/codec
+diff -ru "${fixture_snapshot}" tests/fixtures/codec
 npm run verify --prefix tools/codec_oracle
 moon fmt --check
 moon check --target native
