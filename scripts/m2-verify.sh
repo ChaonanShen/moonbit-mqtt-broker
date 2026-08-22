@@ -8,8 +8,8 @@ moon fmt --check
 moon check --target native
 
 readonly M2_TEST_COUNT="$(grep -RhE '^(async )?test "' src/server | wc -l | tr -d ' ')"
-if [ "${M2_TEST_COUNT}" -lt 48 ]; then
-  echo "M2 acceptance suite has only ${M2_TEST_COUNT} tests; expected at least 48" >&2
+if [ "${M2_TEST_COUNT}" -lt 58 ]; then
+  echo "M2 acceptance suite has only ${M2_TEST_COUNT} tests; expected at least 58" >&2
   exit 1
 fi
 
@@ -23,6 +23,9 @@ for required_test in \
   'initial broker state is injected before accept' \
   'receive buffer equality preserves a complete packet plus sticky suffix' \
   'connection supervisor reports exactly one terminal event' \
+  'queue close wakes blocked driver and supervisor tasks' \
+  'closed socket maps reader and writer io failures' \
+  'read and write failures do not block healthy clients' \
   'bounded runtime event queue preserves packet order' \
   'retained empty payload deletes stored message over tcp' \
   'runtime remains deterministic and invariant-safe for 10000 events' \

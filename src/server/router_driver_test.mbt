@@ -62,14 +62,10 @@ test "driver preserves send then close as one outbound command" {
   let id = ConnectionId::new(1L)
   let sink = TransportSink::new(1)
   register_sink(driver, id, sink)
-  driver_receive(
-    driver,
-    id,
-    driver_connect_packet("persistent", clean_session=false),
-  )
+  driver_receive(driver, id, driver_connect_packet("", clean_session=false))
   match sink.outbound().try_get() {
     Some(WriteFrameThenClose(frame, reason)) => {
-      assert_eq(frame, b"\x20\x02\x00\x03")
+      assert_eq(frame, b"\x20\x02\x00\x02")
       assert_eq(reason, ConnectRejected)
     }
     _ => fail("expected atomic connack and close command")
@@ -160,4 +156,41 @@ test "unregister makes later runtime actions harmless" {
   driver_receive(driver, id, driver_connect_packet("stale-sink"))
   assert_eq(sink.outbound().try_get(), None)
   sink.close()
+}
+
+///|
+test "read and write failures do not block healthy clients" {
+  let reasons : Array[CloseReason] = [ReadFailure, WriteFailure]
+  for reason in reasons {
+    let driver = make_driver()
+    let failing_id = ConnectionId::new(31L)
+    let healthy_id = ConnectionId::new(32L)
+    let failing = TransportSink::new(2)
+    let healthy = TransportSink::new(2)
+    register_sink(driver, failing_id, failing)
+    register_sink(driver, healthy_id, healthy)
+    driver_receive(driver, failing_id, driver_connect_packet("io-failing"))
+    driver_receive(driver, healthy_id, driver_connect_packet("io-healthy"))
+    assert_true(failing.outbound().try_get() is Some(WriteFrame(_)))
+    assert_true(healthy.outbound().try_get() is Some(WriteFrame(_)))
+
+    driver.handle(
+      Runtime(
+        TransportClosed({
+          connection_id: failing_id,
+          reason,
+          observed_at_ms: 2L,
+        }),
+      ),
+    )
+    assert_eq(failing.close_signal().try_get(), Some(reason))
+    assert_false(driver.runtime().has_connection(failing_id))
+
+    driver_receive(driver, healthy_id, Pingreq)
+    assert_eq(healthy.outbound().try_get(), Some(WriteFrame(b"\xd0\x00")))
+    assert_true(driver.runtime().has_connection(healthy_id))
+    assert_eq(driver.runtime().check_invariants(), Ok(()))
+    failing.close()
+    healthy.close()
+  }
 }
