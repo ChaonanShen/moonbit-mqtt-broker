@@ -1,14 +1,18 @@
 # Porting scope and provenance
 
 M1's topic matching, subscription indexing, retained-message handling, and pure
-event/action state machine are original MoonBit implementations guided by MQTT
-3.1.1 semantics. No Aedes source or test code was copied.
+event/action state machine, together with M2's connection runtime, bounded
+driver, TCP supervisor, Will/Keep Alive/takeover behavior, and tests, are
+original MoonBit implementations guided by MQTT 3.1.1 semantics. No Aedes
+source or test code was copied.
 
 The fixed primary reference is Aedes `v1.1.1`, commit
 `eac44f9920b49dd20eb0e83cc9d5c4b9038eb963` (MIT). M0 does not copy or adapt
 Aedes Broker, Client, Router, or handler source; it only freezes the future
-responsibility boundary described in the project plans. Those components start
-in M1/M2 and must record any file-level reference when introduced.
+responsibility boundary described in the project plans. M2 follows the general
+Broker/Client/handler responsibility split but does not translate a specific
+Aedes file, function, or test. Future direct adaptation must still record its
+file-level source here.
 
 M0 directly depends on `moonbitlang/async@0.20.6` and
 `zbhzs1/moonbit-mqtt@0.1.0`, both Apache-2.0. Candidate codec types remain
@@ -22,5 +26,7 @@ the Broker. MQTT.js and Mosquitto are interoperability clients, not source
 ports.
 
 The normative protocol reference is the OASIS MQTT Version 3.1.1 final
-specification and errata. M0 implements no Router, Retained, Session, inflight,
-Will delivery, persistence, authentication, plugin, bridge, or cluster logic.
+specification and errata. M2 implements clean Session lifecycle, QoS 0 routing,
+Retained, QoS 0 Will, Keep Alive, and takeover. It does not implement QoS 1
+inflight/PUBACK, persistent Sessions, snapshots, authentication, plugins,
+bridges, or clustering.

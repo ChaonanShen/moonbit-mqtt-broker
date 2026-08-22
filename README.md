@@ -1,16 +1,16 @@
 # moonbit-mqtt-broker
 
-A lightweight MQTT 3.1.1 broker implemented in MoonBit. The project has a
-bounded stream frame decoder, a pinned and gated codec adapter, Native async
-runtime probes, a minimal real TCP CONNECT → accepted CONNACK service, and a
-transport-independent M1 Router core for subscriptions, QoS metadata, routing,
-and retained messages.
+A lightweight MQTT 3.1.1 broker implemented in MoonBit. The M2 server supports
+multiple TCP clients, QoS 0 publish/subscribe, `+`/`#` topic filters, retained
+messages, QoS 0 wills, PING, Keep Alive, clean-session Client ID takeover, and
+bounded network queues. A pure central runtime is the only owner of Broker and
+Session state; socket tasks only exchange bytes and events.
 
-The TCP service does **not yet** expose PUBLISH/SUBSCRIBE routing, Retained or
-Will delivery, Keep Alive, QoS 1 inflight state, persistent sessions, or
-snapshots; network integration belongs to M2 and later milestones. MQTT 5,
-QoS 2, TLS, WebSocket, authentication/ACL, bridging, clustering, and external
-databases are outside the first release.
+M2 intentionally supports only `clean_session=true` and QoS 0 publications.
+Persistent sessions, QoS 1 PUBLISH/PUBACK/inflight state, offline delivery, and
+restart snapshots are planned for M3/M4. MQTT 5, QoS 2, TLS, WebSocket,
+authentication/ACL, bridging, clustering, and external databases are outside
+the first release.
 
 ## Prerequisites
 
@@ -26,24 +26,42 @@ docker build --platform linux/amd64 -t moonbit-mqtt-broker-dev .
 scripts/moon-docker.sh check --target native
 scripts/moon-docker.sh test --target native
 scripts/moon-docker.sh build --target native
-scripts/m1-verify-docker.sh
+scripts/m2-verify-docker.sh
 ```
 
-The last command runs all M0 checks plus the M1 acceptance presence gate,
-formatting, Native check/test/build, Router purity audit, 1,000 topic-matcher
-differential cases, and the deterministic 10,000-transition regression in the
-same environment as CI.
+The last command includes all M0/M1 gates, formatting, Native check/test/build,
+the M2 10,000-event runtime regression, loopback concurrency/resource tests,
+and real MQTT.js and Mosquitto interoperability in the same environment as CI.
 
-## Run the M0 service
+## Run the broker
 
 ```bash
 scripts/moon-docker.sh run --target native src/cmd/broker -- \
-  --listen 127.0.0.1:1883 --max-packet-size 1048576
+  --listen 127.0.0.1:1883 \
+  --max-connections 128 \
+  --max-packet-size 1048576 \
+  --max-receive-buffer-size 1048576
 ```
 
-`--once` accepts one CONNECT, returns CONNACK, and exits; it is intended for
-tests. The current service deliberately closes connections that send any
-unsupported packet flow.
+Try a QoS 0 subscriber and publisher in two terminals:
+
+```bash
+mosquitto_sub -h 127.0.0.1 -p 1883 -i moonbit-sub -t 'demo/#' -q 0
+mosquitto_pub -h 127.0.0.1 -p 1883 -i moonbit-pub -t demo/hello -m world -q 0
+```
+
+Available resource flags are `--max-connections`, `--max-packet-size`,
+`--max-receive-buffer-size`, `--max-outbound-queue`,
+`--max-runtime-events`, `--connect-timeout-ms`,
+`--keep-alive-check-interval-ms`, `--max-subscriptions-per-session`,
+`--max-subscriptions-total`, and `--max-retained-messages`. `--once` serves one
+complete connection and is intended for smoke tests.
+
+Outbound memory is approximately bounded by `connections × outbound queue
+length × maximum packet size`; increasing all three limits multiplies the
+worst-case budget. Unsupported QoS 1 PUBLISH/PUBACK and protocol-invalid flows
+close the connection. `clean_session=false` and QoS 1 Will receive a non-zero
+CONNACK and are closed without silently degrading semantics.
 
 See [compatibility](docs/compatibility.md) and
 [architecture](docs/architecture.md) for exact scope.
