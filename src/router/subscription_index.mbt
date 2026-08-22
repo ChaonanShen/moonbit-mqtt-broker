@@ -5,6 +5,12 @@ pub(all) struct SubscriptionMatch {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct SubscriptionRecord {
+  filter : @topic.TopicFilter
+  qos : @session.DeliveryQoS
+} derive(Eq, Debug)
+
+///|
 pub struct SubscriptionIndex {
   priv by_filter : Map[
     @topic.TopicFilter,
@@ -138,6 +144,25 @@ fn SubscriptionIndex::client_ids(
   let result = self.by_client.keys().collect()
   result.sort_by(fn(left, right) {
     compare_utf8_for_sort(left.value(), right.value())
+  })
+  result
+}
+
+///|
+fn SubscriptionIndex::records_for(
+  self : SubscriptionIndex,
+  client_id : @session.ClientId,
+) -> Array[SubscriptionRecord] {
+  let result : Array[SubscriptionRecord] = []
+  match self.by_client.get(client_id) {
+    Some(filters) =>
+      for filter, qos in filters {
+        result.push({ filter, qos })
+      }
+    None => ()
+  }
+  result.sort_by(fn(left, right) {
+    compare_utf8_for_sort(left.filter.value(), right.filter.value())
   })
   result
 }

@@ -17,10 +17,27 @@ pub(all) struct UnsubscribeRequest {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct CreateSessionRequest {
+  client_id : @session.ClientId
+  mode : @session.SessionMode
+  attached : Bool
+} derive(Eq, Debug)
+
+///|
+pub(all) struct PubackRequest {
+  client_id : @session.ClientId
+  packet_id : @session.SessionPacketId
+} derive(Eq, Debug)
+
+///|
 pub(all) enum BrokerEvent {
   CreateSession(@session.ClientId)
+  CreateSessionWith(CreateSessionRequest)
   RemoveSession(@session.ClientId)
+  AttachSession(@session.ClientId)
+  DetachSession(@session.ClientId)
   Subscribe(SubscribeRequest)
   Unsubscribe(UnsubscribeRequest)
   Publish(PublishInput)
+  Puback(PubackRequest)
 } derive(Eq, Debug)

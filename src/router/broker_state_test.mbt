@@ -66,6 +66,8 @@ test "broker routes once at combined qos and retains replay after acknowledgemen
         payload: b"22",
         qos: @session.DeliveryQoS::QoS1,
         retain: false,
+        packet_id: Some(@session.SessionPacketId::new(1).unwrap()),
+        dup: false,
       }),
     ]),
   )
@@ -96,6 +98,8 @@ test "broker routes once at combined qos and retains replay after acknowledgemen
       payload: b"22",
       qos: @session.DeliveryQoS::QoS1,
       retain: true,
+      packet_id: Some(@session.SessionPacketId::new(1).unwrap()),
+      dup: false,
     }),
   )
   assert_eq(state.check_invariants(), Ok(()))

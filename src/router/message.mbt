@@ -28,4 +28,6 @@ pub(all) struct RoutedDelivery {
   payload : Bytes
   qos : @session.DeliveryQoS
   retain : Bool
+  packet_id : @session.SessionPacketId?
+  dup : Bool
 } derive(Eq, Debug)

@@ -76,3 +76,19 @@ pub fn RetainedStore::matching(
   })
   result
 }
+
+///|
+fn RetainedStore::all_messages(self : RetainedStore) -> Array[RetainedMessage] {
+  let result : Array[RetainedMessage] = []
+  for _, message in self.messages {
+    result.push({
+      topic: message.topic,
+      payload: copy_bytes(message.payload),
+      qos: message.qos,
+    })
+  }
+  result.sort_by(fn(left, right) {
+    compare_utf8_for_sort(left.topic.value(), right.topic.value())
+  })
+  result
+}
