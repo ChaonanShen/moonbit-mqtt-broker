@@ -5,12 +5,12 @@ on:
   pull_request:
 
 jobs:
-  m1-native:
+  m2-native:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Build pinned Linux x86_64 toolchain
         run: docker build --platform linux/amd64 --tag moonbit-mqtt-broker-dev .
-      - name: Run M1 verification
-        run: scripts/m1-verify-docker.sh
+      - name: Run M2 verification
+        run: scripts/m2-verify-docker.sh
