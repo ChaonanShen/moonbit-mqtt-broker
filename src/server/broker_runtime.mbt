@@ -201,6 +201,10 @@ fn BrokerRuntime::handle_connect(
   packet : @protocol.ConnectPacket,
   received_at_ms : Int64,
 ) -> Array[RuntimeAction] {
+  let accepted_at_ms = match self.connections.get(connection_id) {
+    Some(meta) => meta.accepted_at_ms
+    None => received_at_ms
+  }
   if !packet.clean_session {
     let code = if packet.client_id == "" {
       @protocol.ConnectReturnCode::IdentifierRejected
@@ -256,7 +260,7 @@ fn BrokerRuntime::handle_connect(
   self.connections.set(connection_id, {
     id: connection_id,
     phase: Active(client_id),
-    accepted_at_ms: received_at_ms,
+    accepted_at_ms,
     last_control_at_ms: received_at_ms,
     keep_alive_seconds: packet.keep_alive,
     will: stored_will,
