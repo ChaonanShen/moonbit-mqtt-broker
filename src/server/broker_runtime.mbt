@@ -46,8 +46,8 @@ pub fn BrokerRuntime::broker_state(self : BrokerRuntime) -> @router.BrokerState 
 }
 
 ///|
-fn accepted_connack_packet() -> @protocol.Packet {
-  Connack({ session_present: false, return_code: Accepted })
+fn accepted_connack_packet(session_present : Bool) -> @protocol.Packet {
+  Connack({ session_present, return_code: Accepted })
 }
 
 ///|
@@ -109,13 +109,30 @@ fn BrokerRuntime::map_broker_actions(
                       payload: copy_runtime_bytes(delivery.payload),
                       qos: @protocol.QoS::QoS0,
                       packet_id: None,
-                      dup: false,
+                      dup: delivery.dup,
                       retain: delivery.retain,
                     }),
                   }),
                 )
-              QoS1 =>
-                actions.append(self.terminate(connection_id, ProtocolError))
+              QoS1 => {
+                let packet_id = match delivery.packet_id {
+                  Some(value) => @protocol.PacketId::new(value.value()).unwrap()
+                  None => continue
+                }
+                actions.push(
+                  SendPacket({
+                    connection_id,
+                    packet: Publish({
+                      topic: delivery.topic.value(),
+                      payload: copy_runtime_bytes(delivery.payload),
+                      qos: @protocol.QoS::QoS1,
+                      packet_id: Some(packet_id),
+                      dup: delivery.dup,
+                      retain: delivery.retain,
+                    }),
+                  }),
+                )
+              }
             }
         }
       _ => ()
@@ -152,12 +169,20 @@ fn BrokerRuntime::terminate(
     Active(client_id) => {
       if self.active_by_client.get(client_id) == Some(connection_id) {
         self.active_by_client.remove(client_id)
-        if self.broker_state.has_session(client_id) {
-          ignore(
-            self.broker_state.apply(
-              @router.BrokerEvent::RemoveSession(client_id),
-            ),
-          )
+        match self.broker_state.session_mode(client_id) {
+          Some(Persistent) =>
+            ignore(
+              self.broker_state.apply(
+                @router.BrokerEvent::DetachSession(client_id),
+              ),
+            )
+          Some(Clean) =>
+            ignore(
+              self.broker_state.apply(
+                @router.BrokerEvent::RemoveSession(client_id),
+              ),
+            )
+          None => ()
         }
       }
       let publish_will = reason != NormalDisconnect &&
@@ -171,7 +196,7 @@ fn BrokerRuntime::terminate(
               origin: Will(client_id),
               topic: will.topic,
               payload: copy_runtime_bytes(will.payload),
-              qos: @session.DeliveryQoS::QoS0,
+              qos: will.qos,
               retain: will.retain,
             }
             match self.publish(input) {
@@ -205,13 +230,8 @@ fn BrokerRuntime::handle_connect(
     Some(meta) => meta.accepted_at_ms
     None => received_at_ms
   }
-  if !packet.clean_session {
-    let code = if packet.client_id == "" {
-      @protocol.ConnectReturnCode::IdentifierRejected
-    } else {
-      @protocol.ConnectReturnCode::ServerUnavailable
-    }
-    return self.reject_connect(connection_id, code)
+  if !packet.clean_session && packet.client_id == "" {
+    return self.reject_connect(connection_id, IdentifierRejected)
   }
   let client_id_value = if packet.client_id == "" {
     "moonbit-auto-" + connection_id.value().to_string()
@@ -226,7 +246,7 @@ fn BrokerRuntime::handle_connect(
     None => None
     Some(will) => {
       match will.qos {
-        QoS1 => return self.reject_connect(connection_id, ServerUnavailable)
+        QoS1 => ()
         QoS2 => return self.terminate(connection_id, ProtocolError)
         QoS0 => ()
       }
@@ -237,6 +257,7 @@ fn BrokerRuntime::handle_connect(
       Some({
         topic,
         payload: copy_runtime_bytes(will.payload),
+        qos: qos_from_protocol(will.qos).unwrap(),
         retain: will.retain,
       })
     }
@@ -247,14 +268,82 @@ fn BrokerRuntime::handle_connect(
       actions.append(self.terminate(old_connection_id, ClientTakeover))
     _ => ()
   }
-  if self.broker_state.has_session(client_id) {
-    ignore(
-      self.broker_state.apply(@router.BrokerEvent::RemoveSession(client_id)),
-    )
-  }
-  match self.broker_state.apply(@router.BrokerEvent::CreateSession(client_id)) {
-    Err(_) => return self.terminate(connection_id, ProtocolError)
-    Ok(_) => ()
+  let mut session_present = false
+  let session_actions : Array[@router.BrokerAction] = []
+  if packet.clean_session {
+    if self.broker_state.has_session(client_id) {
+      ignore(
+        self.broker_state.apply(@router.BrokerEvent::RemoveSession(client_id)),
+      )
+    }
+    match
+      self.broker_state.apply(
+        @router.BrokerEvent::CreateSessionWith({
+          client_id,
+          mode: @session.SessionMode::Clean,
+          attached: true,
+        }),
+      ) {
+      Err(_) => {
+        actions.append(self.reject_connect(connection_id, ServerUnavailable))
+        return actions
+      }
+      Ok(value) => session_actions.append(value)
+    }
+  } else {
+    match self.broker_state.session_mode(client_id) {
+      Some(Persistent) => {
+        session_present = true
+        match
+          self.broker_state.apply(@router.BrokerEvent::AttachSession(client_id)) {
+          Err(_) => {
+            actions.append(
+              self.reject_connect(connection_id, ServerUnavailable),
+            )
+            return actions
+          }
+          Ok(value) => session_actions.append(value)
+        }
+      }
+      Some(Clean) => {
+        ignore(
+          self.broker_state.apply(@router.BrokerEvent::RemoveSession(client_id)),
+        )
+        match
+          self.broker_state.apply(
+            @router.BrokerEvent::CreateSessionWith({
+              client_id,
+              mode: @session.SessionMode::Persistent,
+              attached: true,
+            }),
+          ) {
+          Err(_) => {
+            actions.append(
+              self.reject_connect(connection_id, ServerUnavailable),
+            )
+            return actions
+          }
+          Ok(value) => session_actions.append(value)
+        }
+      }
+      None =>
+        match
+          self.broker_state.apply(
+            @router.BrokerEvent::CreateSessionWith({
+              client_id,
+              mode: @session.SessionMode::Persistent,
+              attached: true,
+            }),
+          ) {
+          Err(_) => {
+            actions.append(
+              self.reject_connect(connection_id, ServerUnavailable),
+            )
+            return actions
+          }
+          Ok(value) => session_actions.append(value)
+        }
+    }
   }
   self.active_by_client.set(client_id, connection_id)
   self.connections.set(connection_id, {
@@ -265,7 +354,13 @@ fn BrokerRuntime::handle_connect(
     keep_alive_seconds: packet.keep_alive,
     will: stored_will,
   })
-  actions.push(SendPacket({ connection_id, packet: accepted_connack_packet() }))
+  actions.push(
+    SendPacket({
+      connection_id,
+      packet: accepted_connack_packet(session_present),
+    }),
+  )
+  actions.append(self.map_broker_actions(session_actions))
   actions
 }
 
@@ -300,6 +395,8 @@ fn BrokerRuntime::handle_subscribe(
     self.broker_state.apply(
       @router.BrokerEvent::Subscribe({ client_id, entries }),
     ) {
+    Err(@router.RouterError::QoS1ResourceLimit(_, _)) =>
+      return self.terminate(connection_id, ResourceExhausted)
     Err(_) => return self.close_protocol_error(connection_id)
     Ok(value) => value
   }
@@ -366,9 +463,24 @@ fn BrokerRuntime::handle_active_packet(
     Pingreq => [SendPacket({ connection_id, packet: Pingresp })]
     Disconnect => self.terminate(connection_id, NormalDisconnect)
     Publish(publish_packet) => {
-      let qos = match publish_packet.qos {
-        QoS0 => @session.DeliveryQoS::QoS0
-        _ => return self.close_protocol_error(connection_id)
+      let incoming_packet_id : @protocol.PacketId? = match publish_packet.qos {
+        QoS0 => {
+          if publish_packet.packet_id is Some(_) || publish_packet.dup {
+            return self.close_protocol_error(connection_id)
+          }
+          None
+        }
+        QoS1 =>
+          match publish_packet.packet_id {
+            Some(value) => Some(value)
+            None => return self.close_protocol_error(connection_id)
+          }
+        QoS2 => return self.close_protocol_error(connection_id)
+      }
+      let qos = if incoming_packet_id is Some(_) {
+        @session.DeliveryQoS::QoS1
+      } else {
+        @session.DeliveryQoS::QoS0
       }
       let topic = match @topic.TopicName::new(publish_packet.topic) {
         Err(_) => return self.close_protocol_error(connection_id)
@@ -382,7 +494,33 @@ fn BrokerRuntime::handle_active_packet(
         retain: publish_packet.retain,
       })
       match result {
-        Ok(actions) => actions
+        Ok(deliveries) => {
+          let actions : Array[RuntimeAction] = []
+          match incoming_packet_id {
+            Some(packet_id) =>
+              actions.push(
+                SendPacket({ connection_id, packet: Puback(packet_id) }),
+              )
+            None => ()
+          }
+          actions.append(deliveries)
+          actions
+        }
+        Err(@router.RouterError::QoS1ResourceLimit(_, _)) =>
+          self.terminate(connection_id, ResourceExhausted)
+        Err(_) => self.close_protocol_error(connection_id)
+      }
+    }
+    Puback(packet_id) => {
+      let session_packet_id = @session.SessionPacketId::new(packet_id.value()).unwrap()
+      match
+        self.broker_state.apply(
+          @router.BrokerEvent::Puback({
+            client_id,
+            packet_id: session_packet_id,
+          }),
+        ) {
+        Ok(actions) => self.map_broker_actions(actions)
         Err(_) => self.close_protocol_error(connection_id)
       }
     }
@@ -496,6 +634,14 @@ pub fn BrokerRuntime::check_invariants(
       return Err(RuntimeInvariantViolation("broker state is inconsistent"))
     Ok(_) => ()
   }
+  if self.broker_state.attached_session_count() !=
+    self.active_by_client.length() {
+    return Err(
+      RuntimeInvariantViolation(
+        "attached session count does not match active clients",
+      ),
+    )
+  }
   for client_id, connection_id in self.active_by_client {
     match self.connections.get(connection_id) {
       Some({ phase: Active(bound_client), .. }) if bound_client == client_id =>
@@ -507,6 +653,9 @@ pub fn BrokerRuntime::check_invariants(
     }
     if !self.broker_state.has_session(client_id) {
       return Err(RuntimeInvariantViolation("active client has no session"))
+    }
+    if self.broker_state.session_attached(client_id) != Some(true) {
+      return Err(RuntimeInvariantViolation("active client session is detached"))
     }
   }
   for connection_id, meta in self.connections {

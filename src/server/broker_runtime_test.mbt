@@ -102,7 +102,7 @@ test "runtime enforces first packet and duplicate connect" {
 }
 
 ///|
-test "runtime returns specified connack for unsupported sessions" {
+test "runtime rejects empty persistent id and accepts persistent session" {
   let empty = runtime()
   let empty_id = cid(1L)
   open(empty, empty_id, 0L)
@@ -128,14 +128,19 @@ test "runtime returns specified connack for unsupported sessions" {
       1L,
     ),
     [
-      SendPacketThenClose({
+      SendPacket({
         connection_id: persistent_id,
-        packet: test_connack(ServerUnavailable),
-        reason: ConnectRejected,
+        packet: test_connack(Accepted),
       }),
     ],
   )
-  assert_eq(persistent.broker_state().session_count(), 0)
+  assert_eq(persistent.broker_state().session_count(), 1)
+  assert_eq(
+    persistent
+    .broker_state()
+    .session_mode(@session.ClientId::new("persistent").unwrap()),
+    Some(@session.SessionMode::Persistent),
+  )
 }
 
 ///|
@@ -151,7 +156,7 @@ test "runtime assigns unique internal ids to empty clean clients" {
 }
 
 ///|
-test "runtime rejects qos1 will before creating session" {
+test "runtime accepts qos1 will when creating session" {
   let rt = runtime()
   let id = cid(1L)
   open(rt, id, 0L)
@@ -162,13 +167,9 @@ test "runtime rejects qos1 will before creating session" {
     retain: false,
   }
   assert_eq(receive(rt, id, connect_packet("client", will=Some(will)), 1L), [
-    SendPacketThenClose({
-      connection_id: id,
-      packet: test_connack(ServerUnavailable),
-      reason: ConnectRejected,
-    }),
+    SendPacket({ connection_id: id, packet: test_connack(Accepted) }),
   ])
-  assert_eq(rt.broker_state().session_count(), 0)
+  assert_eq(rt.broker_state().session_count(), 1)
 }
 
 ///|
@@ -286,7 +287,7 @@ test "suback precedes retained replay" {
 }
 
 ///|
-test "qos1 publish closes before routing or retaining" {
+test "inbound qos1 publish is acknowledged with the same packet id" {
   let rt = runtime()
   let id = cid(1L)
   connect(rt, id, "publisher")
@@ -304,9 +305,14 @@ test "qos1 publish closes before routing or retaining" {
       }),
       2L,
     ),
-    [CloseTransport({ connection_id: id, reason: ProtocolError })],
+    [
+      SendPacket({
+        connection_id: id,
+        packet: Puback(@protocol.PacketId::new(1).unwrap()),
+      }),
+    ],
   )
-  assert_eq(rt.broker_state().retained_count(), 0)
+  assert_eq(rt.broker_state().retained_count(), 1)
 }
 
 ///|
