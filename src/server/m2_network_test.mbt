@@ -369,3 +369,85 @@ async test "network unsupported persistent session and qos1 will reject after co
     server.cancel()
   }
 }
+
+///|
+async test "network serves retained state injected before listener starts" {
+  @async.with_task_group() <| group => {
+    let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    defer listener.close()
+    let config = loopback_config()
+    let state = loopback_state(config)
+    ignore(
+      state.apply(
+        @router.BrokerEvent::Publish({
+          origin: @router.PublishOrigin::Internal,
+          topic: @topic.TopicName::new("injected/retained").unwrap(),
+          payload: b"before-start",
+          qos: @session.DeliveryQoS::QoS0,
+          retain: true,
+        }),
+      ),
+    )
+    let server = group.spawn(allow_failure=true) <| () => {
+      serve(listener, config, state)
+    }
+    let client = connect_network_client(
+      listener.addr,
+      network_connect_packet("injected-subscriber"),
+    )
+    defer client.close()
+    ignore(read_mqtt_packet(client))
+    write_packet(
+      client,
+      Subscribe({
+        packet_id: @protocol.PacketId::new(1).unwrap(),
+        subscriptions: [{ topic_filter: "injected/#", requested_qos: QoS0 }],
+      }),
+    )
+    assert_true(read_mqtt_packet(client) is Suback(_))
+    assert_eq(
+      read_mqtt_packet(client),
+      Publish({
+        topic: "injected/retained",
+        payload: b"before-start",
+        qos: QoS0,
+        packet_id: None,
+        dup: false,
+        retain: true,
+      }),
+    )
+    write_packet(client, Disconnect)
+    server.cancel()
+  }
+}
+
+///|
+async test "network inbound qos1 publish closes without puback" {
+  @async.with_task_group() <| group => {
+    let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    defer listener.close()
+    let config = loopback_config()
+    let server = group.spawn(allow_failure=true) <| () => {
+      serve(listener, config, loopback_state(config))
+    }
+    let client = connect_network_client(
+      listener.addr,
+      network_connect_packet("qos1-publisher"),
+    )
+    ignore(read_mqtt_packet(client))
+    write_packet(
+      client,
+      Publish({
+        topic: "unsupported/qos1",
+        payload: b"must-not-route",
+        qos: QoS1,
+        packet_id: Some(@protocol.PacketId::new(9).unwrap()),
+        dup: false,
+        retain: true,
+      }),
+    )
+    assert_eq(client.read_some(), None)
+    client.close()
+    server.cancel()
+  }
+}
