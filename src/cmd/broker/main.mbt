@@ -38,5 +38,9 @@ async fn main {
       value => raise CliError("unknown argument: " + value)
     }
   }
-  @server.run(listen, max_packet_size, once)
+  let broker_config = @router.BrokerConfig::new(128, 16384, 1024).unwrap()
+  let config = @server.ServerConfig::new(
+    128, max_packet_size, max_packet_size, 64, 512, 10000, 100, broker_config,
+  ).unwrap()
+  @server.run(listen, config, @router.BrokerState::new(broker_config), once~)
 }
