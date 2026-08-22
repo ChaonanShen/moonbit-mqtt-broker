@@ -71,6 +71,23 @@ test "candidate adapter round trips all m0 packet families" {
 }
 
 ///|
+test "publish wire header preserves retain dup and qos flags" {
+  assert_eq(
+    encode_packet(
+      Packet::Publish({
+        topic: "retained/header",
+        payload: b"saved",
+        qos: QoS::QoS0,
+        packet_id: None,
+        dup: false,
+        retain: true,
+      }),
+    ).unwrap()[0],
+    0x31,
+  )
+}
+
+///|
 test "adapter classifies malformed packets and qos2" {
   assert_true(decode_packet(b"\xc0\x00\x00") is Err(TrailingBytes(_)))
   assert_true(decode_packet(b"\xc0\x80\x00") is Err(InvalidRemainingLength(_)))

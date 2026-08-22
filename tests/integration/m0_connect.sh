@@ -30,7 +30,7 @@ start_broker() {
     >"${BROKER_LOG}" 2>&1 &
   BROKER_PID="$!"
   for _ in $(seq 1 100); do
-    if grep -q 'M0 broker listening' "${BROKER_LOG}"; then
+    if grep -q 'MQTT broker listening' "${BROKER_LOG}"; then
       return
     fi
     if ! kill -0 "${BROKER_PID}" 2>/dev/null; then

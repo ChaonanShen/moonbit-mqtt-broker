@@ -4,10 +4,38 @@ suberror CliError {
 } derive(Debug)
 
 ///|
+fn parse_bounded_int(
+  args : Array[String],
+  index : Int,
+  name : String,
+  minimum : Int,
+) -> Int raise CliError {
+  if index + 1 >= args.length() {
+    raise CliError(name + " requires an integer")
+  }
+  let value = @string.parse_int(args[index + 1]) catch {
+    _ => raise CliError("invalid " + name)
+  }
+  if value < minimum {
+    raise CliError(name + " must be at least " + minimum.to_string())
+  }
+  value
+}
+
+///|
 async fn main {
   let args = @env.args()
   let mut listen = "127.0.0.1:1883"
+  let mut max_connections = 128
   let mut max_packet_size = 1048576
+  let mut max_receive_buffer_size = 1048576
+  let mut max_outbound_queue = 64
+  let mut max_runtime_events = 512
+  let mut connect_timeout_ms = 10000
+  let mut keep_alive_check_interval_ms = 100
+  let mut max_subscriptions_per_session = 128
+  let mut max_subscriptions_total = 16384
+  let mut max_retained_messages = 1024
   let mut once = false
   let mut index = 1
   while index < args.length() {
@@ -19,16 +47,60 @@ async fn main {
         listen = args[index + 1]
         index = index + 2
       }
+      "--max-connections" => {
+        max_connections = parse_bounded_int(args, index, "--max-connections", 1)
+        index = index + 2
+      }
       "--max-packet-size" => {
-        if index + 1 >= args.length() {
-          raise CliError("--max-packet-size requires a positive integer")
-        }
-        max_packet_size = @string.parse_int(args[index + 1]) catch {
-          _ => raise CliError("invalid --max-packet-size")
-        }
-        if max_packet_size < 2 {
-          raise CliError("--max-packet-size must be at least 2")
-        }
+        max_packet_size = parse_bounded_int(args, index, "--max-packet-size", 2)
+        index = index + 2
+      }
+      "--max-receive-buffer-size" => {
+        max_receive_buffer_size = parse_bounded_int(
+          args, index, "--max-receive-buffer-size", 2,
+        )
+        index = index + 2
+      }
+      "--max-outbound-queue" => {
+        max_outbound_queue = parse_bounded_int(
+          args, index, "--max-outbound-queue", 1,
+        )
+        index = index + 2
+      }
+      "--max-runtime-events" => {
+        max_runtime_events = parse_bounded_int(
+          args, index, "--max-runtime-events", 1,
+        )
+        index = index + 2
+      }
+      "--connect-timeout-ms" => {
+        connect_timeout_ms = parse_bounded_int(
+          args, index, "--connect-timeout-ms", 1,
+        )
+        index = index + 2
+      }
+      "--keep-alive-check-interval-ms" => {
+        keep_alive_check_interval_ms = parse_bounded_int(
+          args, index, "--keep-alive-check-interval-ms", 1,
+        )
+        index = index + 2
+      }
+      "--max-subscriptions-per-session" => {
+        max_subscriptions_per_session = parse_bounded_int(
+          args, index, "--max-subscriptions-per-session", 1,
+        )
+        index = index + 2
+      }
+      "--max-subscriptions-total" => {
+        max_subscriptions_total = parse_bounded_int(
+          args, index, "--max-subscriptions-total", 1,
+        )
+        index = index + 2
+      }
+      "--max-retained-messages" => {
+        max_retained_messages = parse_bounded_int(
+          args, index, "--max-retained-messages", 1,
+        )
         index = index + 2
       }
       "--once" => {
@@ -38,9 +110,22 @@ async fn main {
       value => raise CliError("unknown argument: " + value)
     }
   }
-  let broker_config = @router.BrokerConfig::new(128, 16384, 1024).unwrap()
+  let broker_config = @router.BrokerConfig::new(
+    max_subscriptions_per_session, max_subscriptions_total, max_retained_messages,
+  ).unwrap()
+  if max_receive_buffer_size < max_packet_size {
+    raise CliError(
+      "--max-receive-buffer-size must be at least --max-packet-size",
+    )
+  }
+  if keep_alive_check_interval_ms > connect_timeout_ms {
+    raise CliError(
+      "--keep-alive-check-interval-ms must not exceed --connect-timeout-ms",
+    )
+  }
   let config = @server.ServerConfig::new(
-    128, max_packet_size, max_packet_size, 64, 512, 10000, 100, broker_config,
+    max_connections, max_packet_size, max_receive_buffer_size, max_outbound_queue,
+    max_runtime_events, connect_timeout_ms, keep_alive_check_interval_ms, broker_config,
   ).unwrap()
   @server.run(listen, config, @router.BrokerState::new(broker_config), once~)
 }
