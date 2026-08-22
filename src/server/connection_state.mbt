@@ -8,6 +8,7 @@ pub(all) enum ConnectionPhase {
 pub(all) struct StoredWill {
   topic : @topic.TopicName
   payload : Bytes
+  qos : @session.DeliveryQoS
   retain : Bool
 } derive(Eq, Debug)
 
@@ -24,6 +25,7 @@ pub(all) enum CloseReason {
   ClientTakeover
   SlowConsumer
   EncodeFailure
+  ResourceExhausted
   ServerShutdown
 } derive(Eq, Debug)
 

@@ -332,7 +332,7 @@ async test "network client takeover closes old generation and keeps new active" 
 }
 
 ///|
-async test "network unsupported persistent session and qos1 will reject after connack" {
+async test "network persistent session and qos1 will are accepted" {
   @async.with_task_group() <| group => {
     let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
     defer listener.close()
@@ -346,9 +346,8 @@ async test "network unsupported persistent session and qos1 will reject after co
     )
     assert_eq(
       read_mqtt_packet(persistent),
-      Connack({ session_present: false, return_code: ServerUnavailable }),
+      Connack({ session_present: false, return_code: Accepted }),
     )
-    assert_eq(persistent.read_some(), None)
     persistent.close()
     let qos1_will : @protocol.WillMessage = {
       topic: "will/qos1",
@@ -362,9 +361,8 @@ async test "network unsupported persistent session and qos1 will reject after co
     )
     assert_eq(
       read_mqtt_packet(will_client),
-      Connack({ session_present: false, return_code: ServerUnavailable }),
+      Connack({ session_present: false, return_code: Accepted }),
     )
-    assert_eq(will_client.read_some(), None)
     will_client.close()
     server.cancel()
   }
@@ -422,7 +420,7 @@ async test "initial broker state is injected before accept" {
 }
 
 ///|
-async test "network inbound qos1 publish closes without puback" {
+async test "network inbound qos1 publish returns same id puback" {
   @async.with_task_group() <| group => {
     let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
     defer listener.close()
@@ -446,7 +444,10 @@ async test "network inbound qos1 publish closes without puback" {
         retain: true,
       }),
     )
-    assert_eq(client.read_some(), None)
+    assert_eq(
+      read_mqtt_packet(client),
+      Puback(@protocol.PacketId::new(9).unwrap()),
+    )
     client.close()
     server.cancel()
   }
