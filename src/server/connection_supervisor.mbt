@@ -9,6 +9,21 @@ fn try_report_terminal(
 }
 
 ///|
+fn next_read_capacity(
+  decoder : @framing.FrameDecoder,
+  max_receive_buffer_size : Int,
+) -> Result[Int, CloseReason] {
+  let remaining = max_receive_buffer_size - decoder.buffered_len()
+  if remaining <= 0 {
+    Err(ProtocolError)
+  } else if remaining < 4096 {
+    Ok(remaining)
+  } else {
+    Ok(4096)
+  }
+}
+
+///|
 async fn read_connection(
   connection : @socket.Tcp,
   connection_id : ConnectionId,
@@ -20,7 +35,15 @@ async fn read_connection(
     config.max_receive_buffer_size(),
   )
   for ;; {
-    let chunk = connection.read_some(max_len=4096) catch {
+    // The receive limit applies to bytes the decoder has not consumed. Reading
+    // no more than the remaining capacity lets a complete prefix be drained
+    // before a sticky suffix is admitted on the following iteration.
+    let read_capacity = match
+      next_read_capacity(decoder, config.max_receive_buffer_size()) {
+      Err(reason) => return reason
+      Ok(value) => value
+    }
+    let chunk = connection.read_some(max_len=read_capacity) catch {
       _ => return ReadFailure
     }
     let bytes = match chunk {
