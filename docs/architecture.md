@@ -88,3 +88,17 @@ interrupt blocked I/O. The global event queue is bounded and deliberately uses
 backpressure so decoded Packet events are not dropped. Frame size, receive
 buffer, connection count, handshake time, and both queue sizes are configured
 through one validated `ServerConfig`.
+
+The connection reader computes `max_receive_buffer_size - buffered_len` before
+every socket read and uses the smaller of that capacity and 4096 bytes. It
+drains every complete frame before calculating the next read. Consequently the
+receive limit measures only bytes the decoder has not consumed, rather than an
+arbitrary OS TCP chunk: `max_receive_buffer_size == max_packet_size` remains a
+valid configuration even for a complete packet followed by sticky control
+packets. A full decoder that still reports `NeedMoreData` closes with a protocol
+error instead of reading past the configured bound or busy-looping.
+
+Reader, writer, and independent closer race through a capacity-one terminal
+queue. The first terminal reason closes the socket, closes both transport
+queues, cancels sibling tasks, and emits exactly one `TransportClosed` followed
+by `UnregisterTransport`. Later socket failures are stale generation events.

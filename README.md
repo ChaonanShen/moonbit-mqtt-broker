@@ -30,8 +30,10 @@ scripts/m2-verify-docker.sh
 ```
 
 The last command includes all M0/M1 gates, formatting, Native check/test/build,
-the M2 10,000-event runtime regression, loopback concurrency/resource tests,
-and real MQTT.js and Mosquitto interoperability in the same environment as CI.
+at least 48 M2 server test blocks, the 10,000-event runtime regression, equal
+packet/receive-buffer boundaries, slow-consumer isolation, protocol-error Will,
+supervisor shutdown and bounded-queue tests, plus real MQTT.js and Mosquitto
+interoperability in the same environment as CI.
 
 ## Run the broker
 
@@ -62,6 +64,10 @@ length × maximum packet size`; increasing all three limits multiplies the
 worst-case budget. Unsupported QoS 1 PUBLISH/PUBACK and protocol-invalid flows
 close the connection. `clean_session=false` and QoS 1 Will receive a non-zero
 CONNACK and are closed without silently degrading semantics.
+
+`--max-receive-buffer-size` limits only bytes not yet consumed by the streaming
+decoder. It may equal `--max-packet-size`: a complete maximum-size packet can be
+drained before a sticky suffix is read, without requiring extra chunk slack.
 
 See [compatibility](docs/compatibility.md) and
 [architecture](docs/architecture.md) for exact scope.
