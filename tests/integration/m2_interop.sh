@@ -14,7 +14,7 @@ cleanup() {
     wait "${SUB_PID}" 2>/dev/null || true
   fi
   if [[ -n "${BROKER_PID}" ]] && kill -0 "${BROKER_PID}" 2>/dev/null; then
-    kill "${BROKER_PID}" 2>/dev/null || true
+    kill -- "-${BROKER_PID}" 2>/dev/null || kill "${BROKER_PID}" 2>/dev/null || true
     wait "${BROKER_PID}" 2>/dev/null || true
   fi
   [[ -z "${BROKER_LOG}" ]] || rm -f "${BROKER_LOG}"
@@ -28,7 +28,7 @@ free_port() {
 start_broker() {
   local port="$1"
   BROKER_LOG="$(mktemp)"
-  stdbuf -oL moon run --target native src/cmd/broker -- \
+  setsid stdbuf -oL moon run --target native src/cmd/broker -- \
     --listen "127.0.0.1:${port}" \
     --max-connections 64 \
     --max-packet-size 1048576 \
