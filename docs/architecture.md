@@ -102,3 +102,46 @@ Reader, writer, and independent closer race through a capacity-one terminal
 queue. The first terminal reason closes the socket, closes both transport
 queues, cancels sibling tasks, and emits exactly one `TransportClosed` followed
 by `UnregisterTransport`. Later socket failures are stale generation events.
+
+## M3 QoS 1 and persistent Sessions
+
+`ClientSession` owns its Packet ID allocator, ordered outbound inflight array,
+and ordered pending QoS 1 array. `BrokerState` owns every Session and maintains
+O(1) global inflight/pending counters. `BrokerRuntime` retains only connection
+generations, active Client ID bindings, Keep Alive, and Will metadata; sockets,
+queues, tasks, timers, and `ConnectionId` never enter a Session or snapshot.
+
+```text
+BrokerRuntime connection generation
+          │ active ClientId
+          ▼
+BrokerState (single writer)
+  ├─ SubscriptionIndex
+  ├─ RetainedStore
+  └─ ClientSession
+       ├─ Clean | Persistent, attached flag
+       ├─ PacketIdAllocator 1..65535
+       ├─ ordered QoS1 inflight
+       └─ ordered offline/backpressure pending
+```
+
+An inbound QoS 1 PUBLISH is fully preflighted and committed before its same-ID
+PUBACK action is emitted. Each outbound effective QoS 1 delivery receives a
+recipient-Session Packet ID and is stored inflight before the wire action.
+PUBACK removes only the matching Session entry and promotes pending messages in
+FIFO order. Unknown or duplicate PUBACK is a legal no-op.
+
+Persistent disconnect detaches rather than removes the Session. Reconnect sends
+CONNACK first, replays existing inflight entries with their original Packet IDs
+and `DUP=1`, then promotes pending entries with fresh IDs and `DUP=0`. Clean
+connect removes any previous persistent state. QoS 0 is dropped while offline.
+Per-Session and total limits bound Sessions, inflight, and pending state; a
+client-origin QoS 1 publication fails atomically when any recipient cannot take
+ownership.
+
+Snapshot V1 is a deterministic pure-data boundary. It contains persistent
+subscriptions, inflight order/IDs, pending FIFO order, next Packet ID, and
+retained messages. It excludes clean Sessions and all live connection data.
+Import validates the complete snapshot and every configured limit before the
+new `BrokerState` is returned, and restored Sessions start detached. M3 performs
+no filesystem I/O; M4 will encode and atomically persist this model.

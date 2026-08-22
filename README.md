@@ -1,16 +1,18 @@
 # moonbit-mqtt-broker
 
-A lightweight MQTT 3.1.1 broker implemented in MoonBit. The M2 server supports
-multiple TCP clients, QoS 0 publish/subscribe, `+`/`#` topic filters, retained
-messages, QoS 0 wills, PING, Keep Alive, clean-session Client ID takeover, and
-bounded network queues. A pure central runtime is the only owner of Broker and
-Session state; socket tasks only exchange bytes and events.
+A lightweight MQTT 3.1.1 broker implemented in MoonBit. The M3 server supports
+multiple TCP clients, QoS 0/1 publish/subscribe, `+`/`#` topic filters, retained
+messages, QoS 0/1 Wills, PING, Keep Alive, Client ID takeover, persistent
+Sessions across network connections, bounded offline QoS 1 delivery, and
+reconnect replay with the original Packet ID and `DUP=1`. A pure central
+runtime is the only owner of Broker, Session, inflight, and retained state;
+socket tasks only exchange bytes and events.
 
-M2 intentionally supports only `clean_session=true` and QoS 0 publications.
-Persistent sessions, QoS 1 PUBLISH/PUBACK/inflight state, offline delivery, and
-restart snapshots are planned for M3/M4. MQTT 5, QoS 2, TLS, WebSocket,
-authentication/ACL, bridging, clustering, and external databases are outside
-the first release.
+M3 defines a versioned pure-data Snapshot V1 import/export boundary, but does
+not read or write snapshot files. State therefore survives reconnects only
+while the Broker process remains alive; restart persistence belongs to M4.
+MQTT 5, QoS 2, TLS, WebSocket, authentication/ACL, bridging, clustering, and
+external databases are outside the first release.
 
 ## Prerequisites
 
@@ -26,14 +28,14 @@ docker build --platform linux/amd64 -t moonbit-mqtt-broker-dev .
 scripts/moon-docker.sh check --target native
 scripts/moon-docker.sh test --target native
 scripts/moon-docker.sh build --target native
-scripts/m2-verify-docker.sh
+scripts/m3-verify-docker.sh
 ```
 
-The last command includes all M0/M1 gates, formatting, Native check/test/build,
-at least 48 M2 server test blocks, the 10,000-event runtime regression, equal
-packet/receive-buffer boundaries, slow-consumer isolation, protocol-error Will,
-supervisor shutdown and bounded-queue tests, plus real MQTT.js and Mosquitto
-interoperability in the same environment as CI.
+The last command includes every M0–M2 gate, formatting, Native check/test/build,
+Packet ID and Session state regressions, persistent reconnect and raw-wire DUP
+tests, Snapshot V1 validation, bounded-resource tests, plus real MQTT.js and
+Mosquitto QoS 1/persistent-session interoperability in the same environment as
+CI.
 
 ## Run the broker
 
@@ -42,32 +44,43 @@ scripts/moon-docker.sh run --target native src/cmd/broker -- \
   --listen 127.0.0.1:1883 \
   --max-connections 128 \
   --max-packet-size 1048576 \
-  --max-receive-buffer-size 1048576
+  --max-receive-buffer-size 1048576 \
+  --max-sessions 1024 \
+  --max-inflight-per-session 16 \
+  --max-inflight-total 512 \
+  --max-pending-qos1-per-session 64 \
+  --max-pending-qos1-total 1024
 ```
 
-Try a QoS 0 subscriber and publisher in two terminals:
+Try a QoS 1 subscriber and publisher in two terminals:
 
 ```bash
-mosquitto_sub -h 127.0.0.1 -p 1883 -i moonbit-sub -t 'demo/#' -q 0
-mosquitto_pub -h 127.0.0.1 -p 1883 -i moonbit-pub -t demo/hello -m world -q 0
+mosquitto_sub -h 127.0.0.1 -p 1883 -i moonbit-sub -t 'demo/#' -q 1
+mosquitto_pub -h 127.0.0.1 -p 1883 -i moonbit-pub -t demo/hello -m world -q 1
 ```
 
 Available resource flags are `--max-connections`, `--max-packet-size`,
 `--max-receive-buffer-size`, `--max-outbound-queue`,
 `--max-runtime-events`, `--connect-timeout-ms`,
 `--keep-alive-check-interval-ms`, `--max-subscriptions-per-session`,
-`--max-subscriptions-total`, and `--max-retained-messages`. `--once` serves one
-complete connection and is intended for smoke tests.
+`--max-subscriptions-total`, `--max-retained-messages`, `--max-sessions`,
+`--max-inflight-per-session`, `--max-inflight-total`,
+`--max-pending-qos1-per-session`, and `--max-pending-qos1-total`. `--once`
+serves one complete connection and is intended for smoke tests.
 
-Outbound memory is approximately bounded by `connections × outbound queue
-length × maximum packet size`; increasing all three limits multiplies the
-worst-case budget. Unsupported QoS 1 PUBLISH/PUBACK and protocol-invalid flows
-close the connection. `clean_session=false` and QoS 1 Will receive a non-zero
-CONNACK and are closed without silently degrading semantics.
+Outbound transport memory is approximately bounded by `connections × outbound
+queue length × maximum packet size`. Session message memory is additionally
+bounded by `(max inflight total + max pending QoS 1 total) × maximum packet
+size`. QoS 0 is never queued for an offline Session. QoS 2 and protocol-invalid
+flows close the connection without being silently downgraded.
 
 `--max-receive-buffer-size` limits only bytes not yet consumed by the streaming
 decoder. It may equal `--max-packet-size`: a complete maximum-size packet can be
 drained before a sticky suffix is read, without requiring extra chunk slack.
+
+For a repeatable persistent-session demonstration against a running Broker,
+run `examples/persistent_session.sh`. It disconnects a `clean=false` subscriber,
+publishes QoS 1 while it is offline, then reconnects the same Client ID.
 
 See [compatibility](docs/compatibility.md) and
 [architecture](docs/architecture.md) for exact scope.
