@@ -51,3 +51,40 @@ buckets, QoS values, and pair count. `BrokerState::check_invariants` additionall
 rejects subscriptions without a Session and verifies per-session, total
 subscription, and retained-message limits. These checks are exercised through
 white-box corruption tests and a deterministic 10,000-transition regression.
+
+## M2 network runtime
+
+```text
+TcpServer accept loop
+  └─ ConnectionSupervisor(ConnectionId, Tcp)
+       ├─ reader: FrameDecoder → Packet → bounded DriverEvent queue
+       ├─ writer: bounded OutboundCommand queue → bytes
+       └─ independent close signal
+                          │
+                          ▼
+                    RouterDriver
+              transport registry + encoding
+                          │
+                          ▼
+                    BrokerRuntime
+        connection generations + M1 BrokerState
+```
+
+`BrokerRuntime` contains only deterministic data and accepts injected event
+times. It owns connection phases, Client ID bindings, Keep Alive deadlines,
+Will state, and the M1 `BrokerState`. `RouterDriver` is the only async task that
+applies runtime events and modifies the transport registry. Sockets, queues,
+tasks, and clocks never enter the pure runtime.
+
+Every transport event carries a monotonically allocated `ConnectionId`.
+Takeover terminates the old generation and publishes its Will before binding
+the new generation; later EOF/write events from the old socket are stale
+no-ops. Connection termination removes a clean Session and consumes a Will at
+most once.
+
+Outbound dispatch uses non-blocking `try_put`. A full client queue terminates
+only that slow consumer, while a separate capacity-one close signal can still
+interrupt blocked I/O. The global event queue is bounded and deliberately uses
+backpressure so decoded Packet events are not dropped. Frame size, receive
+buffer, connection count, handshake time, and both queue sizes are configured
+through one validated `ServerConfig`.
