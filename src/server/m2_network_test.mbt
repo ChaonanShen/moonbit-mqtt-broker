@@ -371,7 +371,7 @@ async test "network unsupported persistent session and qos1 will reject after co
 }
 
 ///|
-async test "network serves retained state injected before listener starts" {
+async test "initial broker state is injected before accept" {
   @async.with_task_group() <| group => {
     let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
     defer listener.close()
@@ -448,6 +448,146 @@ async test "network inbound qos1 publish closes without puback" {
     )
     assert_eq(client.read_some(), None)
     client.close()
+    server.cancel()
+  }
+}
+
+///|
+async test "protocol error publishes qos0 will" {
+  @async.with_task_group() <| group => {
+    let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    defer listener.close()
+    let config = loopback_config()
+    let server = group.spawn(allow_failure=true) <| () => {
+      serve(listener, config, loopback_state(config))
+    }
+    let observer = connect_network_client(
+      listener.addr,
+      network_connect_packet("protocol-observer"),
+    )
+    defer observer.close()
+    ignore(read_mqtt_packet(observer))
+    write_packet(
+      observer,
+      Subscribe({
+        packet_id: @protocol.PacketId::new(1).unwrap(),
+        subscriptions: [{ topic_filter: "protocol/will", requested_qos: QoS0 }],
+      }),
+    )
+    ignore(read_mqtt_packet(observer))
+    let will : @protocol.WillMessage = {
+      topic: "protocol/will",
+      payload: b"direction-error",
+      qos: QoS0,
+      retain: false,
+    }
+    let doomed = connect_network_client(
+      listener.addr,
+      network_connect_packet("protocol-doomed", will=Some(will)),
+    )
+    ignore(read_mqtt_packet(doomed))
+    // PINGRESP is a server-to-client packet and is invalid from this peer.
+    write_packet(doomed, Pingresp)
+    assert_eq(doomed.read_some(), None)
+    doomed.close()
+    assert_eq(
+      read_mqtt_packet(observer),
+      Publish({
+        topic: "protocol/will",
+        payload: b"direction-error",
+        qos: QoS0,
+        packet_id: None,
+        dup: false,
+        retain: false,
+      }),
+    )
+    // PINGRESP is an ordering sentinel: a duplicate Will would be read first.
+    write_packet(observer, Pingreq)
+    assert_eq(read_mqtt_packet(observer), Pingresp)
+    write_packet(observer, Disconnect)
+    server.cancel()
+  }
+}
+
+///|
+async test "retained empty payload deletes stored message over tcp" {
+  @async.with_task_group() <| group => {
+    let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    defer listener.close()
+    let config = loopback_config()
+    let server = group.spawn(allow_failure=true) <| () => {
+      serve(listener, config, loopback_state(config))
+    }
+    let live = connect_network_client(
+      listener.addr,
+      network_connect_packet("delete-live"),
+    )
+    let publisher = connect_network_client(
+      listener.addr,
+      network_connect_packet("delete-publisher"),
+    )
+    defer live.close()
+    defer publisher.close()
+    ignore(read_mqtt_packet(live))
+    ignore(read_mqtt_packet(publisher))
+    write_packet(
+      live,
+      Subscribe({
+        packet_id: @protocol.PacketId::new(1).unwrap(),
+        subscriptions: [
+          { topic_filter: "retained/delete", requested_qos: QoS0 },
+        ],
+      }),
+    )
+    ignore(read_mqtt_packet(live))
+    write_packet(
+      publisher,
+      Publish({
+        topic: "retained/delete",
+        payload: b"value",
+        qos: QoS0,
+        packet_id: None,
+        dup: false,
+        retain: true,
+      }),
+    )
+    assert_true(read_mqtt_packet(live) is Publish({ payload: b"value", .. }))
+    write_packet(
+      publisher,
+      Publish({
+        topic: "retained/delete",
+        payload: b"",
+        qos: QoS0,
+        packet_id: None,
+        dup: false,
+        retain: true,
+      }),
+    )
+    // Receiving the live empty Publish proves the delete was applied before
+    // the replay client is allowed to subscribe.
+    assert_true(read_mqtt_packet(live) is Publish({ payload: b"", .. }))
+
+    let replay = connect_network_client(
+      listener.addr,
+      network_connect_packet("delete-replay"),
+    )
+    defer replay.close()
+    ignore(read_mqtt_packet(replay))
+    write_packet(
+      replay,
+      Subscribe({
+        packet_id: @protocol.PacketId::new(2).unwrap(),
+        subscriptions: [
+          { topic_filter: "retained/delete", requested_qos: QoS0 },
+        ],
+      }),
+    )
+    assert_true(read_mqtt_packet(replay) is Suback(_))
+    write_packet(replay, Pingreq)
+    assert_eq(read_mqtt_packet(replay), Pingresp)
+    write_packet(live, Disconnect)
+    write_packet(publisher, Disconnect)
+    write_packet(replay, Disconnect)
     server.cancel()
   }
 }

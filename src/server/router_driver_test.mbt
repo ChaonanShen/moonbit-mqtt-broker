@@ -10,6 +10,7 @@ fn make_driver() -> RouterDriver {
 fn driver_connect_packet(
   client_id : String,
   clean_session? : Bool = true,
+  will? : @protocol.WillMessage? = None,
 ) -> @protocol.Packet {
   Connect({
     client_id,
@@ -17,7 +18,7 @@ fn driver_connect_packet(
     password: None,
     keep_alive: 10,
     clean_session,
-    will: None,
+    will,
   })
 }
 
@@ -77,25 +78,71 @@ test "driver preserves send then close as one outbound command" {
 }
 
 ///|
-test "full outbound queue closes slow consumer without blocking healthy sink" {
+test "slow consumer does not block healthy clients" {
   let driver = make_driver()
   let slow_id = ConnectionId::new(1L)
   let healthy_id = ConnectionId::new(2L)
   let slow = TransportSink::new(1)
-  let healthy = TransportSink::new(2)
+  let healthy = TransportSink::new(4)
   register_sink(driver, slow_id, slow)
   register_sink(driver, healthy_id, healthy)
-  driver_receive(driver, slow_id, driver_connect_packet("slow"))
   driver_receive(driver, healthy_id, driver_connect_packet("healthy"))
+  assert_true(healthy.outbound().try_get() is Some(WriteFrame(_)))
+  driver_receive(
+    driver,
+    healthy_id,
+    Subscribe({
+      packet_id: @protocol.PacketId::new(1).unwrap(),
+      subscriptions: [{ topic_filter: "slow/will", requested_qos: QoS0 }],
+    }),
+  )
+  assert_true(healthy.outbound().try_get() is Some(WriteFrame(_)))
+  let will : @protocol.WillMessage = {
+    topic: "slow/will",
+    payload: b"slow-closed",
+    qos: QoS0,
+    retain: false,
+  }
+  driver_receive(
+    driver,
+    slow_id,
+    driver_connect_packet("slow", will=Some(will)),
+  )
   assert_true(slow.outbound().try_get() is Some(WriteFrame(_)))
   // Fill the queue again, then make PINGRESP overflow it.
   assert_true(slow.outbound().try_put(WriteFrame(b"occupied")))
   driver_receive(driver, slow_id, Pingreq)
   assert_eq(slow.close_signal().try_get(), Some(SlowConsumer))
   assert_false(driver.runtime().has_connection(slow_id))
+  match healthy.outbound().try_get() {
+    Some(WriteFrame(frame)) =>
+      assert_eq(
+        @protocol.decode_packet(frame),
+        Ok(
+          Publish({
+            topic: "slow/will",
+            payload: b"slow-closed",
+            qos: QoS0,
+            packet_id: None,
+            dup: false,
+            retain: false,
+          }),
+        ),
+      )
+    _ => fail("healthy client must receive slow consumer will")
+  }
+  driver.handle(
+    Runtime(
+      TransportClosed({
+        connection_id: slow_id,
+        reason: WriteFailure,
+        observed_at_ms: 2L,
+      }),
+    ),
+  )
+  assert_true(healthy.outbound().try_get() is None)
 
   driver_receive(driver, healthy_id, Pingreq)
-  assert_true(healthy.outbound().try_get() is Some(WriteFrame(_)))
   assert_eq(healthy.outbound().try_get(), Some(WriteFrame(b"\xd0\x00")))
   assert_true(driver.runtime().has_connection(healthy_id))
   slow.close()

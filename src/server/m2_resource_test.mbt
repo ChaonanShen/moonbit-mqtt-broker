@@ -212,3 +212,25 @@ async test "network keepalive timeout publishes will at 1.5 times deadline" {
     server.cancel()
   }
 }
+
+///|
+async test "bounded runtime event queue preserves packet order" {
+  @async.with_task_group() <| group => {
+    let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    defer listener.close()
+    let broker = @router.BrokerConfig::new(4, 8, 4).unwrap()
+    let config = ServerConfig::new(1, 1024, 1024, 4, 1, 500, 100, broker).unwrap()
+    group.spawn_bg() <| () => {
+      serve_once(listener, config, @router.BrokerState::new(broker))
+    }
+    let client = @socket.Tcp::connect(listener.addr)
+    defer client.close()
+    let pipeline = @protocol.encode_packet(resource_connect_packet("queue-one"))
+      .unwrap()
+      .to_array()
+    pipeline.append([0xc0, 0x00, 0xe0, 0x00])
+    client.write(Bytes::from_array(pipeline))
+    assert_eq(client.read_exactly(6), b"\x20\x02\x00\x00\xd0\x00")
+    assert_eq(client.read_some(), None)
+  }
+}

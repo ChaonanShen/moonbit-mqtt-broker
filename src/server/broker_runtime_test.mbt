@@ -227,7 +227,7 @@ test "runtime routes qos0 and correlates subscription packet id" {
 }
 
 ///|
-test "runtime sends suback before retained replay and supports unsubscribe" {
+test "suback precedes retained replay" {
   let rt = runtime()
   let publisher = cid(1L)
   let subscriber = cid(2L)
@@ -363,7 +363,7 @@ test "will publishes on eof but normal disconnect suppresses it" {
 }
 
 ///|
-test "takeover publishes old will once and stale close cannot remove new session" {
+test "runtime takeover ignores stale connection events" {
   let rt = runtime()
   let old_id = cid(1L)
   let new_id = cid(2L)
@@ -402,7 +402,7 @@ test "takeover publishes old will once and stale close cannot remove new session
 }
 
 ///|
-test "deadlines use exact connect and keepalive boundaries" {
+test "keep alive expires at one and a half intervals" {
   let connect_rt = runtime()
   let awaiting = cid(1L)
   open(connect_rt, awaiting, 100L)
@@ -442,4 +442,152 @@ test "connection limit rejects new transport without changing runtime" {
     [CloseTransport({ connection_id: second, reason: ServerShutdown })],
   )
   assert_eq(rt.connection_count(), 1)
+}
+
+///|
+fn runtime_with_will_observer(
+  will_payload : Bytes,
+) -> (BrokerRuntime, ConnectionId, ConnectionId) raise {
+  let rt = runtime()
+  let observer = cid(1L)
+  let doomed = cid(2L)
+  connect(rt, observer, "close-observer")
+  ignore(
+    receive(
+      rt,
+      observer,
+      Subscribe({
+        packet_id: @protocol.PacketId::new(1).unwrap(),
+        subscriptions: [{ topic_filter: "close/#", requested_qos: QoS0 }],
+      }),
+      2L,
+    ),
+  )
+  let will : @protocol.WillMessage = {
+    topic: "close/will",
+    payload: will_payload,
+    qos: QoS0,
+    retain: false,
+  }
+  open(rt, doomed, 0L)
+  ignore(receive(rt, doomed, connect_packet("doomed", will=Some(will)), 1L))
+  (rt, observer, doomed)
+}
+
+///|
+test "active close reasons follow the complete qos0 will matrix" {
+  let publish_reasons : Array[CloseReason] = [
+    PeerEof,
+    ReadFailure,
+    WriteFailure,
+    ProtocolError,
+    KeepAliveTimeout,
+    ClientTakeover,
+    SlowConsumer,
+    EncodeFailure,
+  ]
+  for reason in publish_reasons {
+    let (rt, observer, doomed) = runtime_with_will_observer(b"published")
+    let actions = rt.apply(
+      TransportClosed({ connection_id: doomed, reason, observed_at_ms: 3L }),
+    )
+    assert_eq(actions.length(), 2)
+    assert_eq(
+      actions[0],
+      SendPacket({
+        connection_id: observer,
+        packet: Publish({
+          topic: "close/will",
+          payload: b"published",
+          qos: QoS0,
+          packet_id: None,
+          dup: false,
+          retain: false,
+        }),
+      }),
+    )
+    assert_eq(actions[1], CloseTransport({ connection_id: doomed, reason }))
+    assert_eq(
+      rt.apply(
+        TransportClosed({ connection_id: doomed, reason, observed_at_ms: 4L }),
+      ),
+      [],
+    )
+    assert_eq(rt.check_invariants(), Ok(()))
+  }
+
+  let suppress_reasons : Array[CloseReason] = [
+    NormalDisconnect,
+    ConnectRejected,
+    ServerShutdown,
+  ]
+  for reason in suppress_reasons {
+    let (rt, _, doomed) = runtime_with_will_observer(b"suppressed")
+    assert_eq(
+      rt.apply(
+        TransportClosed({ connection_id: doomed, reason, observed_at_ms: 3L }),
+      ),
+      [CloseTransport({ connection_id: doomed, reason })],
+    )
+    assert_eq(rt.check_invariants(), Ok(()))
+  }
+}
+
+///|
+test "await connect never publishes will for any close reason" {
+  let reasons : Array[CloseReason] = [
+    NormalDisconnect,
+    ConnectRejected,
+    PeerEof,
+    ReadFailure,
+    WriteFailure,
+    ProtocolError,
+    KeepAliveTimeout,
+    ConnectTimeout,
+    ClientTakeover,
+    SlowConsumer,
+    EncodeFailure,
+    ServerShutdown,
+  ]
+  for reason in reasons {
+    let rt = runtime()
+    let id = cid(1L)
+    open(rt, id, 0L)
+    assert_eq(
+      rt.apply(
+        TransportClosed({ connection_id: id, reason, observed_at_ms: 1L }),
+      ),
+      [CloseTransport({ connection_id: id, reason })],
+    )
+    assert_eq(rt.check_invariants(), Ok(()))
+  }
+}
+
+///|
+test "normal disconnect suppresses qos0 will" {
+  let (rt, _, doomed) = runtime_with_will_observer(b"not-sent")
+  assert_eq(receive(rt, doomed, Disconnect, 3L), [
+    CloseTransport({ connection_id: doomed, reason: NormalDisconnect }),
+  ])
+  assert_eq(rt.check_invariants(), Ok(()))
+}
+
+///|
+test "stored will payload is defensively copied" {
+  let source : Array[Byte] = [0x6f, 0x6c, 0x64]
+  let payload = Bytes::from_array(source)
+  let (rt, _, doomed) = runtime_with_will_observer(payload)
+  source[0] = 0x6e
+  let actions = rt.apply(
+    TransportClosed({
+      connection_id: doomed,
+      reason: PeerEof,
+      observed_at_ms: 3L,
+    }),
+  )
+  match actions[0] {
+    SendPacket({ packet: Publish(packet), .. }) =>
+      assert_eq(packet.payload, b"old")
+    _ => fail("expected copied will delivery")
+  }
 }
