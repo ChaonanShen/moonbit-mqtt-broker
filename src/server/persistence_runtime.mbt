@@ -11,9 +11,11 @@ pub struct PersistenceRuntime {
 pub fn PersistenceRuntime::new(
   store : @persistence.SnapshotStore,
   config : @persistence.PersistenceConfig,
+  logger? : @observability.Logger = @observability.Logger::silent(),
 ) -> Result[PersistenceRuntime, @persistence.PersistenceError] {
   let sink = @persistence.SnapshotSink::new()
-  match @persistence.SnapshotWriter::new(store, sink, config.retry_ms()) {
+  match
+    @persistence.SnapshotWriter::new(store, sink, config.retry_ms(), logger~) {
     Ok(writer) => Ok({ store, sink, writer, config, closed: false })
     Err(error) => Err(error)
   }
@@ -36,6 +38,15 @@ pub fn PersistenceRuntime::close(self : PersistenceRuntime) -> Unit {
     self.closed = true
     self.sink.close()
     self.store.close()
+  }
+}
+
+///|
+pub fn PersistenceRuntime::state(self : PersistenceRuntime) -> String {
+  if self.writer.is_degraded() {
+    "degraded"
+  } else {
+    "healthy"
   }
 }
 

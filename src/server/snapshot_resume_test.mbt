@@ -6,6 +6,8 @@ test "restored broker state resumes before accept" {
     sessions: [
       {
         client_id: "restored",
+        owner_principal: "legacy-anonymous",
+        detached_at_ms: 0L,
         next_packet_id: 8,
         subscriptions: [{ filter: "restored/#", qos: 1 }],
         inflight: [

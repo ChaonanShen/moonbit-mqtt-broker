@@ -19,9 +19,16 @@ pub(all) struct TransportClosedEvent {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct EmitSystemMetricsEvent {
+  now_ms : Int64
+  persistence_state : String
+} derive(Eq, Debug)
+
+///|
 pub(all) enum RuntimeEvent {
   TransportOpened(TransportOpenedEvent)
   PacketReceived(PacketReceivedEvent)
   TransportClosed(TransportClosedEvent)
   CheckDeadlines(Int64)
+  EmitSystemMetrics(EmitSystemMetricsEvent)
 } derive(Eq, Debug)

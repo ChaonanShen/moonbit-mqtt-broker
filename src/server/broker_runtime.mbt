@@ -4,18 +4,27 @@ pub struct BrokerRuntime {
   broker_state : @router.BrokerState
   connections : Map[ConnectionId, ConnectionMeta]
   active_by_client : Map[@session.ClientId, ConnectionId]
+  security : @security.SecurityPolicy
+  metrics : BrokerMetrics
+  logger : @observability.Logger
 }
 
 ///|
 pub fn BrokerRuntime::new(
   config : ServerConfig,
   initial_state : @router.BrokerState,
+  security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
+  metrics? : BrokerMetrics = BrokerMetrics::new(0L),
+  logger? : @observability.Logger = @observability.Logger::silent(),
 ) -> BrokerRuntime {
   {
     config,
     broker_state: initial_state,
     connections: Map([]),
     active_by_client: Map([]),
+    security,
+    metrics,
+    logger,
   }
 }
 
@@ -46,6 +55,11 @@ pub fn BrokerRuntime::broker_state(self : BrokerRuntime) -> @router.BrokerState 
 }
 
 ///|
+pub fn BrokerRuntime::metrics(self : BrokerRuntime) -> BrokerMetrics {
+  self.metrics
+}
+
+///|
 fn accepted_connack_packet(session_present : Bool) -> @protocol.Packet {
   Connack({ session_present, return_code: Accepted })
 }
@@ -72,11 +86,51 @@ fn qos_from_protocol(qos : @protocol.QoS) -> @session.DeliveryQoS? {
 }
 
 ///|
+fn close_reason_name(reason : CloseReason) -> String {
+  match reason {
+    NormalDisconnect => "normal_disconnect"
+    ConnectRejected => "connect_rejected"
+    PeerEof => "peer_eof"
+    ReadFailure => "read_failure"
+    WriteFailure => "write_failure"
+    ProtocolError => "protocol_error"
+    KeepAliveTimeout => "keep_alive_timeout"
+    ConnectTimeout => "connect_timeout"
+    ClientTakeover => "client_takeover"
+    SlowConsumer => "slow_consumer"
+    EncodeFailure => "encode_failure"
+    ResourceExhausted => "resource_exhausted"
+    ServerShutdown => "server_shutdown"
+  }
+}
+
+///|
+fn connect_return_code_name(code : @protocol.ConnectReturnCode) -> String {
+  match code {
+    Accepted => "accepted"
+    UnacceptableProtocolVersion => "unacceptable_protocol_version"
+    IdentifierRejected => "identifier_rejected"
+    ServerUnavailable => "server_unavailable"
+    BadUsernameOrPassword => "bad_username_or_password"
+    NotAuthorized => "not_authorized"
+  }
+}
+
+///|
 fn BrokerRuntime::reject_connect(
   self : BrokerRuntime,
   connection_id : ConnectionId,
   code : @protocol.ConnectReturnCode,
 ) -> Array[RuntimeAction] {
+  self.logger.log(
+    @observability.LogRecord::new(
+      @async.now(),
+      @observability.Warn,
+      "connect_rejected",
+      connection_id=connection_id.value().to_string(),
+      reason=connect_return_code_name(code),
+    ),
+  )
   self.connections.remove(connection_id)
   [
     SendPacketThenClose({
@@ -98,9 +152,18 @@ fn BrokerRuntime::map_broker_actions(
       Deliver(delivery) =>
         match self.active_by_client.get(delivery.recipient) {
           None => ()
-          Some(connection_id) =>
+          Some(connection_id) => {
+            let principal = match self.connections.get(connection_id) {
+              Some(meta) => meta.principal
+              None => None
+            }
+            if principal is Some(value) &&
+              !self.security.can_read_topic(value, delivery.topic) {
+              continue
+            }
             match delivery.qos {
-              QoS0 =>
+              QoS0 => {
+                self.metrics.record_sent()
                 actions.push(
                   SendPacket({
                     connection_id,
@@ -114,11 +177,13 @@ fn BrokerRuntime::map_broker_actions(
                     }),
                   }),
                 )
+              }
               QoS1 => {
                 let packet_id = match delivery.packet_id {
                   Some(value) => @protocol.PacketId::new(value.value()).unwrap()
                   None => continue
                 }
+                self.metrics.record_sent()
                 actions.push(
                   SendPacket({
                     connection_id,
@@ -134,7 +199,33 @@ fn BrokerRuntime::map_broker_actions(
                 )
               }
             }
+          }
         }
+      DeliveryDroppedResourceLimit(_) => self.metrics.record_dropped()
+      SessionExpired(client_id) =>
+        self.logger.log(
+          @observability.LogRecord::new(
+            @async.now(),
+            @observability.Info,
+            "session_expired",
+            message="persistent Session expired client_id=" + client_id.value(),
+            client_id=client_id.value(),
+            snapshot_revision=self.broker_state.snapshot_revision().to_string(),
+          ),
+        )
+      TimeRegressionDetected(previous, current) =>
+        self.logger.log(
+          @observability.LogRecord::new(
+            current,
+            @observability.Warn,
+            "time_regression",
+            message="clock rollback detected previous_ms=" +
+              previous.to_string() +
+              " current_ms=" +
+              current.to_string(),
+            reason="time_regression",
+          ),
+        )
       _ => ()
     }
   }
@@ -157,12 +248,37 @@ fn BrokerRuntime::terminate(
   self : BrokerRuntime,
   connection_id : ConnectionId,
   reason : CloseReason,
+  observed_at_ms? : Int64 = -1L,
 ) -> Array[RuntimeAction] {
   let meta = match self.connections.get(connection_id) {
     None => return []
     Some(meta) => meta
   }
   self.connections.remove(connection_id)
+  let log_client_id = match meta.phase {
+    Active(value) => value.value()
+    AwaitConnect => ""
+  }
+  let log_principal = match meta.principal {
+    Some(value) => value.storage_value()
+    None => ""
+  }
+  self.logger.log(
+    @observability.LogRecord::new(
+      if observed_at_ms >= 0L {
+        observed_at_ms
+      } else {
+        @async.now()
+      },
+      @observability.Info,
+      "connection_closed",
+      connection_id=connection_id.value().to_string(),
+      client_id=log_client_id,
+      principal=log_principal,
+      reason=close_reason_name(reason),
+      snapshot_revision=self.broker_state.snapshot_revision().to_string(),
+    ),
+  )
   let actions : Array[RuntimeAction] = []
   match meta.phase {
     AwaitConnect => ()
@@ -173,7 +289,14 @@ fn BrokerRuntime::terminate(
           Some(Persistent) =>
             ignore(
               self.broker_state.apply(
-                @router.BrokerEvent::DetachSession(client_id),
+                @router.BrokerEvent::DetachSessionAt({
+                  client_id,
+                  detached_at_ms: if observed_at_ms >= 0L {
+                    observed_at_ms
+                  } else {
+                    meta.last_control_at_ms
+                  },
+                }),
               ),
             )
           Some(Clean) =>
@@ -230,6 +353,36 @@ fn BrokerRuntime::handle_connect(
     Some(meta) => meta.accepted_at_ms
     None => received_at_ms
   }
+  let principal = match
+    self.security.authenticate(packet.username, packet.password) {
+    Accepted(value) => value
+    BadCredentials => {
+      self.metrics.record_authentication_failure()
+      self.logger.log(
+        @observability.LogRecord::new(
+          received_at_ms,
+          @observability.Warn,
+          "authentication_failed",
+          connection_id=connection_id.value().to_string(),
+          reason="bad_credentials",
+        ),
+      )
+      return self.reject_connect(connection_id, BadUsernameOrPassword)
+    }
+    NotAuthorized => {
+      self.metrics.record_authentication_failure()
+      self.logger.log(
+        @observability.LogRecord::new(
+          received_at_ms,
+          @observability.Warn,
+          "authentication_failed",
+          connection_id=connection_id.value().to_string(),
+          reason="not_authorized",
+        ),
+      )
+      return self.reject_connect(connection_id, NotAuthorized)
+    }
+  }
   if !packet.clean_session && packet.client_id == "" {
     return self.reject_connect(connection_id, IdentifierRejected)
   }
@@ -242,6 +395,28 @@ fn BrokerRuntime::handle_connect(
     Err(_) => return self.reject_connect(connection_id, IdentifierRejected)
     Ok(value) => value
   }
+  match self.broker_state.session_owner(client_id) {
+    Some(owner) => {
+      let legacy_anonymous = owner == @security.Principal::LegacyAnonymous &&
+        principal == @security.Principal::Anonymous
+      if owner != principal && !legacy_anonymous {
+        self.metrics.record_authentication_failure()
+        self.logger.log(
+          @observability.LogRecord::new(
+            received_at_ms,
+            @observability.Warn,
+            "principal_owner_mismatch",
+            connection_id=connection_id.value().to_string(),
+            client_id=client_id.value(),
+            principal=principal.storage_value(),
+            reason="not_authorized",
+          ),
+        )
+        return self.reject_connect(connection_id, NotAuthorized)
+      }
+    }
+    None => ()
+  }
   let stored_will = match packet.will {
     None => None
     Some(will) => {
@@ -253,6 +428,21 @@ fn BrokerRuntime::handle_connect(
       let topic = match @topic.TopicName::new(will.topic) {
         Err(_) => return self.terminate(connection_id, ProtocolError)
         Ok(value) => value
+      }
+      if !self.security.can_write_topic(principal, topic) {
+        self.metrics.record_acl_denial()
+        self.logger.log(
+          @observability.LogRecord::new(
+            received_at_ms,
+            @observability.Warn,
+            "acl_denied",
+            connection_id=connection_id.value().to_string(),
+            client_id=client_id.value(),
+            principal=principal.storage_value(),
+            reason="will_write_denied",
+          ),
+        )
+        return self.reject_connect(connection_id, NotAuthorized)
       }
       Some({
         topic,
@@ -278,10 +468,11 @@ fn BrokerRuntime::handle_connect(
     }
     match
       self.broker_state.apply(
-        @router.BrokerEvent::CreateSessionWith({
+        @router.BrokerEvent::CreateOwnedSessionWith({
           client_id,
           mode: @session.SessionMode::Clean,
           attached: true,
+          owner: principal,
         }),
       ) {
       Err(_) => {
@@ -311,10 +502,11 @@ fn BrokerRuntime::handle_connect(
         )
         match
           self.broker_state.apply(
-            @router.BrokerEvent::CreateSessionWith({
+            @router.BrokerEvent::CreateOwnedSessionWith({
               client_id,
               mode: @session.SessionMode::Persistent,
               attached: true,
+              owner: principal,
             }),
           ) {
           Err(_) => {
@@ -329,10 +521,11 @@ fn BrokerRuntime::handle_connect(
       None =>
         match
           self.broker_state.apply(
-            @router.BrokerEvent::CreateSessionWith({
+            @router.BrokerEvent::CreateOwnedSessionWith({
               client_id,
               mode: @session.SessionMode::Persistent,
               attached: true,
+              owner: principal,
             }),
           ) {
           Err(_) => {
@@ -353,7 +546,19 @@ fn BrokerRuntime::handle_connect(
     last_control_at_ms: received_at_ms,
     keep_alive_seconds: packet.keep_alive,
     will: stored_will,
+    principal: Some(principal),
   })
+  self.logger.log(
+    @observability.LogRecord::new(
+      received_at_ms,
+      @observability.Info,
+      "client_connected",
+      connection_id=connection_id.value().to_string(),
+      client_id=client_id.value(),
+      principal=principal.storage_value(),
+      snapshot_revision=self.broker_state.snapshot_revision().to_string(),
+    ),
+  )
   actions.push(
     SendPacket({
       connection_id,
@@ -377,9 +582,11 @@ fn BrokerRuntime::handle_subscribe(
   self : BrokerRuntime,
   connection_id : ConnectionId,
   client_id : @session.ClientId,
+  principal : @security.Principal,
   packet : @protocol.SubscribePacket,
 ) -> Array[RuntimeAction] {
   let entries : Array[@router.SubscribeEntry] = []
+  let authorized : Array[Bool] = []
   for subscription in packet.subscriptions {
     let filter = match @topic.TopicFilter::new(subscription.topic_filter) {
       Err(_) => return self.close_protocol_error(connection_id)
@@ -389,31 +596,71 @@ fn BrokerRuntime::handle_subscribe(
       None => return self.close_protocol_error(connection_id)
       Some(value) => value
     }
-    entries.push({ filter, qos })
+    let allowed = self.security.can_read_filter(principal, filter)
+    if !allowed {
+      self.metrics.record_acl_denial()
+      self.logger.log(
+        @observability.LogRecord::new(
+          @async.now(),
+          @observability.Warn,
+          "acl_denied",
+          connection_id=connection_id.value().to_string(),
+          client_id=client_id.value(),
+          principal=principal.storage_value(),
+          reason="subscribe_denied",
+        ),
+      )
+    }
+    authorized.push(allowed)
+    if allowed {
+      entries.push({ filter, qos })
+    }
   }
   let broker_actions = match
-    self.broker_state.apply(
-      @router.BrokerEvent::Subscribe({ client_id, entries }),
-    ) {
+    (if entries.length() == 0 {
+      Ok([])
+    } else {
+      self.broker_state.apply(
+        @router.BrokerEvent::Subscribe({ client_id, entries }),
+      )
+    }) {
     Err(@router.RouterError::QoS1ResourceLimit(_, _)) =>
       return self.terminate(connection_id, ResourceExhausted)
     Err(_) => return self.close_protocol_error(connection_id)
     Ok(value) => value
   }
   let actions : Array[RuntimeAction] = []
+  if broker_actions.length() == 0 {
+    return [
+      SendPacket({
+        connection_id,
+        packet: Suback({
+          packet_id: packet.packet_id,
+          return_codes: authorized.map(_ => Failure),
+        }),
+      }),
+    ]
+  }
   match broker_actions[0] {
     SubscriptionsApplied(applied) => {
       let return_codes : Array[@protocol.SubackReturnCode] = []
-      for result in applied.results {
-        match result {
-          Granted(qos) =>
-            return_codes.push(
-              match qos {
-                QoS0 => GrantedQoS0
-                QoS1 => GrantedQoS1
-              },
-            )
-          RejectedLimit(_) => return_codes.push(Failure)
+      let mut result_index = 0
+      for allowed in authorized {
+        if !allowed {
+          return_codes.push(Failure)
+        } else {
+          let result = applied.results[result_index]
+          result_index = result_index + 1
+          match result {
+            Granted(qos) =>
+              return_codes.push(
+                match qos {
+                  QoS0 => GrantedQoS0
+                  QoS1 => GrantedQoS1
+                },
+              )
+            RejectedLimit(_) => return_codes.push(Failure)
+          }
         }
       }
       actions.push(
@@ -457,12 +704,14 @@ fn BrokerRuntime::handle_active_packet(
   self : BrokerRuntime,
   connection_id : ConnectionId,
   client_id : @session.ClientId,
+  principal : @security.Principal,
   packet : @protocol.Packet,
 ) -> Array[RuntimeAction] {
   match packet {
     Pingreq => [SendPacket({ connection_id, packet: Pingresp })]
     Disconnect => self.terminate(connection_id, NormalDisconnect)
     Publish(publish_packet) => {
+      self.metrics.record_received()
       let incoming_packet_id : @protocol.PacketId? = match publish_packet.qos {
         QoS0 => {
           if publish_packet.packet_id is Some(_) || publish_packet.dup {
@@ -485,6 +734,26 @@ fn BrokerRuntime::handle_active_packet(
       let topic = match @topic.TopicName::new(publish_packet.topic) {
         Err(_) => return self.close_protocol_error(connection_id)
         Ok(value) => value
+      }
+      if !self.security.can_write_topic(principal, topic) {
+        self.metrics.record_acl_denial()
+        self.metrics.record_dropped()
+        self.logger.log(
+          @observability.LogRecord::new(
+            @async.now(),
+            @observability.Warn,
+            "acl_denied",
+            connection_id=connection_id.value().to_string(),
+            client_id=client_id.value(),
+            principal=principal.storage_value(),
+            reason="publish_write_denied",
+          ),
+        )
+        return match incoming_packet_id {
+          Some(packet_id) =>
+            [SendPacket({ connection_id, packet: Puback(packet_id) })]
+          None => []
+        }
       }
       let result = self.publish({
         origin: Client(client_id),
@@ -525,7 +794,9 @@ fn BrokerRuntime::handle_active_packet(
       }
     }
     Subscribe(subscribe_packet) =>
-      self.handle_subscribe(connection_id, client_id, subscribe_packet)
+      self.handle_subscribe(
+        connection_id, client_id, principal, subscribe_packet,
+      )
     Unsubscribe(unsubscribe_packet) =>
       self.handle_unsubscribe(connection_id, client_id, unsubscribe_packet)
     _ => self.close_protocol_error(connection_id)
@@ -553,7 +824,13 @@ fn BrokerRuntime::handle_packet(
         ..meta,
         last_control_at_ms: event.received_at_ms,
       })
-      self.handle_active_packet(event.connection_id, client_id, event.packet)
+      let principal = meta.principal.unwrap()
+      self.handle_active_packet(
+        event.connection_id,
+        client_id,
+        principal,
+        event.packet,
+      )
     }
   }
 }
@@ -580,9 +857,90 @@ fn BrokerRuntime::check_deadlines(
     }
   }
   let actions : Array[RuntimeAction] = []
+  match self.broker_state.apply(@router.BrokerEvent::ExpireSessions(now_ms)) {
+    Ok(expiration_actions) =>
+      actions.append(self.map_broker_actions(expiration_actions))
+    Err(_) => ()
+  }
   for pair in expired {
     let (connection_id, reason) = pair
     actions.append(self.terminate(connection_id, reason))
+  }
+  actions
+}
+
+///|
+fn BrokerRuntime::emit_system_metric(
+  self : BrokerRuntime,
+  topic_value : String,
+  value : String,
+) -> Array[RuntimeAction] {
+  let topic = @topic.TopicName::new(topic_value).unwrap()
+  let payload = @utf8.encode(value)
+  let actions : Array[RuntimeAction] = []
+  for client_id in self.broker_state.system_subscribers(topic) {
+    let connection_id = match self.active_by_client.get(client_id) {
+      None => continue
+      Some(value) => value
+    }
+    let meta = match self.connections.get(connection_id) {
+      Some(value) => value
+      None => continue
+    }
+    let principal = match meta.principal {
+      Some(value) => value
+      None => continue
+    }
+    if !self.security.can_read_topic(principal, topic) {
+      continue
+    }
+    actions.push(
+      SendPacket({
+        connection_id,
+        packet: Publish({
+          topic: topic_value,
+          payload,
+          qos: @protocol.QoS::QoS0,
+          packet_id: None,
+          dup: false,
+          retain: false,
+        }),
+      }),
+    )
+  }
+  actions
+}
+
+///|
+fn BrokerRuntime::emit_system_metrics(
+  self : BrokerRuntime,
+  event : EmitSystemMetricsEvent,
+) -> Array[RuntimeAction] {
+  let state = self.broker_state
+  let values : Array[(String, String)] = [
+    ("version", "0.1.0"),
+    ("uptime_seconds", self.metrics.uptime_seconds(event.now_ms).to_string()),
+    ("clients/connected", self.active_by_client.length().to_string()),
+    ("sessions/count", state.session_count().to_string()),
+    ("subscriptions/count", state.subscription_count().to_string()),
+    ("retained/count", state.retained_count().to_string()),
+    ("qos1/inflight", state.inflight_count().to_string()),
+    ("qos1/pending", state.pending_qos1_count().to_string()),
+    ("messages/received", self.metrics.messages_received().to_string()),
+    ("messages/sent", self.metrics.messages_sent().to_string()),
+    ("messages/dropped", self.metrics.messages_dropped().to_string()),
+    ("auth/failures", self.metrics.authentication_failures().to_string()),
+    ("acl/denials", self.metrics.acl_denials().to_string()),
+    (
+      "tls/handshake_failures",
+      self.metrics.tls_handshake_failures().to_string(),
+    ),
+    ("persistence/state", event.persistence_state),
+  ]
+  let actions : Array[RuntimeAction] = []
+  for item in values {
+    let (suffix, value) = item
+    actions.append(self.emit_system_metric("$SYS/broker/" + suffix, value))
   }
   actions
 }
@@ -612,13 +970,19 @@ pub fn BrokerRuntime::apply(
         last_control_at_ms: opened.accepted_at_ms,
         keep_alive_seconds: 0,
         will: None,
+        principal: None,
       })
       []
     }
     PacketReceived(packet) => self.handle_packet(packet)
     TransportClosed(closed) =>
-      self.terminate(closed.connection_id, closed.reason)
+      self.terminate(
+        closed.connection_id,
+        closed.reason,
+        observed_at_ms=closed.observed_at_ms,
+      )
     CheckDeadlines(now_ms) => self.check_deadlines(now_ms)
+    EmitSystemMetrics(event) => self.emit_system_metrics(event)
   }
 }
 

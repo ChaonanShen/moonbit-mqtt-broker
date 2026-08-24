@@ -24,8 +24,8 @@ fn next_read_capacity(
 }
 
 ///|
-async fn read_connection(
-  connection : @socket.Tcp,
+async fn read_transport(
+  connection : ConnectionTransport,
   connection_id : ConnectionId,
   config : ServerConfig,
   events : @async.Queue[DriverEvent],
@@ -89,8 +89,8 @@ async fn read_connection(
 }
 
 ///|
-async fn write_connection(
-  connection : @socket.Tcp,
+async fn write_transport(
+  connection : ConnectionTransport,
   sink : TransportSink,
 ) -> CloseReason {
   for ;; {
@@ -111,8 +111,8 @@ async fn write_connection(
 }
 
 ///|
-pub async fn supervise_connection(
-  connection : @socket.Tcp,
+async fn supervise_transport(
+  connection : ConnectionTransport,
   connection_id : ConnectionId,
   config : ServerConfig,
   events : @async.Queue[DriverEvent],
@@ -131,11 +131,11 @@ pub async fn supervise_connection(
   }
   let reason = @async.with_task_group() <| group => {
     let reader = group.spawn(allow_failure=true) <| () => {
-      let reason = read_connection(connection, connection_id, config, events)
+      let reason = read_transport(connection, connection_id, config, events)
       try_report_terminal(terminal, reason)
     }
     let writer = group.spawn(allow_failure=true) <| () => {
-      let reason = write_connection(connection, sink)
+      let reason = write_transport(connection, sink)
       try_report_terminal(terminal, reason)
     }
     let closer = group.spawn(allow_failure=true) <| () => {
@@ -161,4 +161,42 @@ pub async fn supervise_connection(
   events.put(UnregisterTransport(connection_id)) catch {
     _ => ()
   }
+}
+
+///|
+async fn read_connection(
+  connection : @socket.Tcp,
+  connection_id : ConnectionId,
+  config : ServerConfig,
+  events : @async.Queue[DriverEvent],
+) -> CloseReason {
+  read_transport(
+    ConnectionTransport::plain(connection),
+    connection_id,
+    config,
+    events,
+  )
+}
+
+///|
+async fn write_connection(
+  connection : @socket.Tcp,
+  sink : TransportSink,
+) -> CloseReason {
+  write_transport(ConnectionTransport::plain(connection), sink)
+}
+
+///|
+pub async fn supervise_connection(
+  connection : @socket.Tcp,
+  connection_id : ConnectionId,
+  config : ServerConfig,
+  events : @async.Queue[DriverEvent],
+) -> Unit {
+  supervise_transport(
+    ConnectionTransport::plain(connection),
+    connection_id,
+    config,
+    events,
+  )
 }
