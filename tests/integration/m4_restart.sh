@@ -95,7 +95,7 @@ wait_for_new_commit "${commit_count}"
 stop_broker
 
 start_broker "${port}"
-grep -Eq 'snapshot restored version=1 sessions=[1-9][0-9]* retained=[1-9][0-9]* bytes=[1-9][0-9]*' "${BROKER_LOG}"
+grep -Eq 'snapshot restored version=1-or-2 sessions=[1-9][0-9]* retained=[1-9][0-9]* bytes=[1-9][0-9]*' "${BROKER_LOG}"
 commit_count="$(grep -c 'snapshot committed revision=' "${BROKER_LOG}" || true)"
 node tests/integration/m4_restart.mjs verify "mqtt://127.0.0.1:${port}" "${packet_id}"
 wait_for_new_commit "${commit_count}"
