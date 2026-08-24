@@ -1,5 +1,7 @@
 import {
   "ChaonanShen/moonbit-mqtt-broker/router",
+  "moonbitlang/async/fs",
+  "moonbitlang/async/io",
   "moonbitlang/core/encoding/utf8",
 }
 
@@ -8,6 +10,10 @@ import {
   "moonbitlang/async/fs",
   "moonbitlang/async/io",
 } for "test"
+
+import {
+  "moonbitlang/async",
+} for "wbtest"
 
 options(
   targets: { "fs_capability_test.mbt": [ "native" ] },

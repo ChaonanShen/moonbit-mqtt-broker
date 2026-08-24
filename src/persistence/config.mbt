@@ -18,10 +18,10 @@ pub fn PersistenceConfig::new(
   if data_dir == "" {
     return Err(InvalidConfiguration("data_dir must not be empty"))
   }
-  if max_snapshot_bytes < 24L || max_snapshot_bytes > 2147483647L {
+  if max_snapshot_bytes < 24L || max_snapshot_bytes > 2147483646L {
     return Err(
       InvalidConfiguration(
-        "max_snapshot_bytes must be between 24 and 2147483647",
+        "max_snapshot_bytes must be between 24 and 2147483646",
       ),
     )
   }
