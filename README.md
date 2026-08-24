@@ -2,21 +2,27 @@
 
 A lightweight, single-node MQTT 3.1.1 Broker implemented in MoonBit. Version
 `0.1.0` supports
-multiple TCP clients, QoS 0/1 publish/subscribe, `+`/`#` topic filters, retained
+multiple TCP or TLS clients, QoS 0/1 publish/subscribe, `+`/`#` topic filters, retained
 messages, QoS 0/1 Wills, PING, Keep Alive, Client ID takeover, persistent
 Sessions across network connections, bounded offline QoS 1 delivery, and
 reconnect replay with the original Packet ID and `DUP=1`. Optional local
 snapshot persistence carries retained and persistent-Session state across
-Broker process restarts. A pure central
+Broker process restarts. TLS, Argon2id authentication, static allow-only ACLs,
+Principal-owned Sessions, configurable Session expiry, `$SYS/broker` metrics,
+structured logs, and TOML configuration are available as single-node
+operational features. A pure central
 runtime is the only owner of Broker, Session, inflight, and retained state;
 socket tasks only exchange bytes and events.
 
-Optional persistence encodes the pure Snapshot V1 model as checksummed Disk V1 and commits it via
+Optional persistence encodes Snapshot V2 as checksummed Disk V2 and commits it via
 a same-directory temporary file, full file sync, atomic replace rename, and
 directory sync. Recovery is strict and occurs before the TCP listener is
 created. This is debounced latest-committed snapshot durability, not a WAL or
-per-PUBACK stable-storage guarantee.
-MQTT 5, QoS 2, TLS, WebSocket, authentication/ACL, shared subscriptions,
+per-PUBACK stable-storage guarantee. SIGTERM and SIGINT stop the listener
+through the normal service path, suppress active connection Wills, and force
+the newest in-memory Snapshot before exit; SIGKILL and host failure retain only
+the latest-committed guarantee.
+MQTT 5, QoS 2, WebSocket, shared subscriptions,
 Bridge, plugins, clustering, external databases, WAL, and zero-loss durability
 are outside this release.
 
@@ -35,13 +41,15 @@ docker build --platform linux/amd64 -t moonbit-mqtt-broker-dev .
 scripts/moon-docker.sh check --target native
 scripts/moon-docker.sh test --target native
 scripts/moon-docker.sh build --target native
-scripts/m5-verify-docker.sh
+scripts/m11-verify-docker.sh
 ```
 
-The last command is the cumulative release gate: all M0–M4 tests, formatting,
+The last command is the cumulative M0–M11 release gate: formatting,
 Native check/test/build, MQTT.js/Mosquitto/Aedes protocol comparison, bounded
-workloads, executable examples, documentation checks, and a clean-room package
-build in the same environment as CI.
+workloads, executable examples, documentation checks, clean-room packaging, and
+real SIGTERM/SIGINT final-snapshot recovery, TLS/security, Session expiry,
+observability, and TOML validation
+in the same environment as CI.
 
 ## Run the broker
 
@@ -70,6 +78,56 @@ scripts/moon-docker.sh run --target native src/cmd/broker -- \
   --snapshot-retry-ms 1000
 ```
 
+Enable the mutually exclusive TLS-only listener with a PEM certificate and a
+private key readable only by its owner:
+
+```bash
+chmod 0600 server.key
+scripts/moon-docker.sh run --target native src/cmd/broker -- \
+  --listen 127.0.0.1:8883 \
+  --tls-cert /workspace/certs/server.crt \
+  --tls-key /workspace/certs/server.key \
+  --tls-handshake-timeout-ms 10000
+```
+
+Both TLS paths are required together. The certificate must be a regular file;
+the key must be a non-symlink regular file with no group/other permissions.
+The Broker loads the pair and completes a real in-memory handshake before it
+binds the listener. TLS mode does not also expose plaintext MQTT on that port.
+
+For a practical TLS + authentication + ACL deployment, store only Argon2id
+encoded password hashes and define explicit permissions:
+
+```text
+# passwords (mode 0600)
+alice:$argon2id$v=19$m=65536,t=3,p=1$...$...
+
+# acl
+user alice
+topic read devices/#
+topic write commands/+
+topic read $SYS/broker/#
+```
+
+```bash
+chmod 0600 server.key passwords
+broker --listen 0.0.0.0:8883 \
+  --tls-cert /etc/broker/server.crt --tls-key /run/secrets/server.key \
+  --allow-anonymous false --password-file /run/secrets/passwords \
+  --acl-file /etc/broker/acl --data-dir /var/lib/broker \
+  --persistent-session-expiry 30d --log-format json
+```
+
+MQTT 3.1.1 transports credentials in CONNECT, so TLS is strongly recommended
+whenever passwords are enabled. The same settings can be loaded from TOML;
+CLI values override the file:
+
+```bash
+broker --config /etc/moonbit-mqtt-broker.toml --check-config
+broker --config /etc/moonbit-mqtt-broker.toml --print-effective-config
+broker --config /etc/moonbit-mqtt-broker.toml --listen 127.0.0.1:8883
+```
+
 Try a QoS 1 subscriber and publisher in two terminals:
 
 ```bash
@@ -85,6 +143,11 @@ Available resource flags are `--max-connections`, `--max-packet-size`,
 `--max-inflight-per-session`, `--max-inflight-total`,
 `--max-pending-qos1-per-session`, and `--max-pending-qos1-total`. Persistence
 is opt-in through `--data-dir`; snapshot tuning flags are rejected without it.
+TLS is opt-in through `--tls-cert` plus `--tls-key`; the handshake timeout is
+rejected without both credentials.
+Persistent Sessions default to never expiring. Operational metrics publish
+under `$SYS/broker/#`; only explicit `$SYS` subscriptions receive them.
+`--log-format text|json` and `--log-level error|warn|info|debug` control logs.
 `--once`
 serves one complete connection and is intended for smoke tests.
 
@@ -121,7 +184,8 @@ one data directory to prove retained and offline QoS 1 restart recovery.
 
 See [persistence](docs/persistence.md), [testing](docs/testing.md),
 [compatibility](docs/compatibility.md), and
-[architecture](docs/architecture.md) for exact behavior and scope. Maintainers
+[architecture](docs/architecture.md) for exact behavior and scope. See also
+[security](docs/security.md) and [configuration](docs/configuration.md). Maintainers
 should also use the [release runbook](docs/release.md).
 
 ## License

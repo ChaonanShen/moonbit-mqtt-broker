@@ -2,7 +2,7 @@
 
 ## [0.1.0] - 2026-08-24
 
-- Released a single-node MQTT 3.1.1 plain-TCP Broker for Linux x86_64 Native
+- Released a single-node MQTT 3.1.1 TCP/TLS Broker for Linux x86_64 Native
   with QoS 0/1, wildcard routing, retained messages, QoS 0/1 Wills, Keep Alive,
   takeover, persistent Sessions, bounded offline QoS 1, and reconnect DUP.
 - Added optional checksummed Disk V1 latest-committed snapshot persistence with
@@ -14,10 +14,24 @@
   package verification.
 - Added side-effect-free `--help` and `--version`, three executable examples,
   fixed toolchain/provenance records, and a manual release runbook.
-- Known limitations: no MQTT 5, QoS 2, TLS, WebSocket, authentication/ACL,
+- Added SIGTERM/SIGINT graceful service shutdown that suppresses active Wills,
+  forces the latest debounce-window Snapshot, drains the writer, and is covered
+  by process-level retained/Session/offline-QoS-1 restart tests.
+- Added an optional TLS-only single listener with PEM/key startup validation,
+  private-key permission enforcement, bounded handshakes, MQTT.js/Mosquitto
+  interoperability, concurrent-client isolation, and persistent restart tests.
+- Added Argon2id authentication, allow-only ACLs, protected `$SYS` writes,
+  Principal-owned Client IDs, strict Snapshot V1-to-V2 migration, and
+  restart-safe owner enforcement.
+- Added configurable persistent-Session expiry with deterministic bounded
+  sweeps, reconnect reset, time-regression protection, and persisted deletion.
+- Added isolated `$SYS/broker` metrics, text/JSON structured logs with levels
+  and redaction, plus maintained TOML configuration with validation, redacted
+  effective output, and CLI-over-file precedence.
+- Known limitations: no MQTT 5, QoS 2, WebSocket,
   shared subscriptions, Bridge, plugins, clustering, external databases, WAL,
-  or zero-loss durability. Disk envelope/model version remains 1; existing
-  version-1 snapshots are decoded strictly and never reinterpreted in place.
+  or zero-loss durability. Writers emit Disk/Snapshot V2; existing V1 snapshots
+  are decoded strictly and migrated on the next commit.
 
 ## M4 - 2026-08-24
 

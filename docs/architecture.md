@@ -139,7 +139,8 @@ Per-Session and total limits bound Sessions, inflight, and pending state; a
 client-origin QoS 1 publication fails atomically when any recipient cannot take
 ownership.
 
-Snapshot V1 is a deterministic pure-data boundary. It contains persistent
+Snapshot V2 is a deterministic pure-data boundary. It contains Principal
+ownership and detach epoch in addition to persistent
 subscriptions, inflight order/IDs, pending FIFO order, next Packet ID, and
 retained messages. It excludes clean Sessions and all live connection data.
 Import validates the complete snapshot and every configured limit before the
@@ -157,7 +158,7 @@ RouterDriver (single BrokerState writer)
 ```
 
 `BrokerState.snapshot_revision` is process-local metadata. It advances only
-when the deterministic Snapshot V1 export changes; it is never encoded. The
+when the deterministic Snapshot V2 export changes; it is never encoded. The
 Router exports immutable snapshot data and submits without waiting for disk.
 The writer serializes saves, absorbs newer revisions while retrying, and never
 allows an older revision to overwrite a newer successful commit.
@@ -170,6 +171,50 @@ With `--data-dir`, command startup creates and canonicalizes the directory,
 acquires a process-lifetime exclusive lock, deletes stale temp data without
 promoting it, and strictly loads/imports the main snapshot. Only then does
 `server.run` create the listener. Missing main means first startup; corrupt,
-oversize, symlink, or non-regular main is fatal. Disk V1 is canonical binary
+oversize, symlink, or non-regular main is fatal. Disk V2 is canonical binary
 with magic/version/flags/length and IEEE CRC-32. See `persistence.md` for the
 format and operational contract.
+
+## M6–M9 transport, security, and expiry
+
+SIGTERM/SIGINT close the listener through the normal task group, classify
+connection termination as server shutdown, suppress active Wills, force the
+newest revision, and wait for the snapshot writer. TLS is implemented behind a
+plain/secure `ConnectionTransport` boundary; certificate/key validation and an
+in-memory handshake complete before bind, while each accepted handshake has an
+independent deadline.
+
+`SecurityPolicy` is immutable after startup. CONNECT authenticates to a
+`Principal`; BrokerRuntime applies read/write ACLs before Router mutation.
+ClientSession stores its owner and detach epoch, and Snapshot V2 persists both.
+The V1 decoder maps old Sessions to `legacy-anonymous`, while all writers emit
+V2. Cross-Principal Client ID operations are rejected before takeover or state
+deletion.
+
+Session expiry remains a pure Router event with an injected epoch. Candidates
+are detached persistent Sessions sorted by detach time and UTF-8 Client ID,
+bounded per tick. Time regression delays expiry and warns once; it never
+accelerates deletion. Removal reuses the normal Session cleanup path and
+advances the snapshot revision.
+
+## M10 observability
+
+`BrokerMetrics` is process-local and excluded from snapshots. Periodic
+`EmitSystemMetrics` performs a read-only subscription lookup and sends direct
+QoS 0, non-retained publications. It does not call the application publish
+path, allocate Packet IDs, consume retained capacity, or increment its own
+message counters. Runtime ACL checks still apply.
+
+All production runtime and persistence logs use one Logger abstraction. Text
+and JSON share event names and the fields timestamp, connection ID, Client ID,
+Principal, peer, reason, and snapshot revision. Call sites pass summaries and
+classified reasons only; credentials, keys, ACL contents, and payload bytes do
+not enter records.
+
+## M11 configuration
+
+The maintained `bobzhang/toml` parser validates a complete document. A typed
+adapter accepts only documented sections/keys and produces CLI-equivalent base
+arguments; the real CLI is applied afterward, yielding CLI > TOML > defaults
+without duplicating validation. Check/print modes stop before persistence open
+or listener construction.

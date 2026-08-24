@@ -21,10 +21,20 @@
 | `clean_session=false` | Supported with nonempty Client ID | Empty ID is `IdentifierRejected` |
 | Persistent Session | Supported across connections | Subscriptions, inflight and bounded offline QoS 1 survive reconnect |
 | Reconnect DUP replay | Supported | Existing inflight keeps original Packet ID and sets `DUP=1` |
-| Snapshot V1 data boundary | Supported | Deterministic pure import/export reused by Disk V1 |
+| Snapshot V2 data boundary | Supported | Principal and detach epoch; reads legacy V1 and rewrites V2 |
 | State across Broker restart | Supported when `--data-dir` is set | Debounced local snapshot to latest committed revision |
+| SIGTERM / SIGINT shutdown | Supported | Stops normally, suppresses active Wills, forces and drains latest Snapshot |
+| TLS listener | Supported, opt-in | TLS-only single listener; PEM startup validation and bounded handshakes |
+| MQTT.js/Mosquitto over TLS | Supported for 0.1.0 | QoS 0/1, retained, persistent Session and restart recovery |
+| Argon2id authentication | Supported, opt-in | Encoded hashes only; anonymous allowed by default |
+| Static allow-only ACL | Supported, opt-in | Read/write filters, partial SUBACK, `$SYS` client-write denial |
+| Principal-owned Client IDs | Supported | Cross-Principal takeover/clean/resume rejected across restart |
+| Persistent Session expiry | Supported, opt-in | Default never; active Sessions excluded; bounded deterministic sweeps |
+| `$SYS/broker` metrics | Supported | Explicit subscription/read ACL; QoS 0, non-retained, not persisted/counted |
+| Text/JSON structured logs | Supported | error/warn/info/debug with stable fields and secret/payload redaction |
+| TOML configuration | Supported | CLI > TOML > defaults; unknown/duplicate keys fatal; check/print modes |
 | QoS 2 / MQTT 5 | Unsupported | Explicitly rejected / out of scope |
-| TLS / WebSocket / auth / ACL | Unsupported | Out of first-release scope |
+| WebSocket | Unsupported | Out of current release scope |
 | Shared subscriptions / Bridge / plugins / cluster | Unsupported | Single-node Broker only |
 | External database / WAL / zero-loss durability | Unsupported | Latest-committed local snapshot only |
 
@@ -59,3 +69,12 @@ matching subscriptions. The MoonBit exact matrix therefore continues to
 require one QoS 1 delivery, while the differential matrix compares delivery
 count and payload for that reference-deviation case. Aedes is a behavioral
 reference only, and no Aedes source is linked into the Broker.
+
+TLS uses the pinned `moonbitlang/async@0.20.6` OpenSSL-backed Native transport.
+The listener is either plaintext or TLS, never both. mTLS, SNI routing,
+certificate reload, multiple listeners, and Windows TLS are not claimed.
+
+The supported `$SYS/broker` set includes version, uptime, connected clients,
+Sessions, subscriptions, retained, QoS 1 inflight/pending, received/sent/dropped
+messages, authentication failures, ACL denials, TLS handshake failures, and
+persistence state. A bare `#` subscription does not match `$SYS` per MQTT 3.1.1.
