@@ -7,8 +7,8 @@
 | TCP split/sticky packet framing | Supported | Capacity-aware reader plus bounded three-state decoder |
 | Equal packet/receive limits | Supported | 16/16 boundary covers complete CONNECT plus sticky PINGREQ |
 | Packet codec for QoS 0/1 families | Supported | Complete-frame adapter; Packet ID/DUP combinations gated |
-| MQTT.js 5.15.2 interoperability | Supported for M3 | QoS 0/1, retained, QoS 0/1 Will, takeover, persistent Session |
-| Mosquitto 2.0.18 interoperability | Supported for M3 | QoS 0/1 and persistent offline delivery |
+| MQTT.js 5.15.2 interoperability | Supported for M4 | QoS 0/1, retained/Will, persistent Session and multi-process restart |
+| Mosquitto 2.0.18 interoperability | Supported for M4 | QoS 0/1, retained and persistent offline restart delivery |
 | Topic validation and PUBLISH/SUBSCRIBE routing | Supported | `+`, `#`, `$SYS`, overlap merge, deterministic order |
 | Keep Alive and PING | Supported | 1.5× deadline; zero disables idle timeout |
 | Client ID takeover | Supported | Connection-generation stale event isolation |
@@ -20,8 +20,8 @@
 | `clean_session=false` | Supported with nonempty Client ID | Empty ID is `IdentifierRejected` |
 | Persistent Session | Supported across connections | Subscriptions, inflight and bounded offline QoS 1 survive reconnect |
 | Reconnect DUP replay | Supported | Existing inflight keeps original Packet ID and sets `DUP=1` |
-| Snapshot V1 data boundary | Supported | Deterministic pure import/export; no file I/O in M3 |
-| State across Broker restart | Not implemented | Planned for M4 |
+| Snapshot V1 data boundary | Supported | Deterministic pure import/export reused by Disk V1 |
+| State across Broker restart | Supported when `--data-dir` is set | Debounced local snapshot to latest committed revision |
 | QoS 2 / MQTT 5 | Unsupported | Explicitly rejected / out of scope |
 | TLS / WebSocket / auth / ACL | Unsupported | Out of first-release scope |
 
@@ -37,6 +37,14 @@ packets, partial prefixes followed by sticky suffixes, and multiple pipelined
 control packets are covered over real TCP. Declared oversize and malformed
 packets continue to close before unbounded buffering.
 
-M3 does not perform periodic retransmission on an otherwise connected network.
+The Broker does not perform periodic retransmission on an otherwise connected network.
 Unacknowledged outbound QoS 1 is retransmitted when a persistent Session is
-resumed. State does not yet survive Broker process restart; that is M4 scope.
+resumed. With persistence enabled, retained messages, persistent subscriptions,
+inflight/pending QoS 1, original Packet IDs, and the next Packet ID survive a
+Broker restart. Clean Sessions, QoS 0 offline messages, connections, Keep Alive
+timers, and Wills that have not yet fired are not persisted.
+
+This is not a fully durable or zero-loss Broker. Changes inside the debounce
+window may be lost on crash; recovery is to the most recent successfully
+committed snapshot. A corrupt main snapshot prevents startup rather than being
+ignored or replaced by stale temp data.

@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Gates: retained state survives broker restart
+# persistent subscriptions survive broker restart
+# offline qos1 fifo survives broker restart
+# inflight qos1 keeps packet id and dup after broker restart
+# next packet id survives broker restart
 set -euo pipefail
 
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

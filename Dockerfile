@@ -4,7 +4,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
-      build-essential ca-certificates curl git mosquitto-clients strace xz-utils \
+      build-essential ca-certificates curl git mosquitto-clients ripgrep strace xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 ARG NODE_VERSION="22.23.1"
