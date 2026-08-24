@@ -1,5 +1,7 @@
 # Security
 
+[中文](security.zh_CN.md) | **English**
+
 Authentication and authorization are optional static, single-node startup
 configuration. There is no online user or ACL mutation API.
 

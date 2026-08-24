@@ -1,5 +1,7 @@
 # moonbit-mqtt-broker
 
+[中文](README.zh_CN.md) | **English**
+
 [![CI](https://github.com/ChaonanShen/moonbit-mqtt-broker/actions/workflows/ci.yml/badge.svg)](https://github.com/ChaonanShen/moonbit-mqtt-broker/actions/workflows/ci.yml)
 
 A lightweight, single-node MQTT 3.1.1 broker implemented in MoonBit.

@@ -1,10 +1,10 @@
-# Configuration
+# 配置
 
-[中文](configuration.zh_CN.md) | **English**
+**中文** | [English](configuration.md)
 
-Precedence is CLI over TOML over built-in defaults. The Broker uses maintained
-`bobzhang/toml`; malformed TOML, duplicate keys, unknown sections/keys, and
-wrong types are fatal.
+配置优先级为：命令行参数 > TOML > 内置默认值。Broker 使用维护中的
+`bobzhang/toml`；TOML 格式错误、重复键、未知 section/键和类型错误均为
+致命错误。
 
 ```toml
 [server]
@@ -52,12 +52,15 @@ log_format = "json"
 log_level = "info"
 ```
 
-`--check-config` validates TOML and referenced TLS/security files without
-binding, locking, opening persistence, or creating the data directory.
-`--print-effective-config` also applies CLI overrides and prints canonical TOML
-with private-key/password-file values replaced by `<redacted>`.
+`--check-config` 会验证 TOML 及其引用的 TLS/安全文件，但不会监听端口、
+获取持久化锁、打开持久化文件或创建数据目录。
 
-## Graceful service shutdown
+`--print-effective-config` 还会应用命令行覆盖，并以规范 TOML 输出最终配置；
+私钥和密码文件的值会替换为 `<redacted>`。
+
+## 服务优雅退出
+
+systemd 示例：
 
 ```ini
 [Service]
@@ -67,9 +70,12 @@ TimeoutStopSec=30
 Restart=on-failure
 ```
 
+Docker 示例：
+
 ```bash
 docker stop --signal=SIGTERM --time=30 moonbit-mqtt-broker
 ```
 
-SIGTERM/SIGINT suppress active Wills and drain the newest snapshot. SIGKILL
-retains only the latest committed snapshot and is not a normal stop mechanism.
+SIGTERM/SIGINT 会抑制活动连接的 Will 并写入最新快照。SIGKILL 只能保留
+最近一次已提交的快照，不属于正常停止方式。
+

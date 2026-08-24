@@ -4,7 +4,7 @@ set -euo pipefail
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-for file in README.md docs/*.md; do
+for file in README*.md docs/*.md; do
   while IFS= read -r target; do
     target="${target#(}"
     target="${target%)}"

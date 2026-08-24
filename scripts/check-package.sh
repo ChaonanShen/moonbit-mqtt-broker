@@ -31,11 +31,17 @@ if grep -Eiq '(^|/)(\.git|_build|target|\.moon(cakes)?|node_modules|test-results
   echo 'release package contains a denied local/cache/credential/runtime path' >&2
   exit 1
 fi
-for required in moon.mod README.md LICENSE CHANGELOG.md THIRD_PARTY_NOTICES.md \
-  docs/getting-started.md examples/basic_pubsub.sh src/cmd/broker/main.mbt; do
+for required in moon.mod README.md README.zh_CN.md LICENSE CHANGELOG.md THIRD_PARTY_NOTICES.md \
+  docs/getting-started.md docs/getting-started.zh_CN.md \
+  docs/configuration.md docs/configuration.zh_CN.md \
+  docs/security.md docs/security.zh_CN.md \
+  docs/persistence.md docs/persistence.zh_CN.md \
+  docs/compatibility.md docs/compatibility.zh_CN.md \
+  docs/architecture.md docs/architecture.zh_CN.md \
+  examples/basic_pubsub.sh src/cmd/broker/main.mbt; do
   grep -qx "${required}" "${package_list}" || { echo "release package missing ${required}" >&2; exit 1; }
 done
-if grep -Ev '^(moon\.mod|README\.md|LICENSE|CHANGELOG\.md|THIRD_PARTY_NOTICES\.md|Dockerfile|\.gitignore|docs/|examples/|scripts/|src/|tests/|tools/)' "${package_list}" | grep -q .; then
+if grep -Ev '^(moon\.mod|README(\.zh_CN)?\.md|LICENSE|CHANGELOG\.md|THIRD_PARTY_NOTICES\.md|Dockerfile|\.gitignore|docs/|examples/|scripts/|src/|tests/|tools/)' "${package_list}" | grep -q .; then
   echo 'release package contains a path outside the top-level allowlist' >&2
   exit 1
 fi
