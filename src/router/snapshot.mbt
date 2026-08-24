@@ -20,6 +20,8 @@ pub(all) struct SnapshotInflightV1 {
 ///|
 pub(all) struct SnapshotSessionV1 {
   client_id : String
+  owner_principal : String
+  detached_at_ms : Int64
   next_packet_id : Int
   subscriptions : Array[SnapshotSubscriptionV1]
   inflight : Array[SnapshotInflightV1]
@@ -130,6 +132,8 @@ pub fn BrokerState::export_snapshot(self : BrokerState) -> BrokerSnapshotV1 {
     let pending = session.pending().map(snapshot_message)
     sessions.push({
       client_id: client_id.value(),
+      owner_principal: session.owner().storage_value(),
+      detached_at_ms: session.detached_at_ms().unwrap_or(0L),
       next_packet_id: session.next_packet_id(),
       subscriptions,
       inflight,
@@ -144,7 +148,7 @@ pub fn BrokerState::export_snapshot(self : BrokerState) -> BrokerSnapshotV1 {
       qos: snapshot_qos(message.qos),
     })
   }
-  { version: 1, sessions, retained }
+  { version: 2, sessions, retained }
 }
 
 ///|
@@ -152,7 +156,7 @@ pub fn BrokerState::from_snapshot(
   config : BrokerConfig,
   snapshot : BrokerSnapshotV1,
 ) -> Result[BrokerState, SnapshotError] {
-  if snapshot.version != 1 {
+  if snapshot.version != 1 && snapshot.version != 2 {
     return Err(UnsupportedVersion(snapshot.version))
   }
   if snapshot.sessions.length() > config.max_sessions() {
@@ -174,6 +178,17 @@ pub fn BrokerState::from_snapshot(
       return Err(DuplicateSession(saved.client_id))
     }
     seen_sessions.set(client_id, true)
+    let owner = if snapshot.version == 1 {
+      @security.Principal::LegacyAnonymous
+    } else {
+      match @security.Principal::from_storage_value(saved.owner_principal) {
+        Some(value) => value
+        None => return Err(InvalidState("invalid Session owner Principal"))
+      }
+    }
+    if saved.detached_at_ms < 0L {
+      return Err(InvalidState("negative Session detach timestamp"))
+    }
     if saved.inflight.length() > config.max_inflight_per_session() {
       return Err(LimitExceeded("per-session inflight limit exceeded"))
     }
@@ -218,6 +233,8 @@ pub fn BrokerState::from_snapshot(
         saved.next_packet_id,
         restored_inflight,
         restored_pending,
+        owner~,
+        detached_at_ms=saved.detached_at_ms,
       ) {
       Ok(value) => value
       Err(@session.SessionError::InvalidPacketId(value)) =>

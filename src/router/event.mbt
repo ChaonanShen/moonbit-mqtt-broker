@@ -24,6 +24,20 @@ pub(all) struct CreateSessionRequest {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct CreateOwnedSessionRequest {
+  client_id : @session.ClientId
+  mode : @session.SessionMode
+  attached : Bool
+  owner : @security.Principal
+} derive(Eq, Debug)
+
+///|
+pub(all) struct DetachSessionRequest {
+  client_id : @session.ClientId
+  detached_at_ms : Int64
+} derive(Eq, Debug)
+
+///|
 pub(all) struct PubackRequest {
   client_id : @session.ClientId
   packet_id : @session.SessionPacketId
@@ -33,9 +47,12 @@ pub(all) struct PubackRequest {
 pub(all) enum BrokerEvent {
   CreateSession(@session.ClientId)
   CreateSessionWith(CreateSessionRequest)
+  CreateOwnedSessionWith(CreateOwnedSessionRequest)
   RemoveSession(@session.ClientId)
   AttachSession(@session.ClientId)
   DetachSession(@session.ClientId)
+  DetachSessionAt(DetachSessionRequest)
+  ExpireSessions(Int64)
   Subscribe(SubscribeRequest)
   Unsubscribe(UnsubscribeRequest)
   Publish(PublishInput)

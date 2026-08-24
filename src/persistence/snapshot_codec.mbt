@@ -20,9 +20,19 @@ fn encode_payload(
 ) -> Bytes raise PersistenceError {
   let writer = BinaryWriter::new()
   writer.write_u32(snapshot.version, "snapshot-model-version")
+  if snapshot.version != 1 && snapshot.version != 2 {
+    raise InvalidValue(field="snapshot-model-version", offset=0)
+  }
   writer.write_u32(snapshot.sessions.length(), "session-count")
   for session in snapshot.sessions {
     writer.write_string(session.client_id)
+    if snapshot.version == 2 {
+      writer.write_string(session.owner_principal)
+      if session.detached_at_ms < 0L {
+        raise InvalidValue(field="detached-at-ms", offset=writer.bytes.length())
+      }
+      writer.write_string(session.detached_at_ms.to_string())
+    }
     if session.next_packet_id < 1 || session.next_packet_id > 65535 {
       raise InvalidValue(field="next-packet-id", offset=writer.bytes.length())
     }
@@ -81,7 +91,7 @@ pub fn encode_snapshot(
     }
     let writer = BinaryWriter::new()
     writer.write_raw(disk_magic)
-    writer.write_u16(1, "envelope-version")
+    writer.write_u16(snapshot.version, "envelope-version")
     writer.write_u16(0, "flags")
     writer.write_u64_length(payload.length())
     writer.write_u32_bits(crc32(payload))
@@ -129,9 +139,13 @@ fn decode_message(
 fn decode_payload(
   payload : Bytes,
   limits : SnapshotDecodeLimits,
+  envelope_version : Int,
 ) -> @router.BrokerSnapshotV1 raise PersistenceError {
   let reader = BinaryReader::new(payload)
   let version = reader.read_u32("snapshot-model-version")
+  if version != envelope_version || (version != 1 && version != 2) {
+    raise InvalidValue(field="snapshot-model-version", offset=0)
+  }
   let broker = limits.broker_config()
   let session_count = checked_count(reader, "sessions", broker.max_sessions())
   let sessions : Array[@router.SnapshotSessionV1] = []
@@ -140,6 +154,24 @@ fn decode_payload(
   let mut pending_total = 0
   for _ in 0..<session_count {
     let client_id = reader.read_string()
+    let owner_principal = if version == 2 {
+      reader.read_string()
+    } else {
+      "legacy-anonymous"
+    }
+    let detached_at_ms = if version == 2 {
+      let offset = reader.position()
+      let encoded = reader.read_string()
+      let value = @string.parse_int64(encoded) catch {
+        _ => raise InvalidValue(field="detached-at-ms", offset~)
+      }
+      if value < 0L {
+        raise InvalidValue(field="detached-at-ms", offset~)
+      }
+      value
+    } else {
+      0L
+    }
     let next_offset = reader.position()
     let next_packet_id = reader.read_u16()
     if next_packet_id == 0 {
@@ -213,6 +245,8 @@ fn decode_payload(
     }
     sessions.push({
       client_id,
+      owner_principal,
+      detached_at_ms,
       next_packet_id,
       subscriptions,
       inflight,
@@ -259,7 +293,7 @@ pub fn decode_snapshot(
       raise InvalidMagic
     }
     let envelope_version = reader.read_u16()
-    if envelope_version != 1 {
+    if envelope_version != 1 && envelope_version != 2 {
       raise UnsupportedEnvelopeVersion(envelope_version)
     }
     let flags = reader.read_u16()
@@ -279,7 +313,7 @@ pub fn decode_snapshot(
     if actual_crc != expected_crc {
       raise ChecksumMismatch(expected=expected_crc, actual=actual_crc)
     }
-    Ok(decode_payload(payload, limits))
+    Ok(decode_payload(payload, limits, envelope_version))
   } catch {
     error => Err(error)
   }

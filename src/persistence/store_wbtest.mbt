@@ -14,16 +14,18 @@ fn persistence_broker_config() -> @router.BrokerConfig {
 
 ///|
 fn empty_snapshot() -> @router.BrokerSnapshotV1 {
-  { version: 1, sessions: [], retained: [] }
+  { version: 2, sessions: [], retained: [] }
 }
 
 ///|
 fn representative_snapshot() -> @router.BrokerSnapshotV1 {
   {
-    version: 1,
+    version: 2,
     sessions: [
       {
         client_id: "store-client",
+        owner_principal: "user:store-owner",
+        detached_at_ms: 0L,
         next_packet_id: 43,
         subscriptions: [{ filter: "state/#", qos: 1 }],
         inflight: [
@@ -262,6 +264,8 @@ async test "snapshot import rejects duplicate domain keys atomically" {
   with_store_dir("duplicates", path => {
     let duplicate : @router.SnapshotSessionV1 = {
       client_id: "same",
+      owner_principal: "legacy-anonymous",
+      detached_at_ms: 0L,
       next_packet_id: 1,
       subscriptions: [],
       inflight: [],
@@ -270,7 +274,7 @@ async test "snapshot import rejects duplicate domain keys atomically" {
     let store = SnapshotStore::open(store_config(path)).unwrap()
     ignore(
       store
-      .save({ version: 1, sessions: [duplicate, duplicate], retained: [] })
+      .save({ version: 2, sessions: [duplicate, duplicate], retained: [] })
       .unwrap(),
     )
     assert_true(

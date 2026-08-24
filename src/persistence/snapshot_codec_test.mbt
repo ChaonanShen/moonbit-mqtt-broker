@@ -12,16 +12,18 @@ fn codec_limits(
 
 ///|
 fn empty_snapshot() -> @router.BrokerSnapshotV1 {
-  { version: 1, sessions: [], retained: [] }
+  { version: 2, sessions: [], retained: [] }
 }
 
 ///|
 fn representative_snapshot() -> @router.BrokerSnapshotV1 {
   {
-    version: 1,
+    version: 2,
     sessions: [
       {
         client_id: "client-月",
+        owner_principal: "user:codec-owner",
+        detached_at_ms: 0L,
         next_packet_id: 43,
         subscriptions: [
           { filter: "telemetry/+", qos: 0 },
@@ -82,13 +84,45 @@ test "snapshot codec is deterministic and checksum protected" {
 
 ///|
 test "disk v1 empty snapshot golden bytes are stable" {
+  let legacy : @router.BrokerSnapshotV1 = {
+    version: 1,
+    sessions: [],
+    retained: [],
+  }
   let expected = Bytes::from_array([
     0x4d, 0x42, 0x4d, 0x51, 0x54, 0x54, 0x30, 0x31, 0x00, 0x01, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0c, 0x6c, 0xae, 0xd2, 0x2c, 0x00, 0x00,
     0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   ])
-  assert_eq(encode_snapshot(empty_snapshot()), Ok(expected))
-  assert_eq(decode_snapshot(expected, codec_limits()), Ok(empty_snapshot()))
+  assert_eq(encode_snapshot(legacy), Ok(expected))
+  assert_eq(decode_snapshot(expected, codec_limits()), Ok(legacy))
+}
+
+///|
+test "Disk V1 Session decodes as LegacyAnonymous and rewrites as V2" {
+  let current = representative_snapshot()
+  let legacy_session = {
+    ..current.sessions[0],
+    owner_principal: "legacy-anonymous",
+    detached_at_ms: 0L,
+  }
+  let legacy : @router.BrokerSnapshotV1 = {
+    version: 1,
+    sessions: [legacy_session],
+    retained: current.retained,
+  }
+  let decoded = decode_snapshot(
+    encode_snapshot(legacy).unwrap(),
+    codec_limits(),
+  ).unwrap()
+  assert_eq(decoded, legacy)
+  let restored = @router.BrokerState::from_snapshot(
+    persistence_broker_config(),
+    decoded,
+  ).unwrap()
+  let rewritten = restored.export_snapshot()
+  assert_eq(rewritten.version, 2)
+  assert_eq(rewritten.sessions[0].owner_principal, "legacy-anonymous")
 }
 
 ///|
@@ -118,8 +152,8 @@ test "snapshot envelope rejects every structural corruption class" {
     is Err(InvalidMagic),
   )
   assert_true(
-    decode_snapshot(replace_byte(encoded, 9, 2), codec_limits())
-    is Err(UnsupportedEnvelopeVersion(2)),
+    decode_snapshot(replace_byte(encoded, 9, 3), codec_limits())
+    is Err(UnsupportedEnvelopeVersion(3)),
   )
   assert_true(
     decode_snapshot(replace_byte(encoded, 11, 1), codec_limits())
@@ -154,6 +188,8 @@ test "snapshot decoder rejects invalid utf8 bool qos and packet ids" {
     sessions: [
       {
         client_id: "c",
+        owner_principal: "legacy-anonymous",
+        detached_at_ms: 0L,
         next_packet_id: 0,
         subscriptions: [],
         inflight: [],
@@ -203,12 +239,15 @@ test "exact snapshot size limit is accepted and plus one rejected" {
 }
 
 ///|
-test "snapshot model version remains an import-layer decision" {
-  let encoded = encode_snapshot({ ..empty_snapshot(), version: 2 }).unwrap()
+test "snapshot model and envelope versions must agree" {
+  let encoded = encode_snapshot(empty_snapshot()).unwrap()
   let decoded = decode_snapshot(encoded, codec_limits()).unwrap()
   assert_eq(decoded.version, 2)
   assert_true(
     @router.BrokerState::from_snapshot(persistence_broker_config(), decoded)
-    is Err(@router.SnapshotError::UnsupportedVersion(2)),
+    is Ok(_),
+  )
+  assert_true(
+    encode_snapshot({ ..empty_snapshot(), version: 3 }) is Err(InvalidValue(..)),
   )
 }

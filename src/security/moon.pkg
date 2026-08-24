@@ -1,0 +1,8 @@
+import {
+  "ChaonanShen/moonbit-mqtt-broker/topic",
+}
+
+options(
+  "native-stub": [ "password_verify.c" ],
+  targets: { "password.mbt": [ "native" ] },
+)

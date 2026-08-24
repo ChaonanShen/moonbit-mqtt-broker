@@ -7,6 +7,8 @@ pub struct BrokerState {
   priv mut inflight_total : Int
   priv mut pending_qos1_total : Int
   priv mut snapshot_revision : Int64
+  priv mut last_expiration_check_ms : Int64?
+  priv mut time_regression_reported : Bool
 }
 
 ///|
@@ -33,6 +35,12 @@ priv struct PlannedDelivery {
 }
 
 ///|
+priv struct ExpirationCandidate {
+  client_id : @session.ClientId
+  detached_at_ms : Int64
+}
+
+///|
 fn copy_router_bytes(payload : Bytes) -> Bytes {
   Bytes::from_array(payload.to_array())
 }
@@ -47,6 +55,8 @@ pub fn BrokerState::new(config : BrokerConfig) -> BrokerState {
     inflight_total: 0,
     pending_qos1_total: 0,
     snapshot_revision: 0L,
+    last_expiration_check_ms: None,
+    time_regression_reported: false,
   }
 }
 
@@ -126,6 +136,25 @@ pub fn BrokerState::session_attached(
 }
 
 ///|
+pub fn BrokerState::session_owner(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> @security.Principal? {
+  self.sessions.get(client_id).map(session => session.owner())
+}
+
+///|
+pub fn BrokerState::session_detached_at_ms(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Int64? {
+  match self.sessions.get(client_id) {
+    Some(session) => session.detached_at_ms()
+    None => None
+  }
+}
+
+///|
 pub fn BrokerState::session_inflight_count(
   self : BrokerState,
   client_id : @session.ClientId,
@@ -159,6 +188,15 @@ pub fn BrokerState::retained_message(
 }
 
 ///|
+/// Read-only subscriber lookup for internal QoS 0 system publications.
+pub fn BrokerState::system_subscribers(
+  self : BrokerState,
+  topic : @topic.TopicName,
+) -> Array[@session.ClientId] {
+  self.subscriptions.matches(topic).map(item => item.client_id)
+}
+
+///|
 fn BrokerState::session_limits(
   self : BrokerState,
   max_inflight? : Int,
@@ -173,7 +211,7 @@ fn BrokerState::session_limits(
 ///|
 fn BrokerState::create_session(
   self : BrokerState,
-  request : CreateSessionRequest,
+  request : CreateOwnedSessionRequest,
 ) -> Result[Array[BrokerAction], RouterError] {
   if self.sessions.get(request.client_id) is Some(_) {
     return Err(SessionAlreadyExists(request.client_id))
@@ -187,12 +225,93 @@ fn BrokerState::create_session(
       request.client_id,
       mode=request.mode,
       attached=request.attached,
+      owner=request.owner,
     ),
   )
   if request.mode == @session.SessionMode::Persistent {
     self.mark_snapshot_dirty()
   }
   Ok([SessionCreated(request.client_id)])
+}
+
+///|
+fn BrokerState::remove_session(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Result[Array[BrokerAction], RouterError] {
+  let session = match self.sessions.get(client_id) {
+    None => return Err(SessionNotFound(client_id))
+    Some(value) => value
+  }
+  self.inflight_total = self.inflight_total - session.inflight_count()
+  self.pending_qos1_total = self.pending_qos1_total - session.pending_count()
+  ignore(self.subscriptions.remove_all(client_id))
+  self.sessions.remove(client_id)
+  if session.mode() == @session.SessionMode::Persistent {
+    self.mark_snapshot_dirty()
+  }
+  Ok([SessionRemoved(client_id)])
+}
+
+///|
+fn BrokerState::expire_sessions(
+  self : BrokerState,
+  now_ms : Int64,
+) -> Result[Array[BrokerAction], RouterError] {
+  let expiry_ms = match self.config.persistent_session_expiry_ms() {
+    None => return Ok([])
+    Some(value) => value
+  }
+  match self.last_expiration_check_ms {
+    Some(previous) if now_ms < previous => {
+      if self.time_regression_reported {
+        return Ok([])
+      }
+      self.time_regression_reported = true
+      return Ok([TimeRegressionDetected(previous, now_ms)])
+    }
+    _ => ()
+  }
+  self.last_expiration_check_ms = Some(now_ms)
+  self.time_regression_reported = false
+  let candidates : Array[ExpirationCandidate] = []
+  for client_id, session in self.sessions {
+    if session.mode() != @session.SessionMode::Persistent ||
+      session.is_attached() {
+      continue
+    }
+    let detached_at_ms = session.detached_at_ms().unwrap_or(0L)
+    if detached_at_ms == 0L {
+      // V1 and crash-time active snapshots have no trustworthy detach epoch.
+      // Start their full expiry window on first observation after recovery.
+      session.detach(detached_at_ms=now_ms)
+      self.mark_snapshot_dirty()
+    } else if now_ms >= detached_at_ms && now_ms - detached_at_ms >= expiry_ms {
+      candidates.push({ client_id, detached_at_ms })
+    }
+  }
+  candidates.sort_by(fn(left, right) {
+    if left.detached_at_ms < right.detached_at_ms {
+      -1
+    } else if left.detached_at_ms > right.detached_at_ms {
+      1
+    } else {
+      compare_utf8_for_sort(left.client_id.value(), right.client_id.value())
+    }
+  })
+  let actions : Array[BrokerAction] = []
+  let limit = self.config.max_session_expirations_per_tick()
+  for index in 0..<@cmp.minimum(limit, candidates.length()) {
+    let client_id = candidates[index].client_id
+    match self.remove_session(client_id) {
+      Ok(removed) => {
+        actions.append(removed)
+        actions.push(SessionExpired(client_id))
+      }
+      Err(error) => return Err(error)
+    }
+  }
+  Ok(actions)
 }
 
 ///|
@@ -489,23 +608,21 @@ pub fn BrokerState::apply(
 ) -> Result[Array[BrokerAction], RouterError] {
   match event {
     CreateSession(client_id) =>
-      self.create_session({ client_id, mode: Clean, attached: true })
-    CreateSessionWith(request) => self.create_session(request)
-    RemoveSession(client_id) => {
-      let session = match self.sessions.get(client_id) {
-        None => return Err(SessionNotFound(client_id))
-        Some(value) => value
-      }
-      self.inflight_total = self.inflight_total - session.inflight_count()
-      self.pending_qos1_total = self.pending_qos1_total -
-        session.pending_count()
-      ignore(self.subscriptions.remove_all(client_id))
-      self.sessions.remove(client_id)
-      if session.mode() == @session.SessionMode::Persistent {
-        self.mark_snapshot_dirty()
-      }
-      Ok([SessionRemoved(client_id)])
-    }
+      self.create_session({
+        client_id,
+        mode: Clean,
+        attached: true,
+        owner: @security.Principal::Anonymous,
+      })
+    CreateSessionWith(request) =>
+      self.create_session({
+        client_id: request.client_id,
+        mode: request.mode,
+        attached: request.attached,
+        owner: @security.Principal::Anonymous,
+      })
+    CreateOwnedSessionWith(request) => self.create_session(request)
+    RemoveSession(client_id) => self.remove_session(client_id)
     AttachSession(client_id) => self.attach_session(client_id)
     DetachSession(client_id) => {
       let session = match self.sessions.get(client_id) {
@@ -518,6 +635,21 @@ pub fn BrokerState::apply(
       session.detach()
       Ok([SessionDetached(client_id)])
     }
+    DetachSessionAt(request) => {
+      let session = match self.sessions.get(request.client_id) {
+        None => return Err(SessionNotFound(request.client_id))
+        Some(value) => value
+      }
+      if !session.is_attached() || request.detached_at_ms < 0L {
+        return Err(InvalidSessionState(request.client_id))
+      }
+      session.detach(detached_at_ms=request.detached_at_ms)
+      if session.mode() == @session.SessionMode::Persistent {
+        self.mark_snapshot_dirty()
+      }
+      Ok([SessionDetached(request.client_id)])
+    }
+    ExpireSessions(now_ms) => self.expire_sessions(now_ms)
     Subscribe(request) => {
       let client_id = request.client_id
       let entries = request.entries

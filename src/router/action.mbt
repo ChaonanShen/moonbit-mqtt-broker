@@ -28,6 +28,8 @@ pub(all) enum BrokerAction {
   SessionRemoved(@session.ClientId)
   SessionAttached(@session.ClientId)
   SessionDetached(@session.ClientId)
+  SessionExpired(@session.ClientId)
+  TimeRegressionDetected(Int64, Int64)
   SubscriptionsApplied(SubscriptionsAppliedAction)
   UnsubscriptionsApplied(UnsubscriptionsAppliedAction)
   DeliveryAcknowledged(DeliveryAcknowledgedAction)

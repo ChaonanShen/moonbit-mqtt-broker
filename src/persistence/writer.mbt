@@ -49,6 +49,7 @@ pub struct SnapshotWriter {
   mut committed_revision : Int64
   mut degraded : Bool
   mut attempts : Int
+  logger : @observability.Logger
 }
 
 ///|
@@ -56,6 +57,7 @@ pub fn SnapshotWriter::new(
   store : SnapshotStore,
   sink : SnapshotSink,
   retry_ms : Int64,
+  logger? : @observability.Logger = @observability.Logger::silent(),
 ) -> Result[SnapshotWriter, PersistenceError] {
   if retry_ms < 1L || retry_ms > 2147483647L {
     return Err(
@@ -69,6 +71,7 @@ pub fn SnapshotWriter::new(
     committed_revision: -1L,
     degraded: false,
     attempts: 0,
+    logger,
   })
 }
 
@@ -144,27 +147,46 @@ async fn SnapshotWriter::commit(
       self.degraded = false
       self.committed_revision = request.revision
       if recovered {
-        println(
-          "snapshot persistence recovered revision=" +
-          request.revision.to_string(),
+        self.logger.log(
+          @observability.LogRecord::new(
+            @async.now(),
+            @observability.Info,
+            "persistence_recovered",
+            message="snapshot persistence recovered revision=" +
+              request.revision.to_string(),
+            snapshot_revision=request.revision.to_string(),
+          ),
         )
       }
-      println(
-        "snapshot committed revision=" +
-        request.revision.to_string() +
-        " bytes=" +
-        bytes.to_string(),
+      self.logger.log(
+        @observability.LogRecord::new(
+          @async.now(),
+          @observability.Info,
+          "snapshot_committed",
+          message="snapshot committed revision=" +
+            request.revision.to_string() +
+            " bytes=" +
+            bytes.to_string(),
+          snapshot_revision=request.revision.to_string(),
+        ),
       )
       true
     }
     Err(error) => {
       self.degraded = true
-      println(
-        "snapshot failed revision=" +
-        request.revision.to_string() +
-        " category=" +
-        error.category() +
-        " persistence=degraded",
+      self.logger.log(
+        @observability.LogRecord::new(
+          @async.now(),
+          @observability.Error,
+          "snapshot_failed",
+          message="snapshot failed revision=" +
+            request.revision.to_string() +
+            " category=" +
+            error.category() +
+            " persistence=degraded",
+          reason=error.category(),
+          snapshot_revision=request.revision.to_string(),
+        ),
       )
       false
     }

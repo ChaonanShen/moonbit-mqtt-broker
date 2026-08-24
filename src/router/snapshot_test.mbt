@@ -80,9 +80,11 @@ test "snapshot roundtrip preserves persistent qos1 state" {
     ),
   )
   let exported = state.export_snapshot()
-  assert_eq(exported.version, 1)
+  assert_eq(exported.version, 2)
   assert_eq(exported.sessions.length(), 1)
   assert_eq(exported.sessions[0].client_id, "persistent")
+  assert_eq(exported.sessions[0].owner_principal, "anonymous")
+  assert_eq(exported.sessions[0].detached_at_ms, 0L)
   assert_eq(exported.sessions[0].inflight[0].message.payload, b"inflight")
   assert_eq(exported.sessions[0].pending[0].payload, b"pending")
   assert_eq(exported.retained.length(), 1)
@@ -104,11 +106,13 @@ test "snapshot import rejects corruption without partial state" {
   let config = snapshot_config()
   let empty : BrokerSnapshotV1 = { version: 1, sessions: [], retained: [] }
   assert_true(
-    BrokerState::from_snapshot(config, { ..empty, version: 2 })
-    is Err(SnapshotError::UnsupportedVersion(2)),
+    BrokerState::from_snapshot(config, { ..empty, version: 3 })
+    is Err(SnapshotError::UnsupportedVersion(3)),
   )
   let duplicate_session : SnapshotSessionV1 = {
     client_id: "duplicate",
+    owner_principal: "legacy-anonymous",
+    detached_at_ms: 0L,
     next_packet_id: 1,
     subscriptions: [],
     inflight: [],
@@ -124,6 +128,8 @@ test "snapshot import rejects corruption without partial state" {
   )
   let duplicate_id : SnapshotSessionV1 = {
     client_id: "ids",
+    owner_principal: "legacy-anonymous",
+    detached_at_ms: 0L,
     next_packet_id: 2,
     subscriptions: [],
     inflight: [
@@ -158,6 +164,56 @@ test "snapshot import rejects corruption without partial state" {
   assert_eq(
     BrokerState::from_snapshot(config, empty).unwrap().session_count(),
     0,
+  )
+}
+
+///|
+test "Snapshot V2 preserves owner and detach time while V1 migrates to legacy anonymous" {
+  let config = snapshot_config()
+  let state = BrokerState::new(config)
+  let client = snapshot_client("owned")
+  ignore(
+    state.apply(
+      CreateOwnedSessionWith({
+        client_id: client,
+        mode: @session.SessionMode::Persistent,
+        attached: true,
+        owner: @security.Principal::User("alice"),
+      }),
+    ),
+  )
+  ignore(
+    state.apply(DetachSessionAt({ client_id: client, detached_at_ms: 123456L })),
+  )
+  let snapshot = state.export_snapshot()
+  assert_eq(snapshot.version, 2)
+  assert_eq(snapshot.sessions[0].owner_principal, "user:alice")
+  assert_eq(snapshot.sessions[0].detached_at_ms, 123456L)
+  let restored = BrokerState::from_snapshot(config, snapshot).unwrap()
+  assert_eq(
+    restored.session_owner(client),
+    Some(@security.Principal::User("alice")),
+  )
+  assert_eq(restored.session_detached_at_ms(client), Some(123456L))
+
+  let legacy = BrokerState::from_snapshot(config, {
+    version: 1,
+    sessions: [
+      {
+        client_id: "legacy",
+        owner_principal: "ignored-in-v1",
+        detached_at_ms: 0L,
+        next_packet_id: 1,
+        subscriptions: [],
+        inflight: [],
+        pending: [],
+      },
+    ],
+    retained: [],
+  }).unwrap()
+  assert_eq(
+    legacy.session_owner(snapshot_client("legacy")),
+    Some(@security.Principal::LegacyAnonymous),
   )
 }
 
