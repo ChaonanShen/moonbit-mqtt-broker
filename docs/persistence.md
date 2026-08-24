@@ -17,7 +17,7 @@ Snapshot tuning options without `--data-dir` are configuration errors.
 
 The canonicalized data directory is mode `0700`. It contains only fixed names:
 
-- `broker.snapshot`: committed Disk V1, mode `0600`;
+- `broker.snapshot`: committed Disk V2 (or readable legacy V1), mode `0600`;
 - `broker.snapshot.tmp`: current uncommitted write, mode `0600`;
 - `broker.snapshot.lock`: exclusive process lock, mode `0600`.
 
@@ -45,7 +45,7 @@ state. A later success logs recovery and the committed revision. Example log
 forms are:
 
 ```text
-snapshot restored version=1 sessions=2 retained=1 bytes=412 data_dir=/data
+snapshot restored version=1-or-2 sessions=2 retained=1 bytes=412 data_dir=/data
 snapshot failed revision=8 category=filesystem persistence=degraded
 snapshot persistence recovered revision=11
 snapshot committed revision=11 bytes=487
@@ -53,23 +53,38 @@ snapshot committed revision=11 bytes=487
 
 The durability boundary is the latest successful `snapshot committed` line.
 This design has no WAL and does not synchronize before PUBACK; debounce-window
-changes may be lost after `SIGKILL`, signal termination, host failure, or power
-loss. Natural `--once` completion drains a final submitted revision. General
-signal shutdown carries only the latest-committed guarantee.
+changes may be lost after `SIGKILL`, host failure, or power loss. Natural
+`--once` completion drains a final submitted revision. SIGTERM and SIGINT are
+converted into a normal service-stop request: the listener and connection tasks
+stop, active Wills are suppressed, and the newest in-memory revision is forced
+and drained before the process exits. The M6 process gate verifies this with a
+60-second debounce, so the signal path must create the first snapshot.
 
 ## Persisted state and recovery operations
 
-Disk V1 contains retained messages and `clean_session=false` Sessions: client
+Disk V2 contains retained messages and `clean_session=false` Sessions: client
 ID, subscription QoS, outbound inflight with original Packet IDs, offline
-pending QoS 1 FIFO, and next Packet ID. It excludes clean Sessions, QoS 0
+pending QoS 1 FIFO, next Packet ID, owning Principal, and detach epoch. It
+excludes clean Sessions, QoS 0
 offline messages, TCP connections, attached status, Keep Alive deadlines, and
 unfired connection Wills. A Will already routed into retained/inflight/pending
 state is included normally.
 
-Disk V1 begins with `MBMQTT01`, envelope version 1, zero flags, unsigned
+Disk V2 begins with `MBMQTT01`, envelope version 2, zero flags, unsigned
 big-endian payload length, and IEEE CRC-32. Its canonical payload is the public
-Snapshot V1 model. Existing version-1 bytes will not be reinterpreted; future
-format changes require a new version and migration tests.
+Snapshot V2 model.
+
+### V1 migration and rollback
+
+Version 1 is decoded strictly and never reinterpreted in place. Its Sessions
+receive the `legacy-anonymous` owner and an unknown detach epoch; their full
+configured expiry window starts at first post-recovery observation. The next
+state-changing or shutdown commit writes version 2. Golden V1 fixtures remain
+in the test suite.
+
+Before upgrading, stop the old Broker and copy the complete data directory.
+Once V2 has been committed, a V1-only binary cannot read it. Rollback therefore
+requires restoring that stopped V1 backup; there is no in-place downgrade.
 
 On disk-full, permission, or runtime I/O errors, the Broker continues serving
 and retries while explicitly degraded. Lock conflict and startup recovery errors

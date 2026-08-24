@@ -11,16 +11,20 @@ Run the reversible release gates from a clean checkout:
 
 ```bash
 docker build --platform linux/amd64 -t moonbit-mqtt-broker-dev .
-scripts/m5-verify-docker.sh
+scripts/m11-verify-docker.sh
 scripts/check-package.sh
 ```
 
-The final candidate requires three successful M5 verifier runs against the
+The final candidate requires three successful M11 verifier runs against the
 same commit and image, one `M5_SOAK=1` extended run, and a clean
 `scripts/m5-release-check.sh`. The check script is read-only: it validates the
 commit, origin, version, tag state, verifier record, archive metadata, and an
 optional read-only credential mount. It never invokes publish, push, or a
 release API.
+
+`scripts/m11-release-gate.sh` collects the three passes, extended soak, twenty
+SIGTERM cycles, 100-client TLS gate, secret scan, and clean-room package
+evidence. It performs no publish, push, tag, or release API action.
 
 Publishing is deliberately manual. Confirm the release commit, namespace
 `ChaonanShen/moonbit-mqtt-broker`, version `0.1.0`, package SHA-256, image ID,
@@ -31,7 +35,7 @@ pushing the annotated `v0.1.0` tag and creating the GitHub release. Never force
 a tag, overwrite a published version, copy credentials into the repository, or
 retry an uncertain publish before a read-only registry query.
 
-Disk V1 is checksummed latest-committed snapshot durability, not a WAL or
+Disk V2 (with strict V1 migration) is checksummed latest-committed durability, not a WAL or
 zero-loss boundary. A failed pre-publish gate stops the release. If publishing
 succeeds but registry consumption fails, do not claim completion or mutate the
 published artifact; diagnose and, if replacement is prohibited, prepare a new
