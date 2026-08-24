@@ -1,21 +1,23 @@
 # Third-party notices
 
 This project is Apache License 2.0. The following software, standards, and
-reference projects are used or consulted through M4.
+reference projects are used or consulted for version 0.1.0.
 
 | Item | Version / baseline | License | Use |
 | --- | --- | --- | --- |
-| MoonBit toolchain and core | `0.10.8+8606a5800` | MoonBit distribution terms / Apache-2.0 components | Compiler, build and core library |
-| `moonbitlang/async` | `0.20.6` | Apache-2.0 | Native TCP, tasks, queues, timers, cancellation |
-| `zbhzs1/moonbit-mqtt` | `0.1.0` | Apache-2.0 | Runtime codec backend behind a project adapter |
-| `mqtt-packet` | `9.0.2` | MIT | Development-only deterministic wire oracle |
-| MQTT.js | `5.15.2` | MIT | Development-only QoS 0/1 and persistent-Session interoperability |
-| Eclipse Mosquitto clients | Ubuntu package `2.0.18` | EPL-2.0 OR BSD-3-Clause | Development-only QoS 0/1 interoperability |
-| Aedes | `v1.1.1`, `eac44f9…` | MIT | Fixed architectural/behavioral reference; no source copied |
-| OASIS MQTT 3.1.1 | Final specification + errata | OASIS specification notices | Normative protocol behavior |
-| Ubuntu container image | `24.04`, digest recorded in toolchain doc | Ubuntu image terms; bundled packages retain their licenses | Reproducible build/test environment |
+| MoonBit toolchain and core | `0.10.8+8606a5800` | MoonBit distribution terms / Apache-2.0 components | Compiler, build and core library; <https://github.com/moonbitlang/core> |
+| `moonbitlang/async` | `0.20.6` | Apache-2.0 | Runtime TCP/tasks/queues/timers; <https://mooncakes.io/docs/moonbitlang/async> |
+| `zbhzs1/moonbit-mqtt` | `0.1.0` | Apache-2.0 | Runtime codec adapter backend; <https://mooncakes.io/docs/zbhzs1/moonbit-mqtt> |
+| `mqtt-packet` | `9.0.2` | MIT | Test-only wire oracle; <https://github.com/mqttjs/mqtt-packet> |
+| MQTT.js | `5.15.2` | MIT | Test-only interoperability/stability client; <https://github.com/mqttjs/MQTT.js> |
+| Eclipse Mosquitto Broker/clients | Ubuntu `2.0.18-1build3` | EPL-2.0 OR BSD-3-Clause | Test-only clients/reference Broker; <https://mosquitto.org/> |
+| Aedes | `v1.1.1`, `eac44f9920b49dd20eb0e83cc9d5c4b9038eb963` | MIT | Test-only behavioral reference; no source copied; <https://github.com/moscajs/aedes> |
+| OASIS MQTT 3.1.1 | Final 2014 + errata 01 (2015) | OASIS specification notices | Normative behavior; <https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html> |
+| Ubuntu container image | `24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517` | Ubuntu image terms; packages retain their licenses | Acceptance environment; <https://hub.docker.com/_/ubuntu> |
 
-Dependency license texts are distributed by their upstream packages. No Aedes
-or mqtt-packet implementation source is copied into this repository. Generated
-fixtures contain protocol wire data and case metadata produced through the
-documented public APIs.
+Runtime packages are resolved by Moon. npm and Mosquitto dependencies are
+development/reference-only and are not linked into the Broker executable.
+Dependency license texts remain distributed by their upstream packages. No
+Aedes or mqtt-packet implementation source is copied into this repository.
+Generated fixtures contain protocol wire data and case metadata produced
+through documented public APIs.
