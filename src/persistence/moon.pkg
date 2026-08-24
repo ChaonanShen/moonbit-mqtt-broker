@@ -1,9 +1,11 @@
 import {
   "ChaonanShen/moonbit-mqtt-broker/router",
+  "ChaonanShen/moonbit-mqtt-broker/observability",
   "moonbitlang/async",
   "moonbitlang/async/fs",
   "moonbitlang/async/io",
   "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/string",
 }
 
 import {

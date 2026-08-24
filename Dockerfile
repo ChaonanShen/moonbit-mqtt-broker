@@ -4,7 +4,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
-      build-essential ca-certificates curl git mosquitto mosquitto-clients ripgrep strace unzip xz-utils \
+      argon2 build-essential ca-certificates curl git libargon2-1 mosquitto mosquitto-clients ripgrep strace unzip xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
 ARG NODE_VERSION="22.23.1"

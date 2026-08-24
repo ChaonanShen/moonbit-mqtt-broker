@@ -6,6 +6,8 @@ pub struct ClientSession {
   allocator : PacketIdAllocator
   mut inflight : Array[OutboundInflight]
   mut pending : Array[SessionMessage]
+  owner : @security.Principal
+  mut detached_at_ms : Int64?
 } derive(Eq, Debug)
 
 ///|
@@ -13,6 +15,7 @@ pub fn ClientSession::new(
   client_id : ClientId,
   mode? : SessionMode = Clean,
   attached? : Bool = true,
+  owner? : @security.Principal = @security.Principal::Anonymous,
 ) -> ClientSession {
   {
     client_id,
@@ -21,6 +24,12 @@ pub fn ClientSession::new(
     allocator: PacketIdAllocator::new().unwrap(),
     inflight: [],
     pending: [],
+    owner,
+    detached_at_ms: if attached {
+      None
+    } else {
+      Some(0L)
+    },
   }
 }
 
@@ -30,6 +39,8 @@ pub fn ClientSession::restore(
   next_packet_id : Int,
   inflight : Array[OutboundInflight],
   pending : Array[SessionMessage],
+  owner? : @security.Principal = @security.Principal::Anonymous,
+  detached_at_ms? : Int64 = 0L,
 ) -> Result[ClientSession, SessionError] {
   let allocator = match PacketIdAllocator::new(next=next_packet_id) {
     Ok(value) => value
@@ -61,6 +72,8 @@ pub fn ClientSession::restore(
     allocator,
     inflight: stored_inflight,
     pending: stored_pending,
+    owner,
+    detached_at_ms: Some(detached_at_ms),
   })
 }
 
@@ -111,6 +124,16 @@ pub fn ClientSession::pending(self : ClientSession) -> Array[SessionMessage] {
   self.pending.map(message => {
     SessionMessage::new(message.topic, message.payload, message.retain)
   })
+}
+
+///|
+pub fn ClientSession::owner(self : ClientSession) -> @security.Principal {
+  self.owner
+}
+
+///|
+pub fn ClientSession::detached_at_ms(self : ClientSession) -> Int64? {
+  self.detached_at_ms
 }
 
 ///|
@@ -208,8 +231,12 @@ pub fn ClientSession::ack(
 }
 
 ///|
-pub fn ClientSession::detach(self : ClientSession) -> Unit {
+pub fn ClientSession::detach(
+  self : ClientSession,
+  detached_at_ms? : Int64 = 0L,
+) -> Unit {
   self.attached = false
+  self.detached_at_ms = Some(detached_at_ms)
 }
 
 ///|
@@ -221,6 +248,7 @@ pub fn ClientSession::attach(
     return Err(SessionAlreadyAttached)
   }
   self.attached = true
+  self.detached_at_ms = None
   let deliveries : Array[SessionDelivery] = []
   for item in self.inflight {
     deliveries.push({

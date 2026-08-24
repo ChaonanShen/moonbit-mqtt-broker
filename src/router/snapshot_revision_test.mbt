@@ -245,6 +245,8 @@ test "restored snapshot revision starts at zero" {
     sessions: [
       {
         client_id: "restored",
+        owner_principal: "legacy-anonymous",
+        detached_at_ms: 0L,
         next_packet_id: 7,
         subscriptions: [],
         inflight: [],
