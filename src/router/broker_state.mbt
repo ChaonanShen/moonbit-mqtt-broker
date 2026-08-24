@@ -6,6 +6,7 @@ pub struct BrokerState {
   priv retained : RetainedStore
   priv mut inflight_total : Int
   priv mut pending_qos1_total : Int
+  priv mut snapshot_revision : Int64
 }
 
 ///|
@@ -45,6 +46,7 @@ pub fn BrokerState::new(config : BrokerConfig) -> BrokerState {
     retained: RetainedStore::new(),
     inflight_total: 0,
     pending_qos1_total: 0,
+    snapshot_revision: 0L,
   }
 }
 
@@ -76,6 +78,16 @@ pub fn BrokerState::inflight_count(self : BrokerState) -> Int {
 ///|
 pub fn BrokerState::pending_qos1_count(self : BrokerState) -> Int {
   self.pending_qos1_total
+}
+
+///|
+pub fn BrokerState::snapshot_revision(self : BrokerState) -> Int64 {
+  self.snapshot_revision
+}
+
+///|
+fn BrokerState::mark_snapshot_dirty(self : BrokerState) -> Unit {
+  self.snapshot_revision = self.snapshot_revision + 1L
 }
 
 ///|
@@ -177,7 +189,35 @@ fn BrokerState::create_session(
       attached=request.attached,
     ),
   )
+  if request.mode == @session.SessionMode::Persistent {
+    self.mark_snapshot_dirty()
+  }
   Ok([SessionCreated(request.client_id)])
+}
+
+///|
+fn BrokerState::planned_changes_snapshot(
+  self : BrokerState,
+  planned : Array[PlannedDelivery],
+) -> Bool {
+  planned.any(item => {
+    match item.destination {
+      StageInflight | StagePending =>
+        self.session_is_persistent(item.candidate.recipient)
+      _ => false
+    }
+  })
+}
+
+///|
+fn BrokerState::session_is_persistent(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Bool {
+  match self.sessions.get(client_id) {
+    Some(session) => session.mode() == @session.SessionMode::Persistent
+    None => false
+  }
 }
 
 ///|
@@ -345,6 +385,7 @@ fn BrokerState::attach_session(
   }
   let before_inflight = session.inflight_count()
   let before_pending = session.pending_count()
+  let before_next_packet_id = session.next_packet_id()
   let global_free = self.config.max_inflight_total() - self.inflight_total
   let effective_max = if before_inflight + global_free <
     self.config.max_inflight_per_session() {
@@ -361,6 +402,14 @@ fn BrokerState::attach_session(
     (session.inflight_count() - before_inflight)
   self.pending_qos1_total = self.pending_qos1_total -
     (before_pending - session.pending_count())
+  if session.mode() == @session.SessionMode::Persistent &&
+    (
+      session.inflight_count() != before_inflight ||
+      session.pending_count() != before_pending ||
+      session.next_packet_id() != before_next_packet_id
+    ) {
+    self.mark_snapshot_dirty()
+  }
   let actions : Array[BrokerAction] = [SessionAttached(client_id)]
   for delivery in deliveries {
     actions.push(
@@ -409,6 +458,9 @@ fn BrokerState::ack_delivery(
         (session.inflight_count() - before_inflight)
       self.pending_qos1_total = self.pending_qos1_total -
         (before_pending - session.pending_count())
+      if session.mode() == @session.SessionMode::Persistent {
+        self.mark_snapshot_dirty()
+      }
       let actions : Array[BrokerAction] = [
         DeliveryAcknowledged({ client_id, packet_id }),
       ]
@@ -449,6 +501,9 @@ pub fn BrokerState::apply(
         session.pending_count()
       ignore(self.subscriptions.remove_all(client_id))
       self.sessions.remove(client_id)
+      if session.mode() == @session.SessionMode::Persistent {
+        self.mark_snapshot_dirty()
+      }
       Ok([SessionRemoved(client_id)])
     }
     AttachSession(client_id) => self.attach_session(client_id)
@@ -475,6 +530,8 @@ pub fn BrokerState::apply(
       let results : Array[SubscribeResult] = []
       let successful : Array[@topic.TopicFilter] = []
       let originals : Map[@topic.TopicFilter, @session.DeliveryQoS?] = Map([])
+      let persistent = self.session_is_persistent(client_id)
+      let mut subscriptions_changed = false
       for entry in entries {
         let existing = self.subscriptions.qos(client_id, entry.filter)
         if originals.get(entry.filter) is None {
@@ -489,6 +546,9 @@ pub fn BrokerState::apply(
           self.config.max_subscriptions_total() {
           results.push(RejectedLimit(SubscriptionsTotal))
         } else {
+          if existing != Some(entry.qos) {
+            subscriptions_changed = true
+          }
           ignore(self.subscriptions.put(client_id, entry.filter, entry.qos))
           results.push(Granted(entry.qos))
           successful.push(entry.filter)
@@ -524,9 +584,13 @@ pub fn BrokerState::apply(
       let actions : Array[BrokerAction] = [
         SubscriptionsApplied({ client_id, results }),
       ]
+      let delivery_changed = self.planned_changes_snapshot(planned)
       match self.commit_deliveries(planned) {
         Ok(deliveries) => actions.append(deliveries)
         Err(error) => return Err(error)
+      }
+      if persistent && (subscriptions_changed || delivery_changed) {
+        self.mark_snapshot_dirty()
       }
       Ok(actions)
     }
@@ -542,6 +606,9 @@ pub fn BrokerState::apply(
       let removed : Array[Bool] = []
       for filter in filters {
         removed.push(self.subscriptions.remove(client_id, filter))
+      }
+      if removed.any(value => value) && self.session_is_persistent(client_id) {
+        self.mark_snapshot_dirty()
       }
       Ok([UnsubscriptionsApplied({ client_id, removed })])
     }
@@ -561,10 +628,16 @@ pub fn BrokerState::apply(
         Ok(value) => value
         Err(error) => return Err(error)
       }
+      let delivery_changed = self.planned_changes_snapshot(planned)
+      let mut retained_changed = false
       if input.retain {
+        let previous = self.retained.get(input.topic)
         if input.payload.length() == 0 {
           self.retained.remove(input.topic)
+          retained_changed = previous is Some(_)
         } else {
+          retained_changed = previous !=
+            Some({ topic: input.topic, payload: input.payload, qos: input.qos })
           ignore(
             self.retained.put(
               input.topic,
@@ -575,7 +648,11 @@ pub fn BrokerState::apply(
           )
         }
       }
-      self.commit_deliveries(planned)
+      let actions = self.commit_deliveries(planned)
+      if actions is Ok(_) && (retained_changed || delivery_changed) {
+        self.mark_snapshot_dirty()
+      }
+      actions
     }
     Puback(request) => self.ack_delivery(request.client_id, request.packet_id)
   }
