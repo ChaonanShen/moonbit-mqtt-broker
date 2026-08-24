@@ -1,6 +1,7 @@
 # moonbit-mqtt-broker
 
-A lightweight MQTT 3.1.1 broker implemented in MoonBit. The M4 server supports
+A lightweight, single-node MQTT 3.1.1 Broker implemented in MoonBit. Version
+`0.1.0` supports
 multiple TCP clients, QoS 0/1 publish/subscribe, `+`/`#` topic filters, retained
 messages, QoS 0/1 Wills, PING, Keep Alive, Client ID takeover, persistent
 Sessions across network connections, bounded offline QoS 1 delivery, and
@@ -10,13 +11,14 @@ Broker process restarts. A pure central
 runtime is the only owner of Broker, Session, inflight, and retained state;
 socket tasks only exchange bytes and events.
 
-M4 encodes the pure Snapshot V1 model as checksummed Disk V1 and commits it via
+Optional persistence encodes the pure Snapshot V1 model as checksummed Disk V1 and commits it via
 a same-directory temporary file, full file sync, atomic replace rename, and
 directory sync. Recovery is strict and occurs before the TCP listener is
 created. This is debounced snapshot durability to the most recently committed
 revision, not a WAL or per-PUBACK stable-storage guarantee.
-MQTT 5, QoS 2, TLS, WebSocket, authentication/ACL, bridging, clustering, and
-external databases are outside the first release.
+MQTT 5, QoS 2, TLS, WebSocket, authentication/ACL, shared subscriptions,
+Bridge, plugins, clustering, external databases, WAL, and zero-loss durability
+are outside this release.
 
 ## Prerequisites
 
@@ -32,13 +34,13 @@ docker build --platform linux/amd64 -t moonbit-mqtt-broker-dev .
 scripts/moon-docker.sh check --target native
 scripts/moon-docker.sh test --target native
 scripts/moon-docker.sh build --target native
-scripts/m4-verify-docker.sh
+scripts/m5-verify-docker.sh
 ```
 
-The last command includes every M0–M3 gate, formatting, Native check/test/build,
-Disk V1 corruption and atomicity checks, writer retry/debounce tests, and real
-MQTT.js/Mosquitto multi-process restart interoperability in the same environment
-as CI.
+The last command is the cumulative release gate: all M0–M4 tests, formatting,
+Native check/test/build, MQTT.js/Mosquitto/Aedes protocol comparison, bounded
+workloads, executable examples, documentation checks, and a clean-room package
+build in the same environment as CI.
 
 ## Run the broker
 
@@ -85,6 +87,14 @@ is opt-in through `--data-dir`; snapshot tuning flags are rejected without it.
 `--once`
 serves one complete connection and is intended for smoke tests.
 
+Inspect every option and its fixed default without binding a listener or
+creating a data directory:
+
+```bash
+scripts/moon-docker.sh run --target native src/cmd/broker -- --help
+scripts/moon-docker.sh run --target native src/cmd/broker -- --version
+```
+
 Outbound transport memory is approximately bounded by `connections × outbound
 queue length × maximum packet size`. Session message memory is additionally
 bounded by `(max inflight total + max pending QoS 1 total) × maximum packet
@@ -95,13 +105,22 @@ flows close the connection without being silently downgraded.
 decoder. It may equal `--max-packet-size`: a complete maximum-size packet can be
 drained before a sticky suffix is read, without requiring extra chunk slack.
 
-For a repeatable persistent-session demonstration against a running Broker,
-run `examples/persistent_session.sh`. It disconnects a `clean=false` subscriber,
-publishes QoS 1 while it is offline, then reconnects the same Client ID.
+The examples are executable acceptance paths:
+
+```bash
+examples/basic_pubsub.sh
+# Against a Broker already running at HOST PORT:
+examples/persistent_session.sh 127.0.0.1 1883
+examples/restart_persistence.sh
+```
+
+The first demonstrates QoS 0/1 live delivery, the second disconnects and
+resumes a `clean=false` Session, and the third starts two Broker processes with
+one data directory to prove retained and offline QoS 1 restart recovery.
 
 See [persistence](docs/persistence.md), [testing](docs/testing.md),
-[compatibility](docs/compatibility.md), and [architecture](docs/architecture.md)
-for exact behavior and scope.
+[compatibility](docs/compatibility.md), and
+[architecture](docs/architecture.md) for exact behavior and scope.
 
 ## License
 

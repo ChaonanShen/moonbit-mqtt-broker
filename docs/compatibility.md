@@ -7,8 +7,9 @@
 | TCP split/sticky packet framing | Supported | Capacity-aware reader plus bounded three-state decoder |
 | Equal packet/receive limits | Supported | 16/16 boundary covers complete CONNECT plus sticky PINGREQ |
 | Packet codec for QoS 0/1 families | Supported | Complete-frame adapter; Packet ID/DUP combinations gated |
-| MQTT.js 5.15.2 interoperability | Supported for M4 | QoS 0/1, retained/Will, persistent Session and multi-process restart |
-| Mosquitto 2.0.18 interoperability | Supported for M4 | QoS 0/1, retained and persistent offline restart delivery |
+| MQTT.js 5.15.2 interoperability | Supported for 0.1.0 | QoS 0/1, retained/Will, persistent Session and multi-process restart |
+| Mosquitto 2.0.18 interoperability | Supported for 0.1.0 | QoS 0/1, retained and persistent offline restart delivery |
+| Aedes 1.1.1 reference matrix | Test-only | Normalized common behavior; no runtime dependency or plugin compatibility claim |
 | Topic validation and PUBLISH/SUBSCRIBE routing | Supported | `+`, `#`, `$SYS`, overlap merge, deterministic order |
 | Keep Alive and PING | Supported | 1.5× deadline; zero disables idle timeout |
 | Client ID takeover | Supported | Connection-generation stale event isolation |
@@ -24,6 +25,8 @@
 | State across Broker restart | Supported when `--data-dir` is set | Debounced local snapshot to latest committed revision |
 | QoS 2 / MQTT 5 | Unsupported | Explicitly rejected / out of scope |
 | TLS / WebSocket / auth / ACL | Unsupported | Out of first-release scope |
+| Shared subscriptions / Bridge / plugins / cluster | Unsupported | Single-node Broker only |
+| External database / WAL / zero-loss durability | Unsupported | Latest-committed local snapshot only |
 
 CONNECT must be the first packet. Malformed frames, oversize declarations,
 direction errors, duplicate CONNECT, QoS 2, or other unsupported flows close

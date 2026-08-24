@@ -4,6 +4,50 @@ suberror CliError {
 } derive(Debug)
 
 ///|
+const RELEASE_VERSION : String = "0.1.0"
+
+///|
+fn print_help() -> Unit {
+  println("moonbit-mqtt-broker " + RELEASE_VERSION)
+  println("Usage: broker [OPTIONS]")
+  println("")
+  println("MQTT 3.1.1 QoS 0/1 Broker for Linux x86_64 Native.")
+  println("The supported environment is the pinned Ubuntu 24.04 Docker image.")
+  println("")
+  println("Options:")
+  println(
+    "  -h, --help                         Show this help without starting the Broker",
+  )
+  println("  --version                          Show the release version")
+  println(
+    "  --listen HOST:PORT                 Listener address (default 127.0.0.1:1883)",
+  )
+  println(
+    "  --once                             Serve one connection, for smoke tests",
+  )
+  println("  --max-connections N                Default 128")
+  println("  --max-packet-size N                Default 1048576")
+  println("  --max-receive-buffer-size N        Default 1048576")
+  println("  --max-outbound-queue N             Default 64")
+  println("  --max-runtime-events N             Default 512")
+  println("  --connect-timeout-ms N             Default 10000")
+  println("  --keep-alive-check-interval-ms N   Default 100")
+  println("  --max-subscriptions-per-session N  Default 128")
+  println("  --max-subscriptions-total N        Default 16384")
+  println("  --max-retained-messages N          Default 1024")
+  println("  --max-sessions N                   Default 1024")
+  println("  --max-inflight-per-session N       Default 16")
+  println("  --max-inflight-total N             Default 512")
+  println("  --max-pending-qos1-per-session N   Default 64")
+  println("  --max-pending-qos1-total N         Default 1024")
+  println("  --data-dir PATH                    Enable Disk V1 snapshots")
+  println("  --max-snapshot-bytes N             Default 67108864")
+  println("  --snapshot-debounce-ms N           Default 250")
+  println("  --snapshot-max-delay-ms N          Default 2000")
+  println("  --snapshot-retry-ms N              Default 1000")
+}
+
+///|
 fn parse_bounded_int(
   args : Array[String],
   index : Int,
@@ -70,6 +114,14 @@ async fn run_main() -> Unit {
   let mut index = 1
   while index < args.length() {
     match args[index] {
+      "-h" | "--help" => {
+        print_help()
+        return
+      }
+      "--version" => {
+        println(RELEASE_VERSION)
+        return
+      }
       "--listen" => {
         if index + 1 >= args.length() {
           raise CliError("--listen requires HOST:PORT")
