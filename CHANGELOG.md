@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.0] - 2026-08-24
+
+- Released a single-node MQTT 3.1.1 plain-TCP Broker for Linux x86_64 Native
+  with QoS 0/1, wildcard routing, retained messages, QoS 0/1 Wills, Keep Alive,
+  takeover, persistent Sessions, bounded offline QoS 1, and reconnect DUP.
+- Added optional checksummed Disk V1 latest-committed snapshot persistence with
+  strict recovery, an exclusive data-directory lock, atomic replacement,
+  debounce/latest-wins writing, retry, and restart restoration before listen.
+- Added final MQTT.js/Mosquitto/Aedes protocol matrices, 100-client and bounded
+  workload gates, 10,000×1 KiB QoS 0, 10×100 offline QoS 1, slow-consumer,
+  churn, committed-restart, executable-example, documentation, and clean-room
+  package verification.
+- Added side-effect-free `--help` and `--version`, three executable examples,
+  fixed toolchain/provenance records, and a manual release runbook.
+- Known limitations: no MQTT 5, QoS 2, TLS, WebSocket, authentication/ACL,
+  shared subscriptions, Bridge, plugins, clustering, external databases, WAL,
+  or zero-loss durability. Disk envelope/model version remains 1; existing
+  version-1 snapshots are decoded strictly and never reinterpreted in place.
+
 ## M4 - 2026-08-24
 
 - Added deterministic checksummed Disk Snapshot V1 with strict UTF-8,
@@ -54,6 +73,16 @@
 - Added deterministic reader/writer failure classification, simultaneous
   reader/writer/closer termination, Queue-close wakeup, and healthy-client
   isolation coverage for transport I/O failures.
+
+## M1 - 2026-08-21
+
+- Added validated Topic/Filter parsing and matching for `+`, `#`, empty levels,
+  and `$SYS` separation.
+- Added deterministic subscription indexing with overlap maximum-QoS merge,
+  bounded per-Session/total subscriptions, and stable delivery ordering.
+- Added retained-message set/replay/delete with capacity limits, pure
+  BrokerState event/action transitions, in-memory Session ownership, and a
+  unified internal Publish route for clients and Wills.
 
 ## M0 - 2026-08-21
 

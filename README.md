@@ -14,16 +14,17 @@ socket tasks only exchange bytes and events.
 Optional persistence encodes the pure Snapshot V1 model as checksummed Disk V1 and commits it via
 a same-directory temporary file, full file sync, atomic replace rename, and
 directory sync. Recovery is strict and occurs before the TCP listener is
-created. This is debounced snapshot durability to the most recently committed
-revision, not a WAL or per-PUBACK stable-storage guarantee.
+created. This is debounced latest-committed snapshot durability, not a WAL or
+per-PUBACK stable-storage guarantee.
 MQTT 5, QoS 2, TLS, WebSocket, authentication/ACL, shared subscriptions,
 Bridge, plugins, clustering, external databases, WAL, and zero-loss durability
 are outside this release.
 
 ## Prerequisites
 
-The supported development and acceptance environment is Docker on an x86_64
-host. The image pins Ubuntu 24.04, MoonBit `0.10.8+8606a5800`, Node.js
+The supported development and acceptance target is Linux x86_64 Native through
+Docker on an x86_64 host. The image pins Ubuntu 24.04, MoonBit
+`0.10.8+8606a5800`, Node.js
 `22.23.1`, `moonbitlang/async@0.20.6`, the candidate codec, MQTT.js, and
 Mosquitto clients. A host MoonBit installation is not required.
 
@@ -120,7 +121,8 @@ one data directory to prove retained and offline QoS 1 restart recovery.
 
 See [persistence](docs/persistence.md), [testing](docs/testing.md),
 [compatibility](docs/compatibility.md), and
-[architecture](docs/architecture.md) for exact behavior and scope.
+[architecture](docs/architecture.md) for exact behavior and scope. Maintainers
+should also use the [release runbook](docs/release.md).
 
 ## License
 

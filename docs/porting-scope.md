@@ -16,6 +16,16 @@ Broker/Client/handler responsibility split but does not translate a specific
 Aedes file, function, or test. Future direct adaptation must still record its
 file-level source here.
 
+The M5 adopted-case map is behavioral only:
+
+| Aedes baseline area | Local automated scenario | Use and difference |
+| --- | --- | --- |
+| CONNECT / client lifecycle | `m5_protocol_matrix.mjs` clean and duplicate CONNECT | Behavior observed; no source copied |
+| subscription handling | SUBACK order, wildcard, empty level, overlap | Behavior observed; MQTT specification wins on overlap maximum QoS |
+| publish / retained handlers | live QoS 0/1 and retained replay/delete | Behavior observed; no handler code copied |
+| client Will lifecycle | forced close and graceful DISCONNECT | Behavior observed; no test code copied |
+| persistent client state | M3/M4 Session, offline FIFO, DUP restart gates | Architecture consulted; MoonBit model/tests are original |
+
 M0 directly depends on `moonbitlang/async@0.20.6` and
 `zbhzs1/moonbit-mqtt@0.1.0`, both Apache-2.0. Candidate codec types remain
 inside a conversion adapter. Adapter pre-validation and error classification
