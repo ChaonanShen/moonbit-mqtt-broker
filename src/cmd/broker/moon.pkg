@@ -2,13 +2,20 @@ import {
   "ChaonanShen/moonbit-mqtt-broker/router",
   "ChaonanShen/moonbit-mqtt-broker/persistence",
   "ChaonanShen/moonbit-mqtt-broker/server",
+  "ChaonanShen/moonbit-mqtt-broker/security",
+  "ChaonanShen/moonbit-mqtt-broker/observability",
+  "ChaonanShen/moonbit-mqtt-broker/config",
   "moonbitlang/async",
+  "moonbitlang/async/fs",
+  "moonbitlang/async/signal",
   "moonbitlang/core/env",
+  "moonbitlang/core/json",
   "moonbitlang/core/string",
 }
 
 pkgtype(kind: "executable")
 
 options(
-  targets: { "main.mbt": [ "native" ] },
+  "native-stub": [ "shutdown_signal.c" ],
+  targets: { "main.mbt": [ "native" ], "shutdown_signal.mbt": [ "native" ] },
 )

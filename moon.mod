@@ -19,4 +19,5 @@ description = "A lightweight MQTT 3.1.1 broker implemented in MoonBit."
 import {
   "moonbitlang/async@0.20.6",
   "zbhzs1/moonbit-mqtt@0.1.0",
+  "bobzhang/toml@0.4.3",
 }
