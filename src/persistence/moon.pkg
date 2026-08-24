@@ -1,4 +1,9 @@
 import {
+  "ChaonanShen/moonbit-mqtt-broker/router",
+  "moonbitlang/core/encoding/utf8",
+}
+
+import {
   "moonbitlang/async",
   "moonbitlang/async/fs",
   "moonbitlang/async/io",
