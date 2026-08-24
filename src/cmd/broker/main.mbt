@@ -23,7 +23,26 @@ fn parse_bounded_int(
 }
 
 ///|
-async fn main {
+fn parse_bounded_int64(
+  args : Array[String],
+  index : Int,
+  name : String,
+  minimum : Int64,
+) -> Int64 raise CliError {
+  if index + 1 >= args.length() {
+    raise CliError(name + " requires an integer")
+  }
+  let value = @string.parse_int64(args[index + 1]) catch {
+    _ => raise CliError("invalid " + name)
+  }
+  if value < minimum {
+    raise CliError(name + " must be at least " + minimum.to_string())
+  }
+  value
+}
+
+///|
+async fn run_main() -> Unit {
   let args = @env.args()
   let mut listen = "127.0.0.1:1883"
   let mut max_connections = 128
@@ -41,6 +60,12 @@ async fn main {
   let mut max_inflight_total = 512
   let mut max_pending_qos1_per_session = 64
   let mut max_pending_qos1_total = 1024
+  let mut data_dir : String? = None
+  let mut max_snapshot_bytes = 67108864L
+  let mut snapshot_debounce_ms = 250L
+  let mut snapshot_max_delay_ms = 2000L
+  let mut snapshot_retry_ms = 1000L
+  let mut snapshot_option_used = false
   let mut once = false
   let mut index = 1
   while index < args.length() {
@@ -136,6 +161,41 @@ async fn main {
         )
         index = index + 2
       }
+      "--data-dir" => {
+        if index + 1 >= args.length() || args[index + 1] == "" {
+          raise CliError("--data-dir requires a non-empty path")
+        }
+        data_dir = Some(args[index + 1])
+        index = index + 2
+      }
+      "--max-snapshot-bytes" => {
+        max_snapshot_bytes = parse_bounded_int64(
+          args, index, "--max-snapshot-bytes", 24L,
+        )
+        snapshot_option_used = true
+        index = index + 2
+      }
+      "--snapshot-debounce-ms" => {
+        snapshot_debounce_ms = parse_bounded_int64(
+          args, index, "--snapshot-debounce-ms", 1L,
+        )
+        snapshot_option_used = true
+        index = index + 2
+      }
+      "--snapshot-max-delay-ms" => {
+        snapshot_max_delay_ms = parse_bounded_int64(
+          args, index, "--snapshot-max-delay-ms", 1L,
+        )
+        snapshot_option_used = true
+        index = index + 2
+      }
+      "--snapshot-retry-ms" => {
+        snapshot_retry_ms = parse_bounded_int64(
+          args, index, "--snapshot-retry-ms", 1L,
+        )
+        snapshot_option_used = true
+        index = index + 2
+      }
       "--once" => {
         once = true
         index = index + 1
@@ -175,5 +235,81 @@ async fn main {
     Ok(value) => value
     Err(_) => raise CliError("invalid server configuration")
   }
-  @server.run(listen, config, @router.BrokerState::new(broker_config), once~)
+  match data_dir {
+    None => {
+      if snapshot_option_used {
+        raise CliError("snapshot options require --data-dir")
+      }
+      @server.run(
+        listen,
+        config,
+        @router.BrokerState::new(broker_config),
+        once~,
+      )
+    }
+    Some(path) => {
+      let persistence_config = match
+        @persistence.PersistenceConfig::new(
+          path,
+          max_snapshot_bytes~,
+          debounce_ms=snapshot_debounce_ms,
+          max_delay_ms=snapshot_max_delay_ms,
+          retry_ms=snapshot_retry_ms,
+        ) {
+        Ok(value) => value
+        Err(error) =>
+          raise CliError("persistence configuration: " + error.category())
+      }
+      let store = match @persistence.SnapshotStore::open(persistence_config) {
+        Ok(value) => value
+        Err(error) => raise CliError("persistence startup: " + error.category())
+      }
+      let initial_state = match
+        store.load_state(broker_config, config.max_packet_size()) {
+        Ok(value) => value
+        Err(error) => {
+          store.close()
+          raise CliError("snapshot recovery: " + error.category())
+        }
+      }
+      let snapshot_bytes = match store.snapshot_size() {
+        Ok(Some(value)) => value
+        Ok(None) => 0L
+        Err(error) => {
+          store.close()
+          raise CliError("snapshot metadata: " + error.category())
+        }
+      }
+      let persistence = match
+        @server.PersistenceRuntime::new(store, persistence_config) {
+        Ok(value) => value
+        Err(error) => {
+          store.close()
+          raise CliError("persistence runtime: " + error.category())
+        }
+      }
+      println(
+        "snapshot restored version=1 sessions=" +
+        initial_state.session_count().to_string() +
+        " retained=" +
+        initial_state.retained_count().to_string() +
+        " bytes=" +
+        snapshot_bytes.to_string() +
+        " data_dir=" +
+        store.data_dir(),
+      )
+      @server.run(listen, config, initial_state, persistence~, once~)
+    }
+  }
+}
+
+///|
+async fn main {
+  run_main() catch {
+    CliError(message) as error => {
+      println("broker: " + message)
+      raise error
+    }
+    error => raise error
+  }
 }
