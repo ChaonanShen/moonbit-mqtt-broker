@@ -16,6 +16,7 @@ version_output="$(moon run --target native src/cmd/broker -- --data-dir "${side_
 grep -q '^Usage: broker \[OPTIONS\]$' <<<"${help_output}"
 grep -q -- '--max-pending-qos1-total' <<<"${help_output}"
 grep -q -- '--snapshot-retry-ms' <<<"${help_output}"
+grep -q -- '--tls-handshake-timeout-ms' <<<"${help_output}"
 [[ "${version_output}" = '0.1.0' ]]
 [[ -z "$(find "${side_effect_dir}" -mindepth 1 -print -quit)" ]]
 
