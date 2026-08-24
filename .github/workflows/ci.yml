@@ -3,14 +3,34 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      soak:
+        description: Run the ten-minute extended M5 stability profile
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  m4-native:
+  m5-native:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Build pinned Linux x86_64 toolchain
         run: docker build --platform linux/amd64 --tag moonbit-mqtt-broker-dev .
-      - name: Run M4 verification
-        run: scripts/m4-verify-docker.sh
+      - name: Run M5 verification
+        run: |
+          if [[ "${{ github.event.inputs.soak }}" == "true" ]]; then
+            export M5_SOAK=1
+          fi
+          mkdir -p test-results
+          scripts/m5-verify-docker.sh 2>&1 | tee test-results/m5-verifier.log
+      - name: Upload verifier log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m5-verifier-log
+          path: test-results/m5-verifier.log
+          if-no-files-found: warn
+          retention-days: 7

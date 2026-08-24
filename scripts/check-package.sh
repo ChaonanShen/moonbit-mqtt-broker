@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Gates:
+# release package excludes local cache credentials and runtime state
+# release package builds and runs outside the source checkout
 set -euo pipefail
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
