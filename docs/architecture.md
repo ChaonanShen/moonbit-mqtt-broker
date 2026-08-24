@@ -23,7 +23,7 @@ the final Broker state machine.
 The M1 Router is the only component allowed to mutate Broker, Session,
 SubscriptionIndex, and Retained state. It consumes pure `BrokerEvent` values and
 returns ordered pure `BrokerAction` values; no socket, task, clock, or file
-handle can enter `BrokerState`. M2 network reader/writer tasks will only exchange
+handle can enter `BrokerState`. Network reader/writer tasks only exchange
 bytes and bounded events/actions:
 
 ```text
