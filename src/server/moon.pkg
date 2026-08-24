@@ -5,9 +5,14 @@ import {
   "ChaonanShen/moonbit-mqtt-broker/persistence",
   "ChaonanShen/moonbit-mqtt-broker/router",
   "ChaonanShen/moonbit-mqtt-broker/session",
+  "ChaonanShen/moonbit-mqtt-broker/security",
   "ChaonanShen/moonbit-mqtt-broker/topic",
+  "ChaonanShen/moonbit-mqtt-broker/observability",
   "moonbitlang/async/io",
+  "moonbitlang/async/pipe",
   "moonbitlang/async/socket",
+  "moonbitlang/async/tls",
+  "moonbitlang/core/encoding/utf8",
 }
 
 options(

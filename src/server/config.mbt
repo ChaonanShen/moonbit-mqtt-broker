@@ -7,6 +7,7 @@ pub struct ServerConfig {
   max_runtime_events : Int
   connect_timeout_ms : Int
   keep_alive_check_interval_ms : Int
+  system_metrics_interval_ms : Int
   broker_config : @router.BrokerConfig
 } derive(Eq, Debug)
 
@@ -20,6 +21,7 @@ pub fn ServerConfig::new(
   connect_timeout_ms : Int,
   keep_alive_check_interval_ms : Int,
   broker_config : @router.BrokerConfig,
+  system_metrics_interval_ms? : Int = 10000,
 ) -> Result[ServerConfig, ServerError] {
   if max_connections < 1 {
     return Err(InvalidConfiguration("max_connections must be at least 1"))
@@ -51,6 +53,11 @@ pub fn ServerConfig::new(
       ),
     )
   }
+  if system_metrics_interval_ms < 1 {
+    return Err(
+      InvalidConfiguration("system_metrics_interval_ms must be at least 1"),
+    )
+  }
   Ok({
     max_connections,
     max_packet_size,
@@ -59,6 +66,7 @@ pub fn ServerConfig::new(
     max_runtime_events,
     connect_timeout_ms,
     keep_alive_check_interval_ms,
+    system_metrics_interval_ms,
     broker_config,
   })
 }
@@ -102,6 +110,11 @@ pub fn ServerConfig::connect_timeout_ms(self : ServerConfig) -> Int {
 ///|
 pub fn ServerConfig::keep_alive_check_interval_ms(self : ServerConfig) -> Int {
   self.keep_alive_check_interval_ms
+}
+
+///|
+pub fn ServerConfig::system_metrics_interval_ms(self : ServerConfig) -> Int {
+  self.system_metrics_interval_ms
 }
 
 ///|

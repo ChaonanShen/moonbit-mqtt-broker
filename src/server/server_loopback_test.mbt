@@ -141,6 +141,24 @@ async test "multi-connection server keeps independent readers and writers" {
 }
 
 ///|
+async test "shutdown callback stops listener without cancelling server task" {
+  @async.with_task_group() <| group => {
+    let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    defer listener.close()
+    let config = loopback_config(tick_ms=5)
+    let requested = Ref(false)
+    let server = group.spawn() <| () => {
+      serve(listener, config, loopback_state(config), shutdown_requested=() => {
+        requested.val
+      })
+    }
+    @async.sleep(20)
+    requested.val = true
+    @async.with_timeout(1000, () => server.wait())
+  }
+}
+
+///|
 async test "receive buffer equality preserves a complete packet plus sticky suffix" {
   @async.with_task_group() <| group => {
     let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))

@@ -37,4 +37,5 @@ pub(all) struct ConnectionMeta {
   last_control_at_ms : Int64
   keep_alive_seconds : Int
   will : StoredWill?
+  principal : @security.Principal?
 } derive(Eq, Debug)
