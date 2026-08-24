@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Gate: release metadata is consistently versioned 0.1.0
 set -euo pipefail
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
