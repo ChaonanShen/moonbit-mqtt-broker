@@ -1,0 +1,9 @@
+{
+  "name": "moonbit-mqtt-broker-reference-brokers",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "aedes": "1.1.1",
+    "mqtt": "5.15.2"
+  }
+}
