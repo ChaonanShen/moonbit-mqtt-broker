@@ -1,0 +1,9 @@
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/fs",
+  "moonbitlang/async/io",
+} for "test"
+
+options(
+  targets: { "fs_capability_test.mbt": [ "native" ] },
+)
