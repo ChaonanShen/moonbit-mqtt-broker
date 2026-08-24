@@ -2,6 +2,7 @@ import {
   "moonbitlang/async",
   "ChaonanShen/moonbit-mqtt-broker/framing",
   "ChaonanShen/moonbit-mqtt-broker/protocol_adapter" @protocol,
+  "ChaonanShen/moonbit-mqtt-broker/persistence",
   "ChaonanShen/moonbit-mqtt-broker/router",
   "ChaonanShen/moonbit-mqtt-broker/session",
   "ChaonanShen/moonbit-mqtt-broker/topic",
