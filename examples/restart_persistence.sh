@@ -44,7 +44,7 @@ stop_broker() {
 }
 
 start_broker
-stdbuf -oL -eL mosquitto_sub -h 127.0.0.1 -p "${port}" -i m5-example-restart-session \
+stdbuf -oL -eL mosquitto_sub -h 127.0.0.1 -p "${port}" -i release-example-restart-session \
   -c -q 1 -t examples/restart/offline >"${SUB_LOG}" 2>&1 &
 SUB_PID="$!"
 for _ in $(seq 1 200); do
@@ -73,7 +73,7 @@ stop_broker
 
 start_broker
 retained="$(timeout 5 mosquitto_sub -h 127.0.0.1 -p "${port}" -q 1 -t examples/restart/retained -C 1)"
-offline="$(timeout 5 mosquitto_sub -h 127.0.0.1 -p "${port}" -i m5-example-restart-session -c -q 1 -t examples/restart/offline -C 1)"
+offline="$(timeout 5 mosquitto_sub -h 127.0.0.1 -p "${port}" -i release-example-restart-session -c -q 1 -t examples/restart/offline -C 1)"
 [[ "${retained}" = 'retained across restart' ]]
 [[ "${offline}" = 'offline across restart' ]]
 stop_broker

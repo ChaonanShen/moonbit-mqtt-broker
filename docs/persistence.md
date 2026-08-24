@@ -1,7 +1,7 @@
 # Local snapshot persistence
 
-Persistence is disabled unless `--data-dir PATH` is provided. Disabled mode is
-the M3 memory-only behavior and creates no persistence files. Enabled mode
+Persistence is disabled unless `--data-dir PATH` is provided. In memory-only
+mode the broker creates no persistence files. Enabled mode
 accepts these options:
 
 | Option | Default | Constraint |
@@ -57,7 +57,7 @@ changes may be lost after `SIGKILL`, host failure, or power loss. Natural
 `--once` completion drains a final submitted revision. SIGTERM and SIGINT are
 converted into a normal service-stop request: the listener and connection tasks
 stop, active Wills are suppressed, and the newest in-memory revision is forced
-and drained before the process exits. The M6 process gate verifies this with a
+and drained before the process exits. The process-level shutdown test uses a
 60-second debounce, so the signal path must create the first snapshot.
 
 ## Persisted state and recovery operations

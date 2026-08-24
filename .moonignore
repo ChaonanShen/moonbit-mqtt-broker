@@ -1,6 +1,8 @@
 *.local.*
 tools/codec_oracle/node_modules
+tools/reference_brokers/node_modules
 tests/integration/node_modules
+pkg.generated.mbti
 test-results
 tmp
 *.log

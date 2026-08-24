@@ -21,4 +21,4 @@ grep -q 'QoS 2' README.md
 grep -q 'zero-loss durability' README.md
 grep -q 'latest-committed' README.md
 grep -q 'Linux x86_64' README.md
-echo 'M5 documentation links, support contract, and version are consistent'
+echo 'RELEASE documentation links, support contract, and version are consistent'

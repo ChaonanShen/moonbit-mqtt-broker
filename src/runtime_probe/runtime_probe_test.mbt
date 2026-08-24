@@ -137,12 +137,10 @@ async test "child failure cancels task group sibling" {
   @async.with_task_group(group => {
     group.spawn_bg() <| () => { raise ProbeFailure }
     group.spawn_bg() <| () => {
-      @async.sleep(30000) catch {
-        error => {
-          sibling_cancelled.val = @async.is_cancellation_error(error)
-          raise error
-        }
+      errdefer {
+        sibling_cancelled.val = @async.is_being_cancelled()
       }
+      @async.sleep(30000)
     }
   }) catch {
     ProbeFailure => saw_failure.val = true

@@ -15,6 +15,15 @@ import {
   "moonbitlang/core/encoding/utf8",
 }
 
+// `moonbitlang/async` exposes its server-side TLS constructors as experimental
+// internal APIs. Version 0.1.0 pins the dependency and covers both call sites
+// with TLS startup, rejection, interoperability, concurrency, and restart tests.
+
+warnings = "-alert_internal"
+
 options(
-  targets: { "m0_server.mbt": [ "native" ], "m0_server_test.mbt": [ "native" ] },
+  targets: {
+    "connection_server.mbt": [ "native" ],
+    "connection_server_test.mbt": [ "native" ],
+  },
 )

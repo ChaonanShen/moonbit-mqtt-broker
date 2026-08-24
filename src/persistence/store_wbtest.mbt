@@ -47,7 +47,7 @@ fn representative_snapshot() -> @router.BrokerSnapshotV1 {
 
 ///|
 async fn with_store_dir(name : String, body : async (String) -> Unit) -> Unit {
-  let path = "_build/m4-store-" + name
+  let path = "_build/persistence-store-" + name
   if @fs.exists(path) {
     @fs.rmdir(path, recursive=true)
   }

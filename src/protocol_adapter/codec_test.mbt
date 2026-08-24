@@ -5,7 +5,7 @@ fn round_trip(packet : Packet) -> Unit raise {
 }
 
 ///|
-test "candidate adapter round trips all m0 packet families" {
+test "candidate adapter round trips all connect packet families" {
   let id = PacketId::new(42).unwrap()
   round_trip(
     Packet::Connect({
@@ -91,7 +91,7 @@ test "publish wire header preserves retain dup and qos flags" {
 test "qos1 publish and puback preserve packet id and dup" {
   let id = PacketId::new(65535).unwrap()
   let publish = Packet::Publish({
-    topic: "m3/qos1",
+    topic: "qos1/qos1",
     payload: b"payload",
     qos: QoS::QoS1,
     packet_id: Some(id),

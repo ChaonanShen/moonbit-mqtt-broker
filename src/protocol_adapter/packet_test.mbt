@@ -19,13 +19,13 @@ test "packet identifier validates mqtt range" {
 ///|
 test "connect keeps binary password and atomic will fields" {
   let connect : ConnectPacket = {
-    client_id: "m0-client",
+    client_id: "connect-client",
     username: Some("user"),
     password: Some(b"\x00secret"),
     keep_alive: 60,
     clean_session: true,
     will: Some({
-      topic: "clients/m0/status",
+      topic: "clients/connect/status",
       payload: b"offline",
       qos: QoS::QoS1,
       retain: true,

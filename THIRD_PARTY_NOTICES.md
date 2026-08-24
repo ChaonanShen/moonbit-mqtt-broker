@@ -5,7 +5,7 @@ reference projects are used or consulted for version 0.1.0.
 
 | Item | Version / baseline | License | Use |
 | --- | --- | --- | --- |
-| MoonBit toolchain and core | `0.10.8+8606a5800` | MoonBit distribution terms / Apache-2.0 components | Compiler, build and core library; <https://github.com/moonbitlang/core> |
+| MoonBit toolchain and core | `0.10.10+f8a486b6f` | MoonBit distribution terms / Apache-2.0 components | Compiler, build and core library; <https://github.com/moonbitlang/core> |
 | `moonbitlang/async` | `0.20.6` | Apache-2.0 | Runtime TCP/tasks/queues/timers; <https://mooncakes.io/docs/moonbitlang/async> |
 | `zbhzs1/moonbit-mqtt` | `0.1.0` | Apache-2.0 | Runtime codec adapter backend; <https://mooncakes.io/docs/zbhzs1/moonbit-mqtt> |
 | `bobzhang/toml` | `0.4.3` | Apache-2.0 | Runtime maintained TOML parser; <https://github.com/moonbit-community/toml-parser> |

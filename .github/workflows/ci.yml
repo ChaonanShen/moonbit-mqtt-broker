@@ -6,31 +6,39 @@ on:
   workflow_dispatch:
     inputs:
       soak:
-        description: Run the ten-minute extended M11 stability profile
+        description: Run the ten-minute extended stability profile
         required: false
         type: boolean
         default: false
 
 jobs:
-  m11-native:
+  release-native:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Build pinned Linux x86_64 toolchain
         run: docker build --platform linux/amd64 --tag moonbit-mqtt-broker-dev .
-      - name: Run M11 verification
+      - name: MoonBit format, check, test, build, and interface validation
+        run: |
+          scripts/moon-docker.sh update
+          scripts/moon-docker.sh fmt --check
+          scripts/moon-docker.sh check --target native --deny-warn
+          scripts/moon-docker.sh test --target native --deny-warn
+          scripts/moon-docker.sh build --target native
+          scripts/moon-docker.sh info
+      - name: Run release verification
         run: |
           if [[ "${{ github.event.inputs.soak }}" == "true" ]]; then
-            export M5_SOAK=1
+            export RELEASE_SOAK=1
           fi
           mkdir -p test-results
-          scripts/m11-verify-docker.sh 2>&1 | tee test-results/m11-verifier.log
+          scripts/verify-release-docker.sh 2>&1 | tee test-results/release-verifier.log
       - name: Upload verifier log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: m11-verifier-log
-          path: test-results/m11-verifier.log
+          name: release-verifier-log
+          path: test-results/release-verifier.log
           if-no-files-found: warn
           retention-days: 7
