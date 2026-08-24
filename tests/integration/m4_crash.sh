@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Gate: startup rejects corrupt snapshot before listen
 set -euo pipefail
 
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

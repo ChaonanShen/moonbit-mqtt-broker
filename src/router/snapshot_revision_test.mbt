@@ -255,3 +255,24 @@ test "restored snapshot revision starts at zero" {
   }).unwrap()
   assert_eq(restored.snapshot_revision(), 0L)
 }
+
+///|
+test "clean sessions are absent from disk snapshot" {
+  let state = revision_state()
+  let clean = revision_client("not-on-disk")
+  ignore(state.apply(CreateSession(clean)))
+  ignore(
+    state.apply(
+      Subscribe({
+        client_id: clean,
+        entries: [
+          {
+            filter: revision_filter("not-on-disk/#"),
+            qos: @session.DeliveryQoS::QoS1,
+          },
+        ],
+      }),
+    ),
+  )
+  assert_eq(state.export_snapshot().sessions, [])
+}

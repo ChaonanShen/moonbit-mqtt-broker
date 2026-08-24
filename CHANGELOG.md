@@ -1,5 +1,23 @@
 # Changelog
 
+## M4 - 2026-08-24
+
+- Added deterministic checksummed Disk Snapshot V1 with strict UTF-8,
+  count/length preflight, resource limits, and byte-stable golden coverage.
+- Added canonical data directories, process-lifetime exclusive locks, bounded
+  regular-file recovery, stale-temp deletion, and fatal corrupt-main policy.
+- Added same-directory `0600` temp writes, full file sync, atomic replace rename,
+  directory sync, and failure-injection proof that pre-rename failures preserve
+  the previous main snapshot.
+- Added export-visible Broker revisions, quiet debounce/max-delay scheduling,
+  capacity-one latest-wins submission, async single-writer retry/recovery, and
+  natural-shutdown drain.
+- Added `--data-dir` and snapshot tuning CLI flags with recovery-before-listen
+  startup ordering and explicit classified logs.
+- Added MQTT.js three-process restart, 20-session capacity, raw inflight
+  Packet-ID/DUP, Mosquitto restart, stale-temp/crash, special-file, permission,
+  and corrupt-main gates plus the reproducible M4 Docker verifier.
+
 ## M3 - 2026-08-22
 
 - Added inbound and outbound MQTT 3.1.1 QoS 1 with same-ID PUBACK, per-Session

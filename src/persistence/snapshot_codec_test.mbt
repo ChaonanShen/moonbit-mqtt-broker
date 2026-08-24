@@ -181,7 +181,7 @@ test "snapshot decoder rejects invalid utf8 bool qos and packet ids" {
 }
 
 ///|
-test "snapshot codec enforces payload and final file size limits" {
+test "exact snapshot size limit is accepted and plus one rejected" {
   let snapshot = representative_snapshot()
   let encoded = encode_snapshot(snapshot).unwrap()
   assert_eq(

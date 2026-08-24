@@ -144,4 +144,32 @@ subscriptions, inflight order/IDs, pending FIFO order, next Packet ID, and
 retained messages. It excludes clean Sessions and all live connection data.
 Import validates the complete snapshot and every configured limit before the
 new `BrokerState` is returned, and restored Sessions start detached. M3 performs
-no filesystem I/O; M4 will encode and atomically persist this model.
+no filesystem I/O.
+
+## M4 local snapshot persistence
+
+```text
+RouterDriver (single BrokerState writer)
+  └─ revision observation + debounce/max-delay
+       └─ capacity-one latest-wins SnapshotSink
+            └─ single SnapshotWriter
+                 └─ temp write → full fsync → replace rename → directory fsync
+```
+
+`BrokerState.snapshot_revision` is process-local metadata. It advances only
+when the deterministic Snapshot V1 export changes; it is never encoded. The
+Router exports immutable snapshot data and submits without waiting for disk.
+The writer serializes saves, absorbs newer revisions while retrying, and never
+allows an older revision to overwrite a newer successful commit.
+
+`src/persistence` depends on the public Router snapshot model and async file
+APIs, but not on Server, sockets, protocol adapters, or Router private maps.
+Router, Session, and Topic packages contain no filesystem imports.
+
+With `--data-dir`, command startup creates and canonicalizes the directory,
+acquires a process-lifetime exclusive lock, deletes stale temp data without
+promoting it, and strictly loads/imports the main snapshot. Only then does
+`server.run` create the listener. Missing main means first startup; corrupt,
+oversize, symlink, or non-regular main is fatal. Disk V1 is canonical binary
+with magic/version/flags/length and IEEE CRC-32. See `persistence.md` for the
+format and operational contract.
