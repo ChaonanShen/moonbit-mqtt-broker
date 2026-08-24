@@ -62,7 +62,7 @@ window may be lost on crash; recovery is to the most recent successfully
 committed snapshot. A corrupt main snapshot prevents startup rather than being
 ignored or replaced by stale temp data.
 
-M5 compares a normalized common matrix against Mosquitto 2.0.18 and Aedes
+Release verification compares a normalized common matrix against Mosquitto 2.0.18 and Aedes
 1.1.1. Mosquitto may choose QoS 0 when one client has overlapping QoS 0 and
 QoS 1 subscriptions; MQTT 3.1.1 section 3.3.5 requires the maximum QoS of all
 matching subscriptions. The MoonBit exact matrix therefore continues to
@@ -73,6 +73,9 @@ reference only, and no Aedes source is linked into the Broker.
 TLS uses the pinned `moonbitlang/async@0.20.6` OpenSSL-backed Native transport.
 The listener is either plaintext or TLS, never both. mTLS, SNI routing,
 certificate reload, multiple listeners, and Windows TLS are not claimed.
+The dependency currently marks its server-side TLS constructors experimental;
+this release pins the exact version and validates startup, rejection,
+interoperability, concurrency, shutdown, and restart behavior in CI.
 
 The supported `$SYS/broker` set includes version, uptime, connected clients,
 Sessions, subscriptions, retained, QoS 1 inflight/pending, received/sent/dropped

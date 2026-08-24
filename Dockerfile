@@ -14,11 +14,11 @@ RUN curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-
     && node --version \
     && npm --version
 
-ENV MOONBIT_INSTALL_VERSION="0.10.8+8606a5800"
+ENV MOONBIT_INSTALL_VERSION="0.10.10+f8a486b6f"
 RUN curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
 
 ENV PATH="/root/.moon/bin:${PATH}"
-RUN moon update
+RUN moon version --all && moon update
 
 WORKDIR /workspace
 ENTRYPOINT ["moon"]

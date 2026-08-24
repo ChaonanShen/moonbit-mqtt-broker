@@ -43,24 +43,24 @@ const message = (client, topic, timeoutMs = 6000) => new Promise((resolve, rejec
   })
 })
 
-const subscriber = await connect(`m5-${label}-subscriber`)
-const grants = await subscribe(subscriber.client, 'm5/reference/#', 1)
+const subscriber = await connect(`release-${label}-subscriber`)
+const grants = await subscribe(subscriber.client, 'release/reference/#', 1)
 if (grants.length !== 1 || grants[0].qos !== 1) throw new Error(`${label} invalid SUBACK`)
-const publisher = await connect(`m5-${label}-publisher`)
-const live = message(subscriber.client, 'm5/reference/live')
-await publish(publisher.client, 'm5/reference/live', 'qos1', { qos: 1 })
+const publisher = await connect(`release-${label}-publisher`)
+const live = message(subscriber.client, 'release/reference/live')
+await publish(publisher.client, 'release/reference/live', 'qos1', { qos: 1 })
 if ((await live).payload !== 'qos1') throw new Error(`${label} QoS1 payload mismatch`)
-await publish(publisher.client, 'm5/reference/retained', 'retained', { qos: 1, retain: true })
-const retainedClient = await connect(`m5-${label}-retained`)
-const retained = message(retainedClient.client, 'm5/reference/retained')
-await subscribe(retainedClient.client, 'm5/reference/retained', 1)
+await publish(publisher.client, 'release/reference/retained', 'retained', { qos: 1, retain: true })
+const retainedClient = await connect(`release-${label}-retained`)
+const retained = message(retainedClient.client, 'release/reference/retained')
+await subscribe(retainedClient.client, 'release/reference/retained', 1)
 const retainedPacket = await retained
 if (retainedPacket.payload !== 'retained' || !retainedPacket.packet.retain) {
   throw new Error(`${label} retained replay mismatch`)
 }
-const will = message(subscriber.client, 'm5/reference/will')
-const doomed = await connect(`m5-${label}-will`, {
-  will: { topic: 'm5/reference/will', payload: 'will', qos: 1, retain: false }
+const will = message(subscriber.client, 'release/reference/will')
+const doomed = await connect(`release-${label}-will`, {
+  will: { topic: 'release/reference/will', payload: 'will', qos: 1, retain: false }
 })
 doomed.client.end(true)
 if ((await will).payload !== 'will') throw new Error(`${label} Will mismatch`)

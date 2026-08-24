@@ -3,7 +3,7 @@ async fn with_capability_dir(
   name : String,
   body : async (String) -> Unit,
 ) -> Unit {
-  let path = "_build/m4-fs-capability-" + name
+  let path = "_build/persistence-fs-capability-" + name
   if @fs.exists(path) {
     @fs.rmdir(path, recursive=true)
   }
@@ -13,7 +13,7 @@ async fn with_capability_dir(
 }
 
 ///|
-async test "m4 filesystem supports full file and directory sync" {
+async test "persistence filesystem supports full file and directory sync" {
   with_capability_dir("sync", path => {
     let file_path = path + "/value"
     let file = @fs.open(
@@ -34,7 +34,7 @@ async test "m4 filesystem supports full file and directory sync" {
 }
 
 ///|
-async test "m4 filesystem supports atomic replace rename" {
+async test "persistence filesystem supports atomic replace rename" {
   with_capability_dir("rename", path => {
     let main = path + "/broker.snapshot"
     let temp = path + "/broker.snapshot.tmp"
@@ -58,7 +58,7 @@ async test "m4 filesystem supports atomic replace rename" {
 }
 
 ///|
-async test "m4 filesystem exclusive locks conflict and release" {
+async test "persistence filesystem exclusive locks conflict and release" {
   with_capability_dir("lock", path => {
     let lock_path = path + "/broker.snapshot.lock"
     let first = @fs.open(
@@ -79,7 +79,7 @@ async test "m4 filesystem exclusive locks conflict and release" {
 }
 
 ///|
-async test "m4 filesystem distinguishes symlinks from regular files" {
+async test "persistence filesystem distinguishes symlinks from regular files" {
   with_capability_dir("kind", path => {
     let regular = path + "/regular"
     let link = path + "/link"
@@ -92,7 +92,7 @@ async test "m4 filesystem distinguishes symlinks from regular files" {
 }
 
 ///|
-async test "m4 task group runs cancelled task cleanup before drain defer" {
+async test "persistence task group runs cancelled task cleanup before drain defer" {
   let log : Array[String] = []
   @async.with_task_group() <| group => {
     group.add_defer(() => log.push("drain"))

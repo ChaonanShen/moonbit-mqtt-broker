@@ -29,7 +29,7 @@ for _ in $(seq 1 300); do
 done
 grep -q 'MQTT broker listening' "${BROKER_LOG}"
 
-stdbuf -oL -eL mosquitto_sub -h 127.0.0.1 -p "${port}" -i m5-example-basic-sub \
+stdbuf -oL -eL mosquitto_sub -h 127.0.0.1 -p "${port}" -i release-example-basic-sub \
   -q 1 -t 'examples/basic/#' -C 3 >"${SUB_LOG}" 2>&1 &
 SUB_PID="$!"
 for _ in $(seq 1 200); do
@@ -39,9 +39,9 @@ for _ in $(seq 1 200); do
   sleep 0.025
 done
 grep -q 'subscriber ready' "${SUB_LOG}"
-mosquitto_pub -h 127.0.0.1 -p "${port}" -i m5-example-basic-qos0 -q 0 \
+mosquitto_pub -h 127.0.0.1 -p "${port}" -i release-example-basic-qos0 -q 0 \
   -t examples/basic/qos0 -m 'hello qos0'
-mosquitto_pub -h 127.0.0.1 -p "${port}" -i m5-example-basic-qos1 -q 1 \
+mosquitto_pub -h 127.0.0.1 -p "${port}" -i release-example-basic-qos1 -q 1 \
   -t examples/basic/qos1 -m 'hello qos1'
 wait "${SUB_PID}"
 SUB_PID=""

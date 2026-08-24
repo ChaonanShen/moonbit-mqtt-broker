@@ -12,7 +12,9 @@ package_list="$(mktemp)"
 cleanup() { rm -rf "${source_stage}" "${clean_room}"; rm -f "${package_list}"; }
 trap cleanup EXIT
 
-git ls-files --cached --others --exclude-standard -z \
+while IFS= read -r -d '' path; do
+  [[ -e "${path}" || -L "${path}" ]] && printf '%s\0' "${path}"
+done < <(git ls-files --cached --others --exclude-standard -z) \
   | tar --null -T - -cf - \
   | tar -xf - -C "${source_stage}"
 (
@@ -30,7 +32,7 @@ if grep -Eiq '(^|/)(\.git|_build|target|\.moon(cakes)?|node_modules|test-results
   exit 1
 fi
 for required in moon.mod README.md LICENSE CHANGELOG.md THIRD_PARTY_NOTICES.md \
-  docs/release.md examples/basic_pubsub.sh src/cmd/broker/main.mbt; do
+  docs/getting-started.md examples/basic_pubsub.sh src/cmd/broker/main.mbt; do
   grep -qx "${required}" "${package_list}" || { echo "release package missing ${required}" >&2; exit 1; }
 done
 if grep -Ev '^(moon\.mod|README\.md|LICENSE|CHANGELOG\.md|THIRD_PARTY_NOTICES\.md|Dockerfile|\.gitignore|docs/|examples/|scripts/|src/|tests/|tools/)' "${package_list}" | grep -q .; then
@@ -56,14 +58,15 @@ fi
 (
   cd "${clean_room}"
   moon update
-  moon check --target native
-  moon check --target native --frozen
+  moon check --target native --deny-warn
+  moon check --target native --frozen --deny-warn
+  moon test --target native --frozen --deny-warn
   moon build --target native --frozen
   version="$(moon run --target native src/cmd/broker -- --version)"
   [[ "${version}" = '0.1.0' ]]
 )
 
 sha256="$(sha256sum "${PACKAGE}" | awk '{print $1}')"
-echo "M5_PACKAGE=${PACKAGE}"
-echo "M5_PACKAGE_SHA256=${sha256} FILES=${file_count} ZIP_BYTES=${package_bytes} UNCOMPRESSED_BYTES=${uncompressed_bytes}"
-echo 'M5 clean-room release package audit passed'
+echo "RELEASE_PACKAGE=${PACKAGE}"
+echo "RELEASE_PACKAGE_SHA256=${sha256} FILES=${file_count} ZIP_BYTES=${package_bytes} UNCOMPRESSED_BYTES=${uncompressed_bytes}"
+echo 'RELEASE clean-room release package audit passed'

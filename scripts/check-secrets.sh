@@ -11,4 +11,4 @@ if rg -l --hidden 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' \
   echo 'private key material found in source tree' >&2
   exit 1
 fi
-echo 'M11 secret and runtime-artifact scan passed'
+echo 'RELEASE secret and runtime-artifact scan passed'

@@ -1,109 +1,26 @@
 # Changelog
 
+All notable user-visible changes are documented here.
+
 ## [0.1.0] - 2026-08-24
 
-- Released a single-node MQTT 3.1.1 TCP/TLS Broker for Linux x86_64 Native
+- Released a single-node MQTT 3.1.1 TCP/TLS broker for Linux x86_64 Native
   with QoS 0/1, wildcard routing, retained messages, QoS 0/1 Wills, Keep Alive,
-  takeover, persistent Sessions, bounded offline QoS 1, and reconnect DUP.
-- Added optional checksummed Disk V1 latest-committed snapshot persistence with
-  strict recovery, an exclusive data-directory lock, atomic replacement,
-  debounce/latest-wins writing, retry, and restart restoration before listen.
-- Added final MQTT.js/Mosquitto/Aedes protocol matrices, 100-client and bounded
-  workload gates, 10,000×1 KiB QoS 0, 10×100 offline QoS 1, slow-consumer,
-  churn, committed-restart, executable-example, documentation, and clean-room
-  package verification.
-- Added side-effect-free `--help` and `--version`, three executable examples,
-  fixed toolchain/provenance records, and a manual release runbook.
-- Added SIGTERM/SIGINT graceful service shutdown that suppresses active Wills,
-  forces the latest debounce-window Snapshot, drains the writer, and is covered
-  by process-level retained/Session/offline-QoS-1 restart tests.
-- Added an optional TLS-only single listener with PEM/key startup validation,
-  private-key permission enforcement, bounded handshakes, MQTT.js/Mosquitto
-  interoperability, concurrent-client isolation, and persistent restart tests.
-- Added Argon2id authentication, allow-only ACLs, protected `$SYS` writes,
-  Principal-owned Client IDs, strict Snapshot V1-to-V2 migration, and
-  restart-safe owner enforcement.
-- Added configurable persistent-Session expiry with deterministic bounded
-  sweeps, reconnect reset, time-regression protection, and persisted deletion.
-- Added isolated `$SYS/broker` metrics, text/JSON structured logs with levels
-  and redaction, plus maintained TOML configuration with validation, redacted
-  effective output, and CLI-over-file precedence.
-- Known limitations: no MQTT 5, QoS 2, WebSocket,
-  shared subscriptions, Bridge, plugins, clustering, external databases, WAL,
-  or zero-loss durability. Writers emit Disk/Snapshot V2; existing V1 snapshots
-  are decoded strictly and migrated on the next commit.
-
-## M4 - 2026-08-24
-
-- Added deterministic checksummed Disk Snapshot V1 with strict UTF-8,
-  count/length preflight, resource limits, and byte-stable golden coverage.
-- Added canonical data directories, process-lifetime exclusive locks, bounded
-  regular-file recovery, stale-temp deletion, and fatal corrupt-main policy.
-- Added same-directory `0600` temp writes, full file sync, atomic replace rename,
-  directory sync, and failure-injection proof that pre-rename failures preserve
-  the previous main snapshot.
-- Added export-visible Broker revisions, quiet debounce/max-delay scheduling,
-  capacity-one latest-wins submission, async single-writer retry/recovery, and
-  natural-shutdown drain.
-- Added `--data-dir` and snapshot tuning CLI flags with recovery-before-listen
-  startup ordering and explicit classified logs.
-- Added MQTT.js three-process restart, 20-session capacity, raw inflight
-  Packet-ID/DUP, Mosquitto restart, stale-temp/crash, special-file, permission,
-  and corrupt-main gates plus the reproducible M4 Docker verifier.
-
-## M3 - 2026-08-22
-
-- Added inbound and outbound MQTT 3.1.1 QoS 1 with same-ID PUBACK, per-Session
-  Packet ID allocation, ordered inflight ownership, and pending FIFO promotion.
-- Added `clean_session=false`, complete `session_present` behavior, persistent
-  subscriptions, bounded offline QoS 1, and original-ID `DUP=1` reconnect replay.
-- Added QoS 1 Will routing/Retained behavior and clean/persistent takeover,
-  disconnect, stale-generation, and resource-exhaustion semantics.
-- Added per-Session and total Session/inflight/pending limits with atomic
-  client-publication failure and isolated no-origin resource drops.
-- Added deterministic, versioned Snapshot V1 pure import/export with complete
-  validation, alias isolation, and restored-state injection before accept.
-- Added raw TCP, MQTT.js, and Mosquitto QoS 1/persistent-session gates plus the
-  reproducible M3 Docker verifier.
-
-## M2 - 2026-08-22
-
-- Added a deterministic BrokerRuntime and bounded RouterDriver with unique
-  connection generations and stale-event isolation.
-- Added multi-client async TCP supervision, streaming decode, ordered writers,
-  handshake/Keep Alive timeouts, and slow-consumer isolation.
-- Added network QoS 0 publish/subscribe, SUBACK/UNSUBACK, Retained, QoS 0 Will,
-  empty Client IDs, and Client ID takeover.
-- Added validated M2 resource/CLI configuration, 10,000-event and concurrent
-  loopback regressions, and MQTT.js/Mosquitto interoperability gates.
-- Explicitly reject persistent sessions, QoS 1 Publish/PUBACK, and QoS 1 Will
-  until M3 instead of silently downgrading them.
-- Fixed equal packet/receive-buffer handling so a complete packet can be
-  drained before an adjacent sticky packet is read.
-- Expanded the M2 acceptance gate with 58 server test blocks covering the full
-  Will close-reason matrix, stale generations, protocol-error Will, retained
-  deletion, slow consumers, supervisor first-terminal-wins, capacity-one event
-  queues, and exact/overflow packet boundaries.
-- Added deterministic reader/writer failure classification, simultaneous
-  reader/writer/closer termination, Queue-close wakeup, and healthy-client
-  isolation coverage for transport I/O failures.
-
-## M1 - 2026-08-21
-
-- Added validated Topic/Filter parsing and matching for `+`, `#`, empty levels,
-  and `$SYS` separation.
-- Added deterministic subscription indexing with overlap maximum-QoS merge,
-  bounded per-Session/total subscriptions, and stable delivery ordering.
-- Added retained-message set/replay/delete with capacity limits, pure
-  BrokerState event/action transitions, in-memory Session ownership, and a
-  unified internal Publish route for clients and Wills.
-
-## M0 - 2026-08-21
-
-- Pinned the Linux x86_64 Native MoonBit build and test environment.
-- Verified TCP, bounded Queue, Timer, cancellation, and TaskGroup behavior.
-- Froze project-owned MQTT Packet, CodecError, and FrameDecoder boundaries.
-- Passed the candidate codec gate and selected `moonbit-mqtt@0.1.0`.
-- Added the minimal real TCP MQTT 3.1.1 CONNECT → CONNACK service.
-- Added shared Docker/CI verification, compatibility, provenance, and support
-  documentation.
+  Client ID takeover, persistent Sessions, bounded offline QoS 1, and reconnect
+  replay with the original Packet ID and `DUP=1`.
+- Added optional checksummed Disk/Snapshot V2 latest-committed persistence,
+  strict V1 migration, exclusive data-directory locking, atomic replacement,
+  bounded retry, and state recovery before the listener opens.
+- Added graceful SIGTERM/SIGINT shutdown that suppresses active Wills, forces
+  the newest snapshot, and drains the persistence writer before exit.
+- Added optional Argon2id authentication, allow-only ACLs, Principal-owned
+  Client IDs, persistent-Session expiry, and a TLS-only listener mode.
+- Added `$SYS/broker/#` metrics, redacted text/JSON logs, TOML configuration,
+  side-effect-free configuration validation, and CLI-over-file precedence.
+- Added executable examples, MQTT.js/Mosquitto interoperability tests, Aedes
+  behavioral comparison, bounded stability workloads, CI, secret scanning,
+  documentation checks, and clean-room mooncakes package verification.
+- Pinned MoonBit `0.10.10+f8a486b6f` for reproducible release validation.
+- Known limitations: no MQTT 5, QoS 2, WebSocket, shared subscriptions,
+  bridges, plugins, clustering, external databases, WAL, or zero-loss
+  durability.

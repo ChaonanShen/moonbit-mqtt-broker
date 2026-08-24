@@ -164,6 +164,7 @@ async fn supervise_transport(
 }
 
 ///|
+#warnings("-unused_value")
 async fn read_connection(
   connection : @socket.Tcp,
   connection_id : ConnectionId,
@@ -179,6 +180,7 @@ async fn read_connection(
 }
 
 ///|
+#warnings("-unused_value")
 async fn write_connection(
   connection : @socket.Tcp,
   sink : TransportSink,
