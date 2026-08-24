@@ -1,5 +1,7 @@
 # Configuration
 
+[中文](configuration.zh_CN.md) | **English**
+
 Precedence is CLI over TOML over built-in defaults. The Broker uses maintained
 `bobzhang/toml`; malformed TOML, duplicate keys, unknown sections/keys, and
 wrong types are fatal.

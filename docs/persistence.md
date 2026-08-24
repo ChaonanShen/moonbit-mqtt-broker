@@ -1,5 +1,7 @@
 # Local snapshot persistence
 
+[中文](persistence.zh_CN.md) | **English**
+
 Persistence is disabled unless `--data-dir PATH` is provided. In memory-only
 mode the broker creates no persistence files. Enabled mode
 accepts these options:

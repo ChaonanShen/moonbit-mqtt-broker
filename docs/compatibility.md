@@ -1,5 +1,7 @@
 # Compatibility and support matrix
 
+[中文](compatibility.zh_CN.md) | **English**
+
 | Capability | Current status | Notes |
 | --- | --- | --- |
 | Linux x86_64 Native build | Supported | Pinned Docker and CI path |

@@ -1,5 +1,7 @@
 # Architecture
 
+[中文](architecture.zh_CN.md) | **English**
+
 The broker uses a single-writer runtime for all mutable MQTT state. Connection
 tasks own sockets and byte buffers; they cannot mutate Sessions, subscriptions,
 retained messages, or persistence state directly.

@@ -1,5 +1,7 @@
 # Getting started
 
+[中文](getting-started.zh_CN.md) | **English**
+
 This guide starts a local MQTT 3.1.1 broker, verifies publish/subscribe, and
 shows the safe path to persistence and authenticated TLS.
 
@@ -120,4 +122,3 @@ This release is single-node and Linux x86_64 Native. It does not implement
 MQTT 5, QoS 2, WebSocket, clustering, bridges, plugins, external databases,
 WAL, or zero-loss durability. Review the [compatibility matrix](compatibility.md)
 before deployment.
-
