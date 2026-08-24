@@ -28,6 +28,13 @@ pub fn PersistenceConfig::new(
   if debounce_ms < 1L {
     return Err(InvalidConfiguration("debounce_ms must be at least 1"))
   }
+  if debounce_ms > 2147483647L ||
+    max_delay_ms > 2147483647L ||
+    retry_ms > 2147483647L {
+    return Err(
+      InvalidConfiguration("snapshot timing values must fit platform timers"),
+    )
+  }
   if max_delay_ms < debounce_ms {
     return Err(
       InvalidConfiguration("max_delay_ms must be at least debounce_ms"),

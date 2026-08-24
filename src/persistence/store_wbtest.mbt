@@ -280,3 +280,85 @@ async test "snapshot import rejects duplicate domain keys atomically" {
     store.close()
   })
 }
+
+///|
+test "snapshot sink capacity one overwrites with latest revision" {
+  let sink = SnapshotSink::new()
+  assert_true(sink.submit({ revision: 1L, snapshot: empty_snapshot() }))
+  assert_true(
+    sink.submit({ revision: 2L, snapshot: representative_snapshot() }),
+  )
+  assert_true(sink.submit({ revision: 3L, snapshot: empty_snapshot() }))
+  assert_eq(sink.queue.try_get().unwrap().revision, 3L)
+  sink.close()
+  assert_false(sink.submit({ revision: 4L, snapshot: empty_snapshot() }))
+}
+
+///|
+async test "snapshot writer commits only the latest queued revision" {
+  with_store_dir("writer-latest", path => {
+    let store = SnapshotStore::open(store_config(path)).unwrap()
+    let sink = SnapshotSink::new()
+    let writer = SnapshotWriter::new(store, sink, 20L).unwrap()
+    assert_true(sink.submit({ revision: 1L, snapshot: empty_snapshot() }))
+    assert_true(
+      sink.submit({ revision: 2L, snapshot: representative_snapshot() }),
+    )
+    sink.close()
+    writer.run()
+    assert_eq(writer.committed_revision(), 2L)
+    assert_eq(writer.attempt_count(), 1)
+    assert_eq(
+      store
+      .load_state(persistence_broker_config(), 1048576)
+      .unwrap()
+      .export_snapshot(),
+      representative_snapshot(),
+    )
+    store.close()
+  })
+}
+
+///|
+async test "failed save retries latest snapshot without blocking router" {
+  with_store_dir("writer-retry", path => {
+    let store = SnapshotStore::open(store_config(path)).unwrap()
+    store.fault = Some(TempOpen)
+    let sink = SnapshotSink::new()
+    let writer = SnapshotWriter::new(store, sink, 20L).unwrap()
+    assert_true(sink.submit({ revision: 1L, snapshot: empty_snapshot() }))
+    @async.with_task_group() <| group => {
+      let task = group.spawn(() => writer.run())
+      for _ in 0..<100 {
+        if writer.is_degraded() {
+          break
+        }
+        @async.sleep(1)
+      }
+      assert_true(writer.is_degraded())
+      // Submission remains synchronous while the writer is in its retry delay.
+      assert_true(
+        sink.submit({ revision: 2L, snapshot: representative_snapshot() }),
+      )
+      store.fault = None
+      for _ in 0..<100 {
+        if writer.committed_revision() == 2L {
+          break
+        }
+        @async.sleep(2)
+      }
+      assert_eq(writer.committed_revision(), 2L)
+      assert_false(writer.is_degraded())
+      sink.close()
+      task.wait()
+    }
+    assert_eq(
+      store
+      .load_state(persistence_broker_config(), 1048576)
+      .unwrap()
+      .export_snapshot(),
+      representative_snapshot(),
+    )
+    store.close()
+  })
+}

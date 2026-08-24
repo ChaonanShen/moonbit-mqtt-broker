@@ -2,11 +2,48 @@
 pub struct RouterDriver {
   runtime : BrokerRuntime
   sinks : Map[ConnectionId, TransportSink]
+  priv snapshot : SnapshotDriverState?
 }
 
 ///|
-pub fn RouterDriver::new(runtime : BrokerRuntime) -> RouterDriver {
-  { runtime, sinks: Map([]) }
+pub struct SnapshotDriverConfig {
+  sink : @persistence.SnapshotSink
+  debounce_ms : Int64
+  max_delay_ms : Int64
+}
+
+///|
+priv struct SnapshotDriverState {
+  sink : @persistence.SnapshotSink
+  schedule : SnapshotSchedule
+}
+
+///|
+pub fn SnapshotDriverConfig::new(
+  sink : @persistence.SnapshotSink,
+  debounce_ms : Int64,
+  max_delay_ms : Int64,
+) -> Result[SnapshotDriverConfig, @persistence.PersistenceError] {
+  match SnapshotSchedule::new(0L, debounce_ms, max_delay_ms) {
+    Ok(_) => Ok({ sink, debounce_ms, max_delay_ms })
+    Err(error) => Err(error)
+  }
+}
+
+///|
+pub fn RouterDriver::new(
+  runtime : BrokerRuntime,
+  snapshot? : SnapshotDriverConfig,
+) -> RouterDriver {
+  let snapshot = snapshot.map(config => SnapshotDriverState::{
+    sink: config.sink,
+    schedule: SnapshotSchedule::new(
+      runtime.broker_state().snapshot_revision(),
+      config.debounce_ms,
+      config.max_delay_ms,
+    ).unwrap(),
+  })
+  { runtime, sinks: Map([]), snapshot }
 }
 
 ///|
@@ -17,6 +54,56 @@ pub fn RouterDriver::runtime(self : RouterDriver) -> BrokerRuntime {
 ///|
 pub fn RouterDriver::transport_count(self : RouterDriver) -> Int {
   self.sinks.length()
+}
+
+///|
+fn RouterDriver::submit_snapshot(
+  self : RouterDriver,
+  state : SnapshotDriverState,
+  revision : Int64,
+) -> Bool {
+  let submitted = state.sink.submit({
+    revision,
+    snapshot: self.runtime.broker_state().export_snapshot(),
+  })
+  if submitted {
+    state.schedule.mark_submitted(revision)
+  }
+  submitted
+}
+
+///|
+pub fn RouterDriver::poll_snapshot(self : RouterDriver, now_ms : Int64) -> Bool {
+  match self.snapshot {
+    None => false
+    Some(state) => {
+      state.schedule.observe(
+        self.runtime.broker_state().snapshot_revision(),
+        now_ms,
+      )
+      match state.schedule.due_revision(now_ms) {
+        Some(revision) => self.submit_snapshot(state, revision)
+        None => false
+      }
+    }
+  }
+}
+
+///|
+pub fn RouterDriver::force_snapshot(self : RouterDriver) -> Bool {
+  match self.snapshot {
+    None => false
+    Some(state) => {
+      state.schedule.observe(
+        self.runtime.broker_state().snapshot_revision(),
+        @async.now(),
+      )
+      match state.schedule.force_revision() {
+        Some(revision) => self.submit_snapshot(state, revision)
+        None => false
+      }
+    }
+  }
 }
 
 ///|
@@ -124,6 +211,7 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
     Runtime(event) => self.dispatch(self.runtime.apply(event))
     UnregisterTransport(connection_id) => self.sinks.remove(connection_id)
   }
+  ignore(self.poll_snapshot(@async.now()))
 }
 
 ///|
