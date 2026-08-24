@@ -48,3 +48,11 @@ This is not a fully durable or zero-loss Broker. Changes inside the debounce
 window may be lost on crash; recovery is to the most recent successfully
 committed snapshot. A corrupt main snapshot prevents startup rather than being
 ignored or replaced by stale temp data.
+
+M5 compares a normalized common matrix against Mosquitto 2.0.18 and Aedes
+1.1.1. Mosquitto may choose QoS 0 when one client has overlapping QoS 0 and
+QoS 1 subscriptions; MQTT 3.1.1 section 3.3.5 requires the maximum QoS of all
+matching subscriptions. The MoonBit exact matrix therefore continues to
+require one QoS 1 delivery, while the differential matrix compares delivery
+count and payload for that reference-deviation case. Aedes is a behavioral
+reference only, and no Aedes source is linked into the Broker.
