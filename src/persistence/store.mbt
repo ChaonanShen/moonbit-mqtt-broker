@@ -143,6 +143,26 @@ pub fn SnapshotStore::lock_path(self : SnapshotStore) -> String {
 }
 
 ///|
+pub async fn SnapshotStore::snapshot_size(
+  self : SnapshotStore,
+) -> Result[Int64?, PersistenceError] {
+  if !@fs.exists(self.main_path) {
+    return Ok(None)
+  }
+  let file = @fs.open(self.main_path, mode=ReadOnly, create_mode=OpenExisting) catch {
+    _ => return Err(FileSystem(operation="open-snapshot", path=self.main_path))
+  }
+  let size = file.size() catch {
+    _ => {
+      file.close()
+      return Err(FileSystem(operation="stat-snapshot", path=self.main_path))
+    }
+  }
+  file.close()
+  Ok(Some(size))
+}
+
+///|
 fn SnapshotStore::fail_if(
   self : SnapshotStore,
   point : StoreFaultPoint,
