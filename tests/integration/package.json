@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "mqtt": "5.15.2"
+    "mqtt": "5.15.2",
+    "mqtt-packet": "9.0.2"
   }
 }
