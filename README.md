@@ -122,6 +122,19 @@ scripts/moon-docker.sh build --target native
 scripts/verify-release-docker.sh
 ```
 
+Native password authentication and the full native test suite require the system
+library `libargon2.so.1`. Installing the module from Mooncakes does not install
+this OS dependency. The Docker image already includes it; on Ubuntu/Debian,
+install `libargon2-1` (and `argon2` for fixture/integration checks):
+
+```bash
+sudo apt-get install libargon2-1 argon2
+```
+
+If a native test reports that Argon2id requires `libargon2.so.1`, install the
+runtime or use the Docker commands above. See [security](docs/security.md) for
+the reproducible password fixture and the missing-runtime regression check.
+
 The release verifier also runs protocol/reference matrices, bounded workloads,
 all examples, TLS/security/expiry/configuration process tests, secret and
 documentation checks, and a clean-room mooncakes package build.

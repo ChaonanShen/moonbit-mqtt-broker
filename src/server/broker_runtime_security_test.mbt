@@ -1,11 +1,23 @@
 ///|
 fn security_fixture(
   allow_anonymous? : Bool = false,
-) -> @security.SecurityPolicy {
+) -> @security.SecurityPolicy raise {
+  // Reference checked by scripts/check-argon2.sh (password: correct horse).
   let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
-  let passwords = @security.PasswordDatabase::parse(
-    "sensor01:" + encoded + "\nsensor02:" + encoded + "\n",
-  ).unwrap()
+  let passwords = match
+    @security.PasswordDatabase::parse(
+      "sensor01:" + encoded + "\nsensor02:" + encoded + "\n",
+    ) {
+    Ok(database) => database
+    Err(@security.PasswordFileError::Argon2Unavailable) =>
+      fail(
+        "Argon2id tests require libargon2.so.1: install libargon2-1 on Ubuntu/Debian or use scripts/moon-docker.sh test --target native",
+      )
+    Err(_) =>
+      fail(
+        "invalid Argon2id test fixture: run scripts/check-argon2.sh to check the reference hash",
+      )
+  }
   let acl = @security.AclPolicy::parse(
     (
       #|user sensor01
@@ -23,7 +35,7 @@ fn security_fixture(
 }
 
 ///|
-fn secure_runtime(allow_anonymous? : Bool = false) -> BrokerRuntime {
+fn secure_runtime(allow_anonymous? : Bool = false) -> BrokerRuntime raise {
   let config = runtime_config()
   BrokerRuntime::new(
     config,

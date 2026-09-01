@@ -23,7 +23,7 @@ pub struct PasswordDatabase {
 ///|
 #borrow(encoded, password)
 extern "C" fn verify_argon2id_ffi(
-  encoded : String,
+  encoded : Bytes,
   encoded_length : Int,
   password : Bytes,
   password_length : Int,
@@ -31,7 +31,13 @@ extern "C" fn verify_argon2id_ffi(
 
 ///|
 fn verify_argon2id(encoded : String, password : Bytes) -> Int {
-  verify_argon2id_ffi(encoded, encoded.length(), password, password.length())
+  let encoded_bytes = @utf8.encode(encoded)
+  verify_argon2id_ffi(
+    encoded_bytes,
+    encoded_bytes.length(),
+    password,
+    password.length(),
+  )
 }
 
 ///|
@@ -64,6 +70,13 @@ pub fn PasswordDatabase::parse(
     }
     if !encoded.has_prefix("$argon2id$") {
       return Err(UnsupportedHash(index + 1))
+    }
+    // PHC encoded hashes are printable ASCII. Reject NUL before crossing the
+    // C string boundary, and invalid UTF-16 before calling the UTF-8 encoder.
+    for unit in encoded.code_units() {
+      if unit.to_int() < 33 || unit.to_int() > 126 {
+        return Err(InvalidHash(index + 1))
+      }
     }
     let status = verify_argon2id(encoded, b"")
     if status == -1000 {
