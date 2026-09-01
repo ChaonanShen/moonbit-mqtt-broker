@@ -19,6 +19,47 @@ plaintext MQTT can be observed on the network. Use TLS and verify the Broker
 certificate. mTLS, certificate reload, and online secret rotation are not
 claimed.
 
+## Native runtime and reproducible tests
+
+Password verification loads `libargon2.so.1` (or `libargon2.so`) at runtime.
+The supported environment is Ubuntu 24.04 Linux/amd64 with the pinned toolchain
+from the Dockerfile. Outside the image, install `libargon2-1` and `argon2` on
+Ubuntu/Debian. Mooncakes only installs MoonBit dependencies, not OS libraries.
+Without the library, a configured password file fails before listen with an
+installation hint; anonymous configuration without a password file remains
+available. Native authentication tests deliberately fail with that hint instead
+of skipping checks or panicking on `Result::unwrap()`.
+
+The embedded test vector uses password `correct horse`, salt `0123456789abcdef`,
+Argon2id version 19, 4096 KiB memory, two iterations, one lane and a 32-byte hash.
+These are public test data, not production credentials or recommended password
+hashing parameters. Generate its expected encoded value with the reference CLI:
+
+```bash
+printf '%s' 'correct horse' | argon2 '0123456789abcdef' -id -e -t 2 -m 12 -p 1
+```
+
+Use `printf '%s'` to avoid adding a newline to the password. The CLI's `-m 12`
+means 2^12 KiB; the encoded string contains `m=4096`. Keep the `$` characters
+literal when copying hashes into shell scripts or configuration files.
+
+Run these from the repository root inside the project container, or in the
+supported environment with its prerequisites installed:
+
+```bash
+scripts/check-argon2.sh
+moon test src/security/security_test.mbt src/server/broker_runtime_security_test.mbt --target native --deny-warn
+tests/integration/argon2_environment.sh
+```
+
+The fixture check compares every embedded vector with the reference CLI without
+rewriting expected results. The environment regression hides the Argon2 shared
+library only from test child processes, checks ordinary test failures instead of
+SIGABRT, and checks that password authentication cannot start without its runtime.
+Both checks are included in the cumulative release verifier. Encoded hashes
+containing NUL, whitespace or non-ASCII are rejected before C verification, so a
+C string terminator cannot hide trailing data.
+
 ## Allow-only ACL
 
 ```text

@@ -10,20 +10,6 @@ typedef int (*argon2id_verify_fn)(
   size_t password_length
 );
 
-int32_t moonbit_utf8_len_from_utf16(
-  moonbit_string_t src,
-  int32_t src_offset,
-  int32_t src_length
-);
-
-int32_t moonbit_utf8_encode_from_utf16(
-  moonbit_string_t src,
-  int32_t src_offset,
-  int32_t src_length,
-  moonbit_bytes_t dst,
-  int32_t dst_offset
-);
-
 static argon2id_verify_fn moonbit_mqtt_argon2id_verify = NULL;
 static int moonbit_mqtt_argon2_loaded = 0;
 
@@ -39,6 +25,7 @@ static argon2id_verify_fn load_argon2id_verify(void) {
         if (moonbit_mqtt_argon2id_verify != NULL) {
           break;
         }
+        dlclose(library);
       }
     }
   }
@@ -47,7 +34,7 @@ static argon2id_verify_fn load_argon2id_verify(void) {
 
 MOONBIT_FFI_EXPORT
 int32_t moonbit_mqtt_verify_argon2id(
-  moonbit_string_t encoded,
+  moonbit_bytes_t encoded,
   int32_t encoded_length,
   moonbit_bytes_t password,
   int32_t password_length
@@ -56,25 +43,20 @@ int32_t moonbit_mqtt_verify_argon2id(
   if (verify == NULL) {
     return -1000;
   }
-  int32_t utf8_length = moonbit_utf8_len_from_utf16(
-    encoded,
-    0,
-    encoded_length
-  );
-  char *encoded_utf8 = malloc((size_t)utf8_length + 1);
+  // Bytes has a documented C ABI; do not call private String/UTF-16 runtime
+  // entry points or pass a non-MoonBit allocation to those entry points.
+  if (encoded_length <= 0 || password_length < 0 ||
+      memchr(encoded, '\0', (size_t)encoded_length) != NULL) {
+    return -32; // ARGON2_DECODING_FAIL
+  }
+  char *encoded_utf8 = malloc((size_t)encoded_length + 1);
   if (encoded_utf8 == NULL) {
     return -1001;
   }
-  moonbit_utf8_encode_from_utf16(
-    encoded,
-    0,
-    encoded_length,
-    (moonbit_bytes_t)encoded_utf8,
-    0
-  );
-  encoded_utf8[utf8_length] = '\0';
+  memcpy(encoded_utf8, encoded, (size_t)encoded_length);
+  encoded_utf8[encoded_length] = '\0';
   int result = verify(encoded_utf8, password, (size_t)password_length);
-  memset(encoded_utf8, 0, (size_t)utf8_length);
+  memset(encoded_utf8, 0, (size_t)encoded_length);
   free(encoded_utf8);
   return result;
 }

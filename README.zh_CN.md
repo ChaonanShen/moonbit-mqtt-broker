@@ -131,6 +131,18 @@ scripts/verify-release-docker.sh
 安全、会话过期、配置文件进程测试、敏感信息扫描、文档检查，以及在干净目录
 中重建 mooncakes 发布包。
 
+原生密码认证和完整 native 测试套件需要系统动态库 `libargon2.so.1`。
+从 Mooncakes 安装本模块不会安装该系统依赖。项目 Docker 镜像已包含它；
+在 Ubuntu/Debian 直接运行时，安装 `libargon2-1`，fixture 和集成检查还需要
+`argon2` 命令：
+
+```bash
+sudo apt-get install libargon2-1 argon2
+```
+
+测试提示缺少 `libargon2.so.1` 时，应安装依赖或使用上述 Docker 命令。
+密码 fixture 的生成方法和缺库回归检查见[安全文档](docs/security.zh_CN.md)。
+
 ## 文档
 
 - [入门指南](docs/getting-started.zh_CN.md)

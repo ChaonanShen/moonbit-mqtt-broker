@@ -5,6 +5,7 @@ readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
 moon version --all
+scripts/check-argon2.sh
 node --version
 { mosquitto_sub --help 2>&1 || true; } | sed -n '1p'
 moon update
@@ -21,6 +22,7 @@ moon fmt --check
 moon check --target native --deny-warn
 moon test --target native --deny-warn
 moon build --target native
+tests/integration/argon2_environment.sh
 moon info
 moon run --target native src/cmd/codec_gate
 tests/integration/connect.sh

@@ -114,11 +114,27 @@ test "ACL parser rejects malformed policy instead of skipping it" {
 }
 
 ///|
+fn password_database_fixture(contents : String) -> PasswordDatabase raise {
+  match PasswordDatabase::parse(contents) {
+    Ok(database) => database
+    Err(Argon2Unavailable) =>
+      fail(
+        "Argon2id tests require libargon2.so.1: install libargon2-1 on Ubuntu/Debian or use scripts/moon-docker.sh test --target native",
+      )
+    Err(_) =>
+      fail(
+        "invalid Argon2id test fixture: run scripts/check-argon2.sh to check the reference hash",
+      )
+  }
+}
+
+///|
 test "Argon2id password database authenticates without plaintext storage" {
+  // Reference checked by scripts/check-argon2.sh (password: correct horse).
   let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
-  let database = PasswordDatabase::parse(
+  let database = password_database_fixture(
     "# generated fixture\nsensor01:" + encoded + "\n",
-  ).unwrap()
+  )
   assert_eq(database.user_count(), 1)
   assert_eq(
     database.authenticate("sensor01", b"correct horse"),
@@ -141,6 +157,7 @@ test "Argon2id password database authenticates without plaintext storage" {
 ///|
 test "password file rejects duplicate plaintext and malformed hashes" {
   let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
+  ignore(password_database_fixture("fixture:" + encoded))
   assert_true(
     PasswordDatabase::parse("user:plaintext")
     is Err(PasswordFileError::UnsupportedHash(1)),
@@ -180,4 +197,15 @@ test "security policy preserves anonymous compatibility and distinguishes reject
       @topic.TopicName::new("$SYS/broker/test").unwrap(),
     ),
   )
+}
+
+///|
+test "password hashes reject NUL suffixes and non-ASCII before C verification" {
+  let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
+  for suffix in ["\u0000", "\u0000ignored", "é", "\tignored"] {
+    assert_true(
+      PasswordDatabase::parse("user:" + encoded + suffix)
+      is Err(PasswordFileError::InvalidHash(1)),
+    )
+  }
 }

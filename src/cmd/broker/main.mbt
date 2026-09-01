@@ -579,6 +579,10 @@ async fn run_main() -> Unit {
       Some(
         match @security.PasswordDatabase::parse(contents) {
           Ok(value) => value
+          Err(@security.PasswordFileError::Argon2Unavailable) =>
+            raise CliError(
+              "Argon2id authentication requires libargon2.so.1: install libargon2-1 on Ubuntu/Debian or use the project Docker image",
+            )
           Err(_) => raise CliError("invalid --password-file")
         },
       )

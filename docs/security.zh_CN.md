@@ -17,6 +17,43 @@
 MQTT 3.1.1 本身不保护凭据传输，明文 MQTT 中的凭据可被网络观察者读取。
 请使用 TLS 并验证 Broker 证书。本版本不支持 mTLS、证书热加载和在线密钥轮换。
 
+## 原生依赖与可复现测试
+
+密码验证在运行时加载 `libargon2.so.1`（或 `libargon2.so`）。支持的环境是
+Ubuntu 24.04 Linux/amd64，以及 Dockerfile 固定的工具链。项目镜像已安装
+依赖；在镜像外的 Ubuntu/Debian 环境需安装 `libargon2-1` 和 `argon2`。
+Mooncakes 只安装 MoonBit 依赖，不会安装操作系统动态库。
+
+缺少动态库时，配置了密码文件的 Broker 会在监听前失败，并给出安装提示；
+未配置密码文件的匿名模式仍可使用。原生认证测试会明确失败并提示依赖，
+不会跳过检查，也不会再因 `Result::unwrap()` 导致整个测试进程崩溃。
+
+测试向量使用固定密码 `correct horse`、盐值 `0123456789abcdef`、Argon2id
+版本 19、4096 KiB 内存、2 次迭代、1 个 lane 和 32 字节哈希。这些是公开测试
+数据，不是生产凭据或生产密码哈希参数建议。参考生成命令为：
+
+```bash
+printf '%s' 'correct horse' | argon2 '0123456789abcdef' -id -e -t 2 -m 12 -p 1
+```
+
+必须用 `printf '%s'` 避免给密码附加换行。命令中的 `-m 12` 表示 2^12 KiB，
+所以编码字符串中是 `m=4096`。将哈希复制到 shell 脚本或配置文件时，应确保
+`$` 字符保持原样，不被 shell 当作变量展开。
+
+在项目容器中，或已安装依赖的受支持环境中，从仓库根目录运行：
+
+```bash
+scripts/check-argon2.sh
+moon test src/security/security_test.mbt src/server/broker_runtime_security_test.mbt --target native --deny-warn
+tests/integration/argon2_environment.sh
+```
+
+fixture 检查将所有内嵌向量与参考 CLI 比较，不会自动覆盖预期结果。
+环境回归检查仅对测试子进程隐藏 Argon2 动态库，验证测试正常报告失败而非
+SIGABRT，并验证密码认证无法在缺少依赖时启动。两项检查已接入完整发布验证。
+包含 NUL、空白或非 ASCII 字符的编码哈希会在进入 C 验证前被拒绝，防止
+C 字符串终止符隐藏尾部数据。
+
 ## 仅允许式 ACL
 
 ```text
