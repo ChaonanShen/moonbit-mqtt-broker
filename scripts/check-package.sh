@@ -70,6 +70,18 @@ fi
   moon build --target native --frozen
   version="$(moon run --target native src/cmd/broker -- --version)"
   [[ "${version}" = '0.1.0' ]]
+  if [[ -n "${RELEASE_ARTIFACT_DIR:-}" ]]; then
+    moon test --target native --release --frozen --deny-warn
+    moon build --target native --release --frozen
+    mkdir -p "${RELEASE_ARTIFACT_DIR}/runtime"
+    install -m 0755 _build/native/release/build/cmd/broker/broker.exe \
+      "${RELEASE_ARTIFACT_DIR}/runtime/broker"
+    cp "${PACKAGE}" "${RELEASE_ARTIFACT_DIR}/package.zip"
+    ldd "${RELEASE_ARTIFACT_DIR}/runtime/broker" >"${RELEASE_ARTIFACT_DIR}/linked-libraries.txt"
+    ! grep -q 'not found' "${RELEASE_ARTIFACT_DIR}/linked-libraries.txt"
+    moon version --all >"${RELEASE_ARTIFACT_DIR}/toolchain.txt"
+    moon tree >"${RELEASE_ARTIFACT_DIR}/dependencies.txt"
+  fi
 )
 
 sha256="$(sha256sum "${PACKAGE}" | awk '{print $1}')"

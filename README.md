@@ -139,6 +139,41 @@ The release verifier also runs protocol/reference matrices, bounded workloads,
 all examples, TLS/security/expiry/configuration process tests, secret and
 documentation checks, and a clean-room mooncakes package build.
 
+
+## Strict distribution verification
+
+Before a release, commit all candidate changes and run:
+
+```bash
+scripts/verify-distribution-docker.sh
+# Also exercise the existing ten-minute stability profile:
+RELEASE_SOAK=1 scripts/verify-distribution-docker.sh
+```
+
+This is the CI release check. It verifies exactly the committed `HEAD` in a new
+Docker volume, runs the full cumulative verifier, tests the extracted Mooncakes
+archive in both Debug and Release, and runs its compiled broker in four minimal
+Ubuntu 24.04 images. The broker images contain no MoonBit/compiler/client tools:
+no optional libraries, Argon2 only, OpenSSL only, or both. Separate client
+containers exercise actual QoS 1 traffic and authentication over plaintext/TLS;
+missing-library configurations must fail without a crash. Runtime containers
+have no external network, run as a non-root user, and have read-only filesystems.
+
+Evidence under `test-results/distribution/` records the source commit, package
+and executable SHA-256 hashes, toolchain, image IDs, library inventories and
+failure logs. CI uploads the tested package and evidence. Any failing stage
+returns a nonzero exit code; the script never publishes. Re-run after any source,
+version, dependency or image change. A passing run applies to these recorded
+Linux/amd64 environments, not to untested operating systems or toolchains.
+
+Native system dependencies are feature-specific: `libargon2-1` for passwords,
+`libssl3t64` (OpenSSL 3) for TLS on Ubuntu 24.04, and `libgcc-s1` for the executable.
+Dynamic `dlopen` dependencies are not fully represented by `ldd`; both library
+inventory checks and real feature tests are required. Root-level local
+`AGENTS.md`/`AGENTS.local.md` files may remain untracked; other untracked candidate
+files or tracked modifications block verification. Untracked files never enter
+the committed archive. Keep the verified commit/package unchanged until release.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
