@@ -24,7 +24,8 @@ claimed.
 Password verification loads `libargon2.so.1` (or `libargon2.so`) at runtime.
 The supported environment is Ubuntu 24.04 Linux/amd64 with the pinned toolchain
 from the Dockerfile. Outside the image, install `libargon2-1` and `argon2` on
-Ubuntu/Debian. Mooncakes only installs MoonBit dependencies, not OS libraries.
+Ubuntu/Debian. TLS also requires OpenSSL (`libssl3t64` on Ubuntu 24.04).
+Mooncakes only installs MoonBit dependencies, not OS libraries.
 Without the library, a configured password file fails before listen with an
 installation hint; anonymous configuration without a password file remains
 available. Native authentication tests deliberately fail with that hint instead

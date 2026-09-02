@@ -19,26 +19,21 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build pinned Linux x86_64 toolchain
         run: docker build --platform linux/amd64 --tag moonbit-mqtt-broker-dev .
-      - name: MoonBit format, check, test, build, and interface validation
-        run: |
-          scripts/moon-docker.sh update
-          scripts/moon-docker.sh fmt --check
-          scripts/moon-docker.sh check --target native --deny-warn
-          scripts/moon-docker.sh test --target native --deny-warn
-          scripts/moon-docker.sh build --target native
-          scripts/moon-docker.sh info
-      - name: Run release verification
+      - name: Verify committed package and isolated runtime dependencies
         run: |
           if [[ "${{ github.event.inputs.soak }}" == "true" ]]; then
             export RELEASE_SOAK=1
           fi
-          mkdir -p test-results
-          scripts/verify-release-docker.sh 2>&1 | tee test-results/release-verifier.log
-      - name: Upload verifier log
+          scripts/verify-distribution-docker.sh
+      - name: Upload distribution evidence and tested package
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-verifier-log
-          path: test-results/release-verifier.log
+          name: distribution-evidence
+          path: |
+            test-results/distribution/**/*.log
+            test-results/distribution/**/*.txt
+            test-results/distribution/**/artifacts.sha256
+            test-results/distribution/**/package.zip
           if-no-files-found: warn
           retention-days: 7

@@ -22,6 +22,7 @@ MQTT 3.1.1 本身不保护凭据传输，明文 MQTT 中的凭据可被网络观
 密码验证在运行时加载 `libargon2.so.1`（或 `libargon2.so`）。支持的环境是
 Ubuntu 24.04 Linux/amd64，以及 Dockerfile 固定的工具链。项目镜像已安装
 依赖；在镜像外的 Ubuntu/Debian 环境需安装 `libargon2-1` 和 `argon2`。
+TLS 还需要 OpenSSL（Ubuntu 24.04 的软件包名为 `libssl3t64`）。
 Mooncakes 只安装 MoonBit 依赖，不会安装操作系统动态库。
 
 缺少动态库时，配置了密码文件的 Broker 会在监听前失败，并给出安装提示；

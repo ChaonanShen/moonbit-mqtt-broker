@@ -143,6 +143,38 @@ sudo apt-get install libargon2-1 argon2
 测试提示缺少 `libargon2.so.1` 时，应安装依赖或使用上述 Docker 命令。
 密码 fixture 的生成方法和缺库回归检查见[安全文档](docs/security.zh_CN.md)。
 
+
+## 严格发布验证
+
+发布前先提交候选代码，再运行：
+
+```bash
+scripts/verify-distribution-docker.sh
+# 同时运行现有的十分钟稳定性测试：
+RELEASE_SOAK=1 scripts/verify-distribution-docker.sh
+```
+
+CI 使用同一个入口。它只取已提交的 `HEAD`，放入新建的 Docker 卷，从零运行
+完整验证，再对解压后的 Mooncakes 发布包执行 Debug 和 Release 测试。最后
+将包中源码编译出的 Broker 放进四种精简 Ubuntu 24.04 环境：无可选库、只有
+Argon2、只有 OpenSSL、两者齐全。Broker 环境没有 MoonBit、编译器或客户端
+工具；独立客户端容器通过真实连接验证 QoS 1 收发、密码认证和 TLS。
+缺库场景必须明确失败且不能崩溃。运行环境使用非 root 用户、只读文件系统，
+并禁止访问外部网络。
+
+`test-results/distribution/` 保存提交号、发布包和可执行文件的 SHA-256、
+工具链版本、镜像 ID、动态库清单及失败日志；CI 也会上传候选包和验证记录。
+任何步骤失败都会返回非零退出码，脚本不会自动发布。代码、版本、依赖或镜像
+改变后应重新验证；通过结论只覆盖记录中的 Linux/amd64 环境，不能代表未经
+测试的操作系统或工具链。
+
+系统依赖按功能声明：密码认证需要 `libargon2-1`，Ubuntu 24.04 的 TLS 需要
+`libssl3t64`（OpenSSL 3），程序运行需要 `libgcc-s1`。`ldd` 不能完整显示
+`dlopen` 动态加载的依赖，所以验证同时检查库清单和实际功能。
+根目录的本地 `AGENTS.md`/`AGENTS.local.md` 可保持未跟踪状态，其他未跟踪
+候选文件和已跟踪文件的未提交修改会阻止验证。未跟踪文件不会进入提交归档。
+验证后保持提交和候选包不变，再进行发布。
+
 ## 文档
 
 - [入门指南](docs/getting-started.zh_CN.md)
