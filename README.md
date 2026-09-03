@@ -135,12 +135,13 @@ If a native test reports that Argon2id requires `libargon2.so.1`, install the
 runtime or use the Docker commands above. See [security](docs/security.md) for
 the reproducible password fixture and the missing-runtime regression check.
 
-The release verifier also runs protocol/reference matrices, bounded workloads,
+The cumulative verifier also runs protocol/reference matrices, bounded workloads,
 all examples, TLS/security/expiry/configuration process tests, secret and
 documentation checks, and a clean-room mooncakes package build.
 
-
 ## Strict distribution verification
+
+For preparation, stage criteria, troubleshooting, evidence checks and the release record template, see the [release verification runbook](docs/release-verification.md).
 
 Before a release, commit all candidate changes and run:
 
@@ -179,6 +180,7 @@ the committed archive. Keep the verified commit/package unchanged until release.
 - [Getting started](docs/getting-started.md)
 - [Configuration](docs/configuration.md)
 - [Security](docs/security.md)
+- [Release verification runbook](docs/release-verification.md)
 - [Local persistence](docs/persistence.md)
 - [Compatibility and limitations](docs/compatibility.md)
 - [Architecture](docs/architecture.md)

@@ -121,13 +121,13 @@ scripts/moon-docker.sh test --target native --deny-warn
 scripts/moon-docker.sh build --target native
 ```
 
-运行完整发布验证：
+开发时运行当前工作区的累计回归（正式发布使用下方严格入口）：
 
 ```bash
 scripts/verify-release-docker.sh
 ```
 
-完整验证还会执行协议和参考 Broker 矩阵、有界稳定性负载、全部示例、TLS、
+累计回归会执行协议和参考 Broker 矩阵、有界稳定性负载、全部示例、TLS、
 安全、会话过期、配置文件进程测试、敏感信息扫描、文档检查，以及在干净目录
 中重建 mooncakes 发布包。
 
@@ -143,8 +143,9 @@ sudo apt-get install libargon2-1 argon2
 测试提示缺少 `libargon2.so.1` 时，应安装依赖或使用上述 Docker 命令。
 密码 fixture 的生成方法和缺库回归检查见[安全文档](docs/security.zh_CN.md)。
 
-
 ## 严格发布验证
+
+操作步骤、每一阶段的通过标准、失败排查、证据核对与发布记录模板见[发布前测试与验收操作手册](docs/release-verification.zh_CN.md)。
 
 发布前先提交候选代码，再运行：
 
@@ -180,6 +181,7 @@ Argon2、只有 OpenSSL、两者齐全。Broker 环境没有 MoonBit、编译器
 - [入门指南](docs/getting-started.zh_CN.md)
 - [配置](docs/configuration.zh_CN.md)
 - [安全](docs/security.zh_CN.md)
+- [发布前测试与验收操作手册](docs/release-verification.zh_CN.md)
 - [本地持久化](docs/persistence.zh_CN.md)
 - [兼容性和限制](docs/compatibility.zh_CN.md)
 - [架构](docs/architecture.zh_CN.md)
