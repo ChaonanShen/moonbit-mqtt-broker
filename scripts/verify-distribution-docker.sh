@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verify exactly HEAD: no checkout files/caches reach the candidate or runtime.
 # Never publishes, tags, pushes, or reads registry credentials.
-set -euo pipefail
+set -Eeuo pipefail
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
@@ -39,6 +39,7 @@ finish() {
   exit "${status}"
 }
 trap finish EXIT
+trap 'printf "DISTRIBUTION_FAILED_AT_LINE=%s\n" "$LINENO" >&2' ERR
 printf 'source_commit=%s\nstarted_at=%s\nsoak=%s\n' "${SOURCE_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${RELEASE_SOAK:-0}" >"${RESULTS}/evidence.txt"
 docker image inspect "${DEV_IMAGE}" --format 'toolchain_image={{.Id}}' >>"${RESULTS}/evidence.txt"
 git archive --format=tar "${SOURCE_SHA}" >"${RESULTS}/source.tar"
@@ -75,7 +76,10 @@ for profile in base argon2 tls full; do
   actual_argon2=0; actual_tls=0
   grep -q 'libargon2.so' "${RESULTS}/libraries-${profile}.txt" && actual_argon2=1
   grep -q 'libssl.so' "${RESULTS}/libraries-${profile}.txt" && actual_tls=1
-  [[ "${has_argon2}" -eq "${actual_argon2}" && "${has_tls}" -eq "${actual_tls}" ]]
+  if [[ "${has_argon2}" -ne "${actual_argon2}" || "${has_tls}" -ne "${actual_tls}" ]]; then
+    echo "Runtime ${profile} has unexpected libraries: argon2=${actual_argon2} (expected ${has_argon2}), TLS=${actual_tls} (expected ${has_tls})" >&2
+    exit 1
+  fi
   for feature in argon2 tls; do
     enabled="${has_argon2}"
     feature_args=(--allow-anonymous false --password-file /artifact/passwords)
