@@ -39,6 +39,9 @@ fn validate_canonical_frame(frame : Bytes) -> Result[Unit, CodecError] {
   if packet_type == 0 || packet_type == 15 {
     return Err(UnsupportedPacketType("reserved MQTT control packet type"))
   }
+  if packet_type == 6 && frame[0] != 0x62 {
+    return Err(InvalidFlags("PUBREL fixed header must be 0x62"))
+  }
   let mut value = 0
   let mut multiplier = 1
   let mut index = 1
@@ -88,7 +91,7 @@ fn qos_from_candidate(qos : @candidate.QoS) -> Result[QoS, CodecError] {
   match qos {
     @candidate.QoS::QoS0 => Ok(QoS0)
     @candidate.QoS::QoS1 => Ok(QoS1)
-    @candidate.QoS::QoS2 => Err(UnsupportedQoS("QoS 2 is not supported"))
+    @candidate.QoS::QoS2 => Ok(QoS2)
   }
 }
 
@@ -97,7 +100,7 @@ fn qos_to_candidate(qos : QoS) -> Result[@candidate.QoS, CodecError] {
   match qos {
     QoS0 => Ok(@candidate.QoS::QoS0)
     QoS1 => Ok(@candidate.QoS::QoS1)
-    QoS2 => Err(UnsupportedQoS("QoS 2 is not supported"))
+    QoS2 => Ok(@candidate.QoS::QoS2)
   }
 }
 
@@ -120,13 +123,12 @@ fn validate_publish_contract(
       }
       Ok(())
     }
-    QoS1 =>
+    QoS1 | QoS2 =>
       if packet.packet_id is None {
-        Err(InvalidPacketId("QoS 1 PUBLISH requires packet id"))
+        Err(InvalidPacketId("QoS 1/2 PUBLISH requires packet id"))
       } else {
         Ok(())
       }
-    QoS2 => Err(UnsupportedQoS("QoS 2 is not supported"))
   }
 }
 
@@ -167,8 +169,7 @@ fn suback_code_from_candidate(
   match code {
     @candidate.SubackReturnCode::SuccessQoS0 => Ok(GrantedQoS0)
     @candidate.SubackReturnCode::SuccessQoS1 => Ok(GrantedQoS1)
-    @candidate.SubackReturnCode::SuccessQoS2 =>
-      Err(UnsupportedQoS("QoS 2 is not supported"))
+    @candidate.SubackReturnCode::SuccessQoS2 => Ok(GrantedQoS2)
     @candidate.SubackReturnCode::Failure => Ok(Failure)
   }
 }
@@ -180,7 +181,7 @@ fn suback_code_to_candidate(
   match code {
     GrantedQoS0 => Ok(@candidate.SubackReturnCode::SuccessQoS0)
     GrantedQoS1 => Ok(@candidate.SubackReturnCode::SuccessQoS1)
-    GrantedQoS2 => Err(UnsupportedQoS("QoS 2 is not supported"))
+    GrantedQoS2 => Ok(@candidate.SubackReturnCode::SuccessQoS2)
     Failure => Ok(@candidate.SubackReturnCode::Failure)
   }
 }
@@ -302,10 +303,14 @@ fn candidate_decode_packet(frame : Bytes) -> Result[Packet, CodecError] {
     @candidate.Packet::PingreqPacket => Ok(Pingreq)
     @candidate.Packet::PingrespPacket => Ok(Pingresp)
     @candidate.Packet::DisconnectPacket => Ok(Disconnect)
-    @candidate.Packet::PubrecPacket(_)
-    | @candidate.Packet::PubrelPacket(_)
-    | @candidate.Packet::PubcompPacket(_) =>
-      Err(UnsupportedPacketType("QoS 2 control packet is not supported"))
+    @candidate.Packet::PubrecPacket(id) =>
+      packet_id_from_candidate(id.message_id).map(packet_id => Pubrec(packet_id))
+    @candidate.Packet::PubrelPacket(id) =>
+      packet_id_from_candidate(id.message_id).map(packet_id => Pubrel(packet_id))
+    @candidate.Packet::PubcompPacket(id) =>
+      packet_id_from_candidate(id.message_id).map(packet_id => {
+        Pubcomp(packet_id)
+      })
   }
 }
 
@@ -365,6 +370,9 @@ fn candidate_encode_packet(packet : Packet) -> Result[Bytes, CodecError] {
       })
     }
     Puback(id) => @candidate.Packet::PubackPacket({ message_id: id.value() })
+    Pubrec(id) => @candidate.Packet::PubrecPacket({ message_id: id.value() })
+    Pubrel(id) => @candidate.Packet::PubrelPacket({ message_id: id.value() })
+    Pubcomp(id) => @candidate.Packet::PubcompPacket({ message_id: id.value() })
     Subscribe(subscribe) => {
       let topics : Array[@candidate.SubscribeTopic] = []
       for subscription in subscribe.subscriptions {

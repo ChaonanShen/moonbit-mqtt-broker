@@ -12,7 +12,6 @@
 {"id":"connack-invalid-flags","hex":"20020200","expected_category":"invalid_flags"}
 {"id":"connack-bad-length","hex":"200100","expected_category":"invalid_packet_shape"}
 {"id":"publish-zero-id","hex":"32050001610000","expected_category":"invalid_packet_id"}
-{"id":"publish-qos2","hex":"34050001610001","expected_category":"unsupported_qos"}
 {"id":"publish-invalid-qos-bits","hex":"3603000161","expected_category":"unsupported_qos"}
 {"id":"publish-invalid-utf8","hex":"30030001ff","expected_category":"invalid_utf8"}
 {"id":"publish-nul-topic","hex":"30050003610062","expected_category":"invalid_utf8"}
@@ -21,9 +20,9 @@
 {"id":"subscribe-empty","hex":"82020001","expected_category":"invalid_packet_shape"}
 {"id":"subscribe-zero-id","hex":"8206000000016100","expected_category":"invalid_packet_id"}
 {"id":"subscribe-invalid-flags","hex":"80020001","expected_category":"invalid_flags"}
-{"id":"subscribe-qos2","hex":"8206000100016102","expected_category":"unsupported_qos"}
-{"id":"suback-qos2","hex":"9003000102","expected_category":"unsupported_qos"}
 {"id":"unsubscribe-empty","hex":"a2020001","expected_category":"invalid_packet_shape"}
 {"id":"unsubscribe-zero-id","hex":"a2050000000161","expected_category":"invalid_packet_id"}
 {"id":"unsubscribe-invalid-flags","hex":"a0020001","expected_category":"invalid_flags"}
-{"id":"unsupported-pubrec","hex":"50020001","expected_category":"unsupported_packet_type"}
+{"id":"pubrel-dup-forbidden","hex":"6a020001","expected_category":"invalid_flags"}
+{"id":"pubrec-zero-id","hex":"50020000","expected_category":"invalid_packet_id"}
+{"id":"pubcomp-zero-id","hex":"70020000","expected_category":"invalid_packet_id"}

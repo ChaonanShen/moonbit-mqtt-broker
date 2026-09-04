@@ -8,7 +8,7 @@ pub fn validate_direction(
     (Connect(_), ClientToServer) => true
     (Connack(_), ServerToClient) => true
     (Publish(_), _) => true
-    (Puback(_), _) => true
+    (Puback(_) | Pubrec(_) | Pubrel(_) | Pubcomp(_), _) => true
     (Subscribe(_), ClientToServer) => true
     (Suback(_), ServerToClient) => true
     (Unsubscribe(_), ClientToServer) => true
