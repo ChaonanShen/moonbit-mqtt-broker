@@ -153,30 +153,31 @@ test "publish qos and packet id combinations are validated" {
 }
 
 ///|
-test "adapter classifies malformed packets and qos2" {
+test "adapter classifies malformed packets and accepts qos2" {
   assert_true(decode_packet(b"\xc0\x00\x00") is Err(TrailingBytes(_)))
   assert_true(decode_packet(b"\xc0\x80\x00") is Err(InvalidRemainingLength(_)))
   assert_true(decode_packet(b"\xc1\x00") is Err(InvalidFlags(_)))
   assert_true(decode_packet(b"\x40\x02\x00\x00") is Err(InvalidPacketId(_)))
-  assert_eq(
-    encode_packet(
-      Packet::Publish({
-        topic: "qos2",
-        payload: b"unsupported",
-        qos: QoS::QoS2,
-        packet_id: Some(PacketId::new(1).unwrap()),
-        dup: false,
-        retain: false,
-      }),
-    ),
-    Err(CodecError::UnsupportedQoS("QoS 2 is not supported")),
+  round_trip(
+    Packet::Publish({
+      topic: "qos2",
+      payload: b"supported",
+      qos: QoS2,
+      packet_id: Some(PacketId::new(1).unwrap()),
+      dup: false,
+      retain: false,
+    }),
   )
 }
 
 ///|
 test "one thousand candidate round trips preserve semantics" {
   for index in 1..<=1000 {
-    let qos = if index % 2 == 0 { QoS::QoS0 } else { QoS::QoS1 }
+    let qos = match index % 3 {
+      0 => QoS::QoS0
+      1 => QoS::QoS1
+      _ => QoS::QoS2
+    }
     let packet_id = if qos == QoS::QoS0 {
       None
     } else {
@@ -191,7 +192,7 @@ test "one thousand candidate round trips preserve semantics" {
         ]),
         qos,
         packet_id,
-        dup: qos == QoS::QoS1 && index % 3 == 0,
+        dup: qos != QoS::QoS0 && index % 3 == 0,
         retain: index % 5 == 0,
       }),
     )

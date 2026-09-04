@@ -50,10 +50,10 @@ test "encode failure isolates healthy clients" {
     SendPacket({
       connection_id: failing_id,
       packet: Publish({
-        topic: "unsupported/qos2",
+        topic: "invalid/qos2/id",
         payload: b"fail",
         qos: QoS2,
-        packet_id: Some(@protocol.PacketId::new(1).unwrap()),
+        packet_id: None,
         dup: false,
         retain: false,
       }),

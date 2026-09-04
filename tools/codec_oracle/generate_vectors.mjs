@@ -22,7 +22,7 @@ for (let i = 0; i < 150; i++) {
     cmd: 'connect', protocolId: 'MQTT', protocolVersion: 4,
     clean: i % 2 === 0, clientId: `client-${i}`, keepalive: i % 121,
     ...(withAuth ? { username: `user-${i % 7}`, password: Buffer.from([i & 255, 0, 255]) } : {}),
-    ...(withWill ? { will: { topic: `will/${i % 11}`, payload: Buffer.from(`offline-${i}`), qos: i % 2, retain: i % 5 === 0 } } : {})
+    ...(withWill ? { will: { topic: `will/${i % 11}`, payload: Buffer.from(`offline-${i}`), qos: i % 3, retain: i % 5 === 0 } } : {})
   }))
 }
 for (let i = 0; i < 100; i++) {
@@ -31,22 +31,22 @@ for (let i = 0; i < 100; i++) {
   }))
 }
 for (let i = 0; i < 250; i++) {
-  const qos = i % 2
+  const qos = i % 3
   vectors.push(valid(`publish-${i}`, i % 2 ? 'client_to_server' : 'server_to_client', 'publish', {
     cmd: 'publish', topic: `sensors/${i % 23}`, payload: Buffer.from([i & 255, (i >> 8) & 255, 0, 255]),
-    qos, messageId: qos ? i + 1 : undefined, dup: qos === 1 && i % 3 === 0, retain: i % 7 === 0
+    qos, messageId: qos ? i + 1 : undefined, dup: qos > 0 && i % 3 === 0, retain: i % 7 === 0
   }))
 }
 for (let i = 0; i < 75; i++) {
   vectors.push(valid(`subscribe-${i}`, 'client_to_server', 'subscribe', {
     cmd: 'subscribe', messageId: i + 1, subscriptions: [
-      { topic: `sensors/${i % 9}/+`, qos: 0 }, { topic: `alerts/${i % 5}/#`, qos: 1 }
+      { topic: `sensors/${i % 9}/+`, qos: 0 }, { topic: `alerts/${i % 5}/#`, qos: i % 3 }
     ]
   }))
 }
 for (let i = 0; i < 75; i++) {
   vectors.push(valid(`suback-${i}`, 'server_to_client', 'suback', {
-    cmd: 'suback', messageId: i + 1, granted: [0, 1, 128]
+    cmd: 'suback', messageId: i + 1, granted: [0, 1, 2, 128]
   }))
 }
 for (let i = 0; i < 50; i++) {
@@ -58,7 +58,8 @@ for (let i = 0; i < 50; i++) {
   vectors.push(valid(`unsuback-${i}`, 'server_to_client', 'unsuback', { cmd: 'unsuback', messageId: i + 1 }))
 }
 for (let i = 0; i < 100; i++) {
-  vectors.push(valid(`puback-${i}`, i % 2 ? 'client_to_server' : 'server_to_client', 'puback', { cmd: 'puback', messageId: i + 1 }))
+  const cmd = ['puback', 'pubrec', 'pubrel', 'pubcomp'][i % 4]
+  vectors.push(valid(cmd + '-' + i, i % 3 ? 'client_to_server' : 'server_to_client', cmd, { cmd, messageId: i + 1 }))
 }
 for (const [cmd, direction] of [['pingreq', 'client_to_server'], ['pingresp', 'server_to_client'], ['disconnect', 'client_to_server']]) {
   for (let i = 0; i < 50; i++) vectors.push(valid(`${cmd}-${i}`, direction, cmd, { cmd }))
@@ -81,7 +82,6 @@ const malformed = [
   ['connack-invalid-flags', '20020200', 'invalid_flags'],
   ['connack-bad-length', '200100', 'invalid_packet_shape'],
   ['publish-zero-id', '32050001610000', 'invalid_packet_id'],
-  ['publish-qos2', '34050001610001', 'unsupported_qos'],
   ['publish-invalid-qos-bits', '3603000161', 'unsupported_qos'],
   ['publish-invalid-utf8', '30030001ff', 'invalid_utf8'],
   ['publish-nul-topic', '30050003610062', 'invalid_utf8'],
@@ -90,12 +90,12 @@ const malformed = [
   ['subscribe-empty', '82020001', 'invalid_packet_shape'],
   ['subscribe-zero-id', '8206000000016100', 'invalid_packet_id'],
   ['subscribe-invalid-flags', '80020001', 'invalid_flags'],
-  ['subscribe-qos2', '8206000100016102', 'unsupported_qos'],
-  ['suback-qos2', '9003000102', 'unsupported_qos'],
   ['unsubscribe-empty', 'a2020001', 'invalid_packet_shape'],
   ['unsubscribe-zero-id', 'a2050000000161', 'invalid_packet_id'],
   ['unsubscribe-invalid-flags', 'a0020001', 'invalid_flags'],
-  ['unsupported-pubrec', '50020001', 'unsupported_packet_type']
+  ['pubrel-dup-forbidden', '6a020001', 'invalid_flags'],
+  ['pubrec-zero-id', '50020000', 'invalid_packet_id'],
+  ['pubcomp-zero-id', '70020000', 'invalid_packet_id']
 ].map(([id, bytes, expected_category]) => JSON.stringify({ id, hex: bytes, expected_category }))
 
 await mkdir(fixtureDir, { recursive: true })
