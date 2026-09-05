@@ -44,9 +44,13 @@ fn print_help() -> Unit {
   println("  --max-sessions N                   Default 1024")
   println("  --max-inflight-per-session N       Default 16")
   println("  --max-inflight-total N             Default 512")
-  println("  --max-pending-qos1-per-session N   Default 64")
-  println("  --max-pending-qos1-total N         Default 1024")
-  println("  --data-dir PATH                    Enable Disk V2 snapshots")
+  println("  --max-pending-per-session N        QoS 1/2, default 64")
+  println("  --max-pending-total N              QoS 1/2, default 1024")
+  println("  --max-inbound-qos2-per-session N   Default 64")
+  println("  --max-inbound-qos2-total N         Default 4096")
+  println("  --max-pending-qos1-per-session N   Legacy alias")
+  println("  --max-pending-qos1-total N         Legacy alias")
+  println("  --data-dir PATH                    Enable Disk V3 snapshots")
   println("  --max-snapshot-bytes N             Default 67108864")
   println("  --snapshot-debounce-ms N           Default 250")
   println("  --snapshot-max-delay-ms N          Default 2000")
@@ -200,6 +204,12 @@ async fn run_main() -> Unit {
       }
     }
   }
+  for suffix in ["per-session", "total"] {
+    if cli_args.contains("--max-pending-" + suffix) &&
+      cli_args.contains("--max-pending-qos1-" + suffix) {
+      raise CliError("conflicting pending limit aliases: " + suffix)
+    }
+  }
   let args : Array[String] = [raw_args[0]]
   args.append(file_args)
   args.append(cli_args)
@@ -220,6 +230,8 @@ async fn run_main() -> Unit {
   let mut max_inflight_total = 512
   let mut max_pending_qos1_per_session = 64
   let mut max_pending_qos1_total = 1024
+  let mut max_inbound_qos2_per_session = 64
+  let mut max_inbound_qos2_total = 4096
   let mut data_dir : String? = None
   let mut max_snapshot_bytes = 67108864L
   let mut snapshot_debounce_ms = 250L
@@ -359,17 +371,29 @@ async fn run_main() -> Unit {
         )
         index = index + 2
       }
-      "--max-pending-qos1-per-session" => {
+      "--max-pending-qos1-per-session" | "--max-pending-per-session" => {
         max_pending_qos1_per_session = parse_bounded_int(
           args, index, "--max-pending-qos1-per-session", 0,
         )
         index = index + 2
       }
-      "--max-pending-qos1-total" => {
+      "--max-pending-qos1-total" | "--max-pending-total" => {
         max_pending_qos1_total = parse_bounded_int(
           args, index, "--max-pending-qos1-total", 0,
         )
         index = index + 2
+      }
+      "--max-inbound-qos2-per-session" => {
+        max_inbound_qos2_per_session = parse_bounded_int(
+          args, index, "--max-inbound-qos2-per-session", 0,
+        )
+        index += 2
+      }
+      "--max-inbound-qos2-total" => {
+        max_inbound_qos2_total = parse_bounded_int(
+          args, index, "--max-inbound-qos2-total", 0,
+        )
+        index += 2
       }
       "--data-dir" => {
         if index + 1 >= args.length() || args[index + 1] == "" {
@@ -482,6 +506,8 @@ async fn run_main() -> Unit {
       max_inflight_total~,
       max_pending_qos1_per_session~,
       max_pending_qos1_total~,
+      max_inbound_qos2_per_session~,
+      max_inbound_qos2_total~,
       persistent_session_expiry_ms~,
       max_session_expirations_per_tick~,
     ) {
@@ -669,10 +695,14 @@ async fn run_main() -> Unit {
     )
     println("max_inflight_total = " + max_inflight_total.to_string())
     println(
-      "max_pending_qos1_per_session = " +
-      max_pending_qos1_per_session.to_string(),
+      "max_pending_per_session = " + max_pending_qos1_per_session.to_string(),
     )
-    println("max_pending_qos1_total = " + max_pending_qos1_total.to_string())
+    println("max_pending_total = " + max_pending_qos1_total.to_string())
+    println(
+      "max_inbound_qos2_per_session = " +
+      max_inbound_qos2_per_session.to_string(),
+    )
+    println("max_inbound_qos2_total = " + max_inbound_qos2_total.to_string())
     println(
       "persistent_session_expiry = " +
       quote(
@@ -789,7 +819,7 @@ async fn run_main() -> Unit {
           @async.now(),
           @observability.Info,
           "snapshot_restored",
-          message="snapshot restored version=1-or-2 sessions=" +
+          message="snapshot restored version=1-or-2-or-3 sessions=" +
             initial_state.session_count().to_string() +
             " retained=" +
             initial_state.retained_count().to_string() +
