@@ -35,4 +35,7 @@ pub(all) enum BrokerAction {
   DeliveryAcknowledged(DeliveryAcknowledgedAction)
   DeliveryDroppedResourceLimit(@session.ClientId)
   Deliver(RoutedDelivery)
+  SendPubrec(DeliveryAcknowledgedAction)
+  SendPubrel(DeliveryAcknowledgedAction)
+  SendPubcomp(DeliveryAcknowledgedAction)
 } derive(Eq, Debug)

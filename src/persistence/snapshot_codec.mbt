@@ -7,26 +7,33 @@ let disk_header_bytes : Int = 24
 ///|
 fn encode_message(
   writer : BinaryWriter,
-  message : @router.SnapshotMessageV1,
+  message : @router.SnapshotMessageV3,
+  version : Int,
 ) -> Unit raise PersistenceError {
+  if message.qos < 1 || message.qos > (if version == 3 { 2 } else { 1 }) {
+    raise InvalidValue(field="message-qos", offset=writer.bytes.length())
+  }
   writer.write_string(message.topic)
   writer.write_bytes(message.payload)
   writer.write_u8(if message.retain { 1 } else { 0 }, "message-retain")
+  if version == 3 {
+    writer.write_u8(message.qos, "message-qos")
+  }
 }
 
 ///|
 fn encode_payload(
-  snapshot : @router.BrokerSnapshotV1,
+  snapshot : @router.BrokerSnapshotV3,
 ) -> Bytes raise PersistenceError {
   let writer = BinaryWriter::new()
   writer.write_u32(snapshot.version, "snapshot-model-version")
-  if snapshot.version != 1 && snapshot.version != 2 {
+  if snapshot.version != 1 && snapshot.version != 2 && snapshot.version != 3 {
     raise InvalidValue(field="snapshot-model-version", offset=0)
   }
   writer.write_u32(snapshot.sessions.length(), "session-count")
   for session in snapshot.sessions {
     writer.write_string(session.client_id)
-    if snapshot.version == 2 {
+    if snapshot.version >= 2 {
       writer.write_string(session.owner_principal)
       if session.detached_at_ms < 0L {
         raise InvalidValue(field="detached-at-ms", offset=writer.bytes.length())
@@ -40,7 +47,8 @@ fn encode_payload(
     writer.write_u32(session.subscriptions.length(), "subscription-count")
     for subscription in session.subscriptions {
       writer.write_string(subscription.filter)
-      if subscription.qos < 0 || subscription.qos > 1 {
+      if subscription.qos < 0 ||
+        subscription.qos > (if snapshot.version == 3 { 2 } else { 1 }) {
         raise InvalidValue(
           field="subscription-qos",
           offset=writer.bytes.length(),
@@ -48,24 +56,67 @@ fn encode_payload(
       }
       writer.write_u8(subscription.qos, "subscription-qos")
     }
+    if snapshot.version == 3 {
+      writer.write_u32(session.inbound_qos2.length(), "inbound-qos2-count")
+      for id in session.inbound_qos2 {
+        if id < 1 || id > 65535 {
+          raise InvalidValue(
+            field="inbound-packet-id",
+            offset=writer.bytes.length(),
+          )
+        }
+        writer.write_u16(id, "inbound-packet-id")
+      }
+    } else if !session.inbound_qos2.is_empty() {
+      raise InvalidValue(
+        field="legacy-inbound-qos2",
+        offset=writer.bytes.length(),
+      )
+    }
     writer.write_u32(session.inflight.length(), "inflight-count")
     for item in session.inflight {
       if item.packet_id < 1 || item.packet_id > 65535 {
         raise InvalidValue(field="packet-id", offset=writer.bytes.length())
       }
       writer.write_u16(item.packet_id, "packet-id")
-      encode_message(writer, item.message)
+      if item.phase < 1 ||
+        item.phase > 3 ||
+        (snapshot.version < 3 && item.phase != 1) {
+        raise InvalidValue(field="outbound-phase", offset=writer.bytes.length())
+      }
+      if snapshot.version == 3 {
+        writer.write_u8(item.phase, "outbound-phase")
+      }
+      match item.message {
+        Some(message) => {
+          if item.phase == 3 || message.qos != item.phase {
+            raise InvalidValue(
+              field="phase-message",
+              offset=writer.bytes.length(),
+            )
+          }
+          encode_message(writer, message, snapshot.version)
+        }
+        None =>
+          if item.phase != 3 {
+            raise InvalidValue(
+              field="missing-message",
+              offset=writer.bytes.length(),
+            )
+          }
+      }
     }
     writer.write_u32(session.pending.length(), "pending-count")
     for message in session.pending {
-      encode_message(writer, message)
+      encode_message(writer, message, snapshot.version)
     }
   }
   writer.write_u32(snapshot.retained.length(), "retained-count")
   for retained in snapshot.retained {
     writer.write_string(retained.topic)
     writer.write_bytes(retained.payload)
-    if retained.qos < 0 || retained.qos > 1 {
+    if retained.qos < 0 ||
+      retained.qos > (if snapshot.version == 3 { 2 } else { 1 }) {
       raise InvalidValue(field="retained-qos", offset=writer.bytes.length())
     }
     writer.write_u8(retained.qos, "retained-qos")
@@ -75,7 +126,7 @@ fn encode_payload(
 
 ///|
 pub fn encode_snapshot(
-  snapshot : @router.BrokerSnapshotV1,
+  snapshot : @router.BrokerSnapshotV3,
   max_snapshot_bytes? : Int = 67108864,
 ) -> Result[Bytes, PersistenceError] {
   try {
@@ -123,7 +174,8 @@ fn checked_count(
 fn decode_message(
   reader : BinaryReader,
   max_payload : Int,
-) -> @router.SnapshotMessageV1 raise PersistenceError {
+  version : Int,
+) -> @router.SnapshotMessageV3 raise PersistenceError {
   let topic = reader.read_string()
   let payload = reader.read_bytes(max_payload)
   let retain_offset = reader.position()
@@ -132,7 +184,17 @@ fn decode_message(
     1 => true
     _ => raise InvalidValue(field="message-retain", offset=retain_offset)
   }
-  { topic, payload, retain }
+  let qos = if version == 3 {
+    let offset = reader.position()
+    let qos = reader.read_u8()
+    if qos < 1 || qos > 2 {
+      raise InvalidValue(field="message-qos", offset~)
+    }
+    qos
+  } else {
+    1
+  }
+  { topic, payload, retain, qos }
 }
 
 ///|
@@ -140,26 +202,28 @@ fn decode_payload(
   payload : Bytes,
   limits : SnapshotDecodeLimits,
   envelope_version : Int,
-) -> @router.BrokerSnapshotV1 raise PersistenceError {
+) -> @router.BrokerSnapshotV3 raise PersistenceError {
   let reader = BinaryReader::new(payload)
   let version = reader.read_u32("snapshot-model-version")
-  if version != envelope_version || (version != 1 && version != 2) {
+  if version != envelope_version ||
+    (version != 1 && version != 2 && version != 3) {
     raise InvalidValue(field="snapshot-model-version", offset=0)
   }
   let broker = limits.broker_config()
   let session_count = checked_count(reader, "sessions", broker.max_sessions())
-  let sessions : Array[@router.SnapshotSessionV1] = []
+  let sessions : Array[@router.SnapshotSessionV3] = []
   let mut subscription_total = 0
   let mut inflight_total = 0
   let mut pending_total = 0
+  let mut inbound_total = 0
   for _ in 0..<session_count {
     let client_id = reader.read_string()
-    let owner_principal = if version == 2 {
+    let owner_principal = if version >= 2 {
       reader.read_string()
     } else {
       "legacy-anonymous"
     }
-    let detached_at_ms = if version == 2 {
+    let detached_at_ms = if version >= 2 {
       let offset = reader.position()
       let encoded = reader.read_string()
       let value = @string.parse_int64(encoded) catch {
@@ -191,15 +255,39 @@ fn decode_payload(
       )
     }
     subscription_total = subscription_total + subscription_count
-    let subscriptions : Array[@router.SnapshotSubscriptionV1] = []
+    let subscriptions : Array[@router.SnapshotSubscriptionV3] = []
     for _ in 0..<subscription_count {
       let filter = reader.read_string()
       let qos_offset = reader.position()
       let qos = reader.read_u8()
-      if qos > 1 {
+      if qos > (if version == 3 { 2 } else { 1 }) {
         raise InvalidValue(field="subscription-qos", offset=qos_offset)
       }
       subscriptions.push({ filter, qos })
+    }
+    let inbound_qos2 : Array[Int] = []
+    if version == 3 {
+      let count = checked_count(
+        reader,
+        "inbound-qos2-per-session",
+        broker.max_inbound_qos2_per_session(),
+      )
+      if count > broker.max_inbound_qos2_total() - inbound_total {
+        raise LimitExceeded(
+          resource="inbound-qos2-total",
+          actual=(inbound_total + count).to_int64(),
+          limit=broker.max_inbound_qos2_total().to_int64(),
+        )
+      }
+      inbound_total += count
+      for _ in 0..<count {
+        let offset = reader.position()
+        let id = reader.read_u16()
+        if id == 0 || inbound_qos2.contains(id) {
+          raise InvalidValue(field="inbound-packet-id", offset~)
+        }
+        inbound_qos2.push(id)
+      }
     }
     let inflight_count = checked_count(
       reader,
@@ -214,17 +302,32 @@ fn decode_payload(
       )
     }
     inflight_total = inflight_total + inflight_count
-    let inflight : Array[@router.SnapshotInflightV1] = []
+    let inflight : Array[@router.SnapshotInflightV3] = []
     for _ in 0..<inflight_count {
       let packet_offset = reader.position()
       let packet_id = reader.read_u16()
       if packet_id == 0 {
         raise InvalidValue(field="packet-id", offset=packet_offset)
       }
-      inflight.push({
-        packet_id,
-        message: decode_message(reader, limits.max_message_payload_bytes()),
-      })
+      let offset = reader.position()
+      let phase = if version == 3 { reader.read_u8() } else { 1 }
+      if phase < 1 || phase > 3 {
+        raise InvalidValue(field="outbound-phase", offset~)
+      }
+      let message = if phase == 3 {
+        None
+      } else {
+        let message = decode_message(
+          reader,
+          limits.max_message_payload_bytes(),
+          version,
+        )
+        if message.qos != phase {
+          raise InvalidValue(field="phase-message", offset~)
+        }
+        Some(message)
+      }
+      inflight.push({ packet_id, phase, message })
     }
     let pending_count = checked_count(
       reader,
@@ -239,9 +342,11 @@ fn decode_payload(
       )
     }
     pending_total = pending_total + pending_count
-    let pending : Array[@router.SnapshotMessageV1] = []
+    let pending : Array[@router.SnapshotMessageV3] = []
     for _ in 0..<pending_count {
-      pending.push(decode_message(reader, limits.max_message_payload_bytes()))
+      pending.push(
+        decode_message(reader, limits.max_message_payload_bytes(), version),
+      )
     }
     sessions.push({
       client_id,
@@ -249,6 +354,7 @@ fn decode_payload(
       detached_at_ms,
       next_packet_id,
       subscriptions,
+      inbound_qos2,
       inflight,
       pending,
     })
@@ -258,13 +364,13 @@ fn decode_payload(
     "retained",
     broker.max_retained_messages(),
   )
-  let retained : Array[@router.SnapshotRetainedV1] = []
+  let retained : Array[@router.SnapshotRetainedV3] = []
   for _ in 0..<retained_count {
     let topic = reader.read_string()
     let bytes = reader.read_bytes(limits.max_message_payload_bytes())
     let qos_offset = reader.position()
     let qos = reader.read_u8()
-    if qos > 1 {
+    if qos > (if version == 3 { 2 } else { 1 }) {
       raise InvalidValue(field="retained-qos", offset=qos_offset)
     }
     retained.push({ topic, payload: bytes, qos })
@@ -279,7 +385,7 @@ fn decode_payload(
 pub fn decode_snapshot(
   data : Bytes,
   limits : SnapshotDecodeLimits,
-) -> Result[@router.BrokerSnapshotV1, PersistenceError] {
+) -> Result[@router.BrokerSnapshotV3, PersistenceError] {
   try {
     if data.length() > limits.max_snapshot_bytes() {
       raise SnapshotTooLarge(
@@ -293,7 +399,7 @@ pub fn decode_snapshot(
       raise InvalidMagic
     }
     let envelope_version = reader.read_u16()
-    if envelope_version != 1 && envelope_version != 2 {
+    if envelope_version != 1 && envelope_version != 2 && envelope_version != 3 {
       raise UnsupportedEnvelopeVersion(envelope_version)
     }
     let flags = reader.read_u16()

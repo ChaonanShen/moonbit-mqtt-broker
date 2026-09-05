@@ -1,7 +1,7 @@
 ///|
 test "restored broker state resumes before accept" {
   let config = runtime_config()
-  let saved : @router.BrokerSnapshotV1 = {
+  let saved : @router.BrokerSnapshotV3 = {
     version: 1,
     sessions: [
       {
@@ -10,14 +10,17 @@ test "restored broker state resumes before accept" {
         detached_at_ms: 0L,
         next_packet_id: 8,
         subscriptions: [{ filter: "restored/#", qos: 1 }],
+        inbound_qos2: [],
         inflight: [
           {
             packet_id: 7,
-            message: {
+            phase: 1,
+            message: Some({
               topic: "restored/value",
               payload: b"saved",
               retain: false,
-            },
+              qos: 1,
+            }),
           },
         ],
         pending: [],

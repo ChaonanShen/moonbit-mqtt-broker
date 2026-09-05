@@ -1,7 +1,7 @@
 ///|
 pub(all) struct SnapshotRequest {
   revision : Int64
-  snapshot : @router.BrokerSnapshotV1
+  snapshot : @router.BrokerSnapshotV3
 }
 
 ///|

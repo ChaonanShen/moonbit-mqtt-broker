@@ -8,6 +8,8 @@ pub struct BrokerConfig {
   max_inflight_total : Int
   max_pending_qos1_per_session : Int
   max_pending_qos1_total : Int
+  max_inbound_qos2_per_session : Int
+  max_inbound_qos2_total : Int
   persistent_session_expiry_ms : Int64
   max_session_expirations_per_tick : Int
 } derive(Eq, Debug)
@@ -20,15 +22,38 @@ pub fn BrokerConfig::new(
   max_sessions? : Int = 1024,
   max_inflight_per_session? : Int = 16,
   max_inflight_total? : Int = 512,
-  max_pending_qos1_per_session? : Int = 64,
-  max_pending_qos1_total? : Int = 1024,
+  max_pending_qos1_per_session? : Int,
+  max_pending_qos1_total? : Int,
+  max_pending_per_session? : Int,
+  max_pending_total? : Int,
+  max_inbound_qos2_per_session? : Int = 64,
+  max_inbound_qos2_total? : Int = 4096,
   persistent_session_expiry_ms? : Int64 = -1L,
   max_session_expirations_per_tick? : Int = 128,
 ) -> Result[BrokerConfig, RouterError] {
+  if (
+      max_pending_qos1_per_session is Some(_) &&
+      max_pending_per_session is Some(_)
+    ) ||
+    (max_pending_qos1_total is Some(_) && max_pending_total is Some(_)) {
+    return Err(
+      InvalidConfiguration("conflicting pending QoS 1/2 limit aliases"),
+    )
+  }
+  let max_pending_qos1_per_session = max_pending_per_session.unwrap_or(
+    max_pending_qos1_per_session.unwrap_or(64),
+  )
+  let max_pending_qos1_total = max_pending_total.unwrap_or(
+    max_pending_qos1_total.unwrap_or(1024),
+  )
+
   if per_session < 0 ||
     total < 0 ||
     retained < 0 ||
     max_sessions < 0 ||
+    max_inbound_qos2_per_session < 0 ||
+    max_inbound_qos2_per_session > 65535 ||
+    max_inbound_qos2_total < 0 ||
     max_inflight_per_session < 0 ||
     max_inflight_total < 0 ||
     max_pending_qos1_per_session < 0 ||
@@ -48,6 +73,8 @@ pub fn BrokerConfig::new(
       max_inflight_total,
       max_pending_qos1_per_session,
       max_pending_qos1_total,
+      max_inbound_qos2_per_session,
+      max_inbound_qos2_total,
       persistent_session_expiry_ms,
       max_session_expirations_per_tick,
     })
@@ -110,4 +137,24 @@ pub fn BrokerConfig::max_session_expirations_per_tick(
   self : BrokerConfig,
 ) -> Int {
   self.max_session_expirations_per_tick
+}
+
+///|
+pub fn BrokerConfig::max_inbound_qos2_per_session(self : BrokerConfig) -> Int {
+  self.max_inbound_qos2_per_session
+}
+
+///|
+pub fn BrokerConfig::max_inbound_qos2_total(self : BrokerConfig) -> Int {
+  self.max_inbound_qos2_total
+}
+
+///|
+pub fn BrokerConfig::max_pending_per_session(self : BrokerConfig) -> Int {
+  self.max_pending_qos1_per_session
+}
+
+///|
+pub fn BrokerConfig::max_pending_total(self : BrokerConfig) -> Int {
+  self.max_pending_qos1_total
 }

@@ -286,7 +286,7 @@ async fn sync_directory(path : String) -> Unit raise PersistenceError {
 ///|
 pub async fn SnapshotStore::save(
   self : SnapshotStore,
-  snapshot : @router.BrokerSnapshotV1,
+  snapshot : @router.BrokerSnapshotV3,
 ) -> Result[Int, PersistenceError] {
   if self.closed {
     return Err(FileSystem(operation="save-closed-store", path=self.data_dir))

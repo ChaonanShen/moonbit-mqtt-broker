@@ -1,45 +1,48 @@
 ///|
-pub(all) struct SnapshotSubscriptionV1 {
+pub(all) struct SnapshotSubscriptionV3 {
   filter : String
   qos : Int
 } derive(Eq, Debug)
 
 ///|
-pub(all) struct SnapshotMessageV1 {
+pub(all) struct SnapshotMessageV3 {
   topic : String
   payload : Bytes
   retain : Bool
+  qos : Int
 } derive(Eq, Debug)
 
 ///|
-pub(all) struct SnapshotInflightV1 {
+pub(all) struct SnapshotInflightV3 {
   packet_id : Int
-  message : SnapshotMessageV1
+  phase : Int
+  message : SnapshotMessageV3?
 } derive(Eq, Debug)
 
 ///|
-pub(all) struct SnapshotSessionV1 {
+pub(all) struct SnapshotSessionV3 {
   client_id : String
   owner_principal : String
   detached_at_ms : Int64
   next_packet_id : Int
-  subscriptions : Array[SnapshotSubscriptionV1]
-  inflight : Array[SnapshotInflightV1]
-  pending : Array[SnapshotMessageV1]
+  subscriptions : Array[SnapshotSubscriptionV3]
+  inbound_qos2 : Array[Int]
+  inflight : Array[SnapshotInflightV3]
+  pending : Array[SnapshotMessageV3]
 } derive(Eq, Debug)
 
 ///|
-pub(all) struct SnapshotRetainedV1 {
+pub(all) struct SnapshotRetainedV3 {
   topic : String
   payload : Bytes
   qos : Int
 } derive(Eq, Debug)
 
 ///|
-pub(all) struct BrokerSnapshotV1 {
+pub(all) struct BrokerSnapshotV3 {
   version : Int
-  sessions : Array[SnapshotSessionV1]
-  retained : Array[SnapshotRetainedV1]
+  sessions : Array[SnapshotSessionV3]
+  retained : Array[SnapshotRetainedV3]
 } derive(Eq, Debug)
 
 ///|
@@ -62,6 +65,7 @@ fn snapshot_qos(qos : @session.DeliveryQoS) -> Int {
   match qos {
     QoS0 => 0
     QoS1 => 1
+    QoS2 => 2
   }
 }
 
@@ -72,23 +76,28 @@ fn qos_from_snapshot(
   match value {
     0 => Ok(QoS0)
     1 => Ok(QoS1)
+    2 => Ok(QoS2)
     _ => Err(InvalidQoS(value))
   }
 }
 
 ///|
-fn snapshot_message(message : @session.SessionMessage) -> SnapshotMessageV1 {
+fn snapshot_message(message : @session.SessionMessage) -> SnapshotMessageV3 {
   {
     topic: message.topic.value(),
     payload: copy_router_bytes(message.payload),
     retain: message.retain,
+    qos: snapshot_qos(message.qos),
   }
 }
 
 ///|
 fn session_message_from_snapshot(
-  message : SnapshotMessageV1,
+  message : SnapshotMessageV3,
 ) -> Result[@session.SessionMessage, SnapshotError] {
+  if message.qos != 1 && message.qos != 2 {
+    return Err(InvalidQoS(message.qos))
+  }
   let topic = match @topic.TopicName::new(message.topic) {
     Ok(value) => value
     Err(_) => return Err(InvalidTopic(message.topic))
@@ -98,12 +107,13 @@ fn session_message_from_snapshot(
       topic,
       copy_router_bytes(message.payload),
       message.retain,
+      qos=qos_from_snapshot(message.qos).unwrap(),
     ),
   )
 }
 
 ///|
-pub fn BrokerState::export_snapshot(self : BrokerState) -> BrokerSnapshotV1 {
+pub fn BrokerState::export_snapshot(self : BrokerState) -> BrokerSnapshotV3 {
   let client_ids : Array[@session.ClientId] = []
   for client_id, session in self.sessions {
     if session.mode() == @session.SessionMode::Persistent {
@@ -113,10 +123,10 @@ pub fn BrokerState::export_snapshot(self : BrokerState) -> BrokerSnapshotV1 {
   client_ids.sort_by(fn(left, right) {
     compare_utf8_for_sort(left.value(), right.value())
   })
-  let sessions : Array[SnapshotSessionV1] = []
+  let sessions : Array[SnapshotSessionV3] = []
   for client_id in client_ids {
     let session = self.sessions.get(client_id).unwrap()
-    let subscriptions : Array[SnapshotSubscriptionV1] = []
+    let subscriptions : Array[SnapshotSubscriptionV3] = []
     for record in self.subscriptions.records_for(client_id) {
       subscriptions.push({
         filter: record.filter.value(),
@@ -127,7 +137,12 @@ pub fn BrokerState::export_snapshot(self : BrokerState) -> BrokerSnapshotV1 {
       .inflight()
       .map(item => {
         packet_id: item.packet_id.value(),
-        message: snapshot_message(item.message),
+        phase: match item.phase {
+          AwaitPuback => 1
+          AwaitPubrec => 2
+          AwaitPubcomp => 3
+        },
+        message: item.message.map(snapshot_message),
       })
     let pending = session.pending().map(snapshot_message)
     sessions.push({
@@ -136,11 +151,12 @@ pub fn BrokerState::export_snapshot(self : BrokerState) -> BrokerSnapshotV1 {
       detached_at_ms: session.detached_at_ms().unwrap_or(0L),
       next_packet_id: session.next_packet_id(),
       subscriptions,
+      inbound_qos2: session.inbound_qos2().map(id => id.value()),
       inflight,
       pending,
     })
   }
-  let retained : Array[SnapshotRetainedV1] = []
+  let retained : Array[SnapshotRetainedV3] = []
   for message in self.retained.all_messages() {
     retained.push({
       topic: message.topic.value(),
@@ -148,15 +164,15 @@ pub fn BrokerState::export_snapshot(self : BrokerState) -> BrokerSnapshotV1 {
       qos: snapshot_qos(message.qos),
     })
   }
-  { version: 2, sessions, retained }
+  { version: 3, sessions, retained }
 }
 
 ///|
 pub fn BrokerState::from_snapshot(
   config : BrokerConfig,
-  snapshot : BrokerSnapshotV1,
+  snapshot : BrokerSnapshotV3,
 ) -> Result[BrokerState, SnapshotError] {
-  if snapshot.version != 1 && snapshot.version != 2 {
+  if snapshot.version != 1 && snapshot.version != 2 && snapshot.version != 3 {
     return Err(UnsupportedVersion(snapshot.version))
   }
   if snapshot.sessions.length() > config.max_sessions() {
@@ -169,6 +185,7 @@ pub fn BrokerState::from_snapshot(
   let seen_sessions : Map[@session.ClientId, Bool] = Map([])
   let mut total_inflight = 0
   let mut total_pending = 0
+  let mut total_inbound = 0
   for saved in snapshot.sessions {
     let client_id = match @session.ClientId::new(saved.client_id) {
       Ok(value) => value
@@ -214,18 +231,63 @@ pub fn BrokerState::from_snapshot(
         return Err(InvalidState("duplicate inflight packet id"))
       }
       seen_packet_ids.set(packet_id, true)
-      let message = match session_message_from_snapshot(item.message) {
-        Ok(value) => value
-        Err(error) => return Err(error)
+      if snapshot.version < 3 && item.phase != 1 {
+        return Err(InvalidState("legacy snapshot contains QoS 2 phase"))
       }
-      restored_inflight.push({ packet_id, message })
+      let phase : @session.OutboundPhase = match item.phase {
+        1 => AwaitPuback
+        2 => AwaitPubrec
+        3 => AwaitPubcomp
+        _ => return Err(InvalidState("unknown outbound phase"))
+      }
+      let message = match item.message {
+        Some(message) => {
+          if item.phase == 3 || message.qos != item.phase {
+            return Err(InvalidState("inflight phase/message mismatch"))
+          }
+          match session_message_from_snapshot(message) {
+            Ok(value) => Some(value)
+            Err(error) => return Err(error)
+          }
+        }
+        None => {
+          if item.phase != 3 {
+            return Err(InvalidState("missing inflight message"))
+          }
+          None
+        }
+      }
+      restored_inflight.push({ packet_id, message, phase })
     }
     let restored_pending : Array[@session.SessionMessage] = []
     for message in saved.pending {
+      if snapshot.version < 3 && message.qos != 1 {
+        return Err(InvalidQoS(message.qos))
+      }
       match session_message_from_snapshot(message) {
         Ok(value) => restored_pending.push(value)
         Err(error) => return Err(error)
       }
+    }
+    if snapshot.version < 3 && !saved.inbound_qos2.is_empty() {
+      return Err(InvalidState("legacy snapshot contains inbound QoS 2"))
+    }
+    if saved.inbound_qos2.length() > config.max_inbound_qos2_per_session() ||
+      saved.inbound_qos2.length() >
+      config.max_inbound_qos2_total() - total_inbound {
+      return Err(LimitExceeded("inbound QoS 2 limit exceeded"))
+    }
+    total_inbound += saved.inbound_qos2.length()
+    let inbound_qos2 : Array[@session.SessionPacketId] = []
+    for value in saved.inbound_qos2 {
+      let id = match @session.SessionPacketId::new(value) {
+        Ok(id) => id
+        Err(_) => return Err(InvalidPacketId(value))
+      }
+      if inbound_qos2.contains(id) {
+        return Err(InvalidState("duplicate inbound packet id"))
+      }
+      inbound_qos2.push(id)
     }
     let session = match
       @session.ClientSession::restore(
@@ -234,6 +296,7 @@ pub fn BrokerState::from_snapshot(
         restored_inflight,
         restored_pending,
         owner~,
+        inbound_qos2~,
         detached_at_ms=saved.detached_at_ms,
       ) {
       Ok(value) => value
@@ -257,6 +320,9 @@ pub fn BrokerState::from_snapshot(
         config.max_subscriptions_total() {
         return Err(LimitExceeded("subscription limit exceeded"))
       }
+      if snapshot.version < 3 && subscription.qos > 1 {
+        return Err(InvalidQoS(subscription.qos))
+      }
       let qos = match qos_from_snapshot(subscription.qos) {
         Ok(value) => value
         Err(error) => return Err(error)
@@ -274,6 +340,9 @@ pub fn BrokerState::from_snapshot(
       return Err(DuplicateRetained(saved.topic))
     }
     seen_retained.set(topic, true)
+    if snapshot.version < 3 && saved.qos > 1 {
+      return Err(InvalidQoS(saved.qos))
+    }
     let qos = match qos_from_snapshot(saved.qos) {
       Ok(value) => value
       Err(error) => return Err(error)
@@ -287,6 +356,7 @@ pub fn BrokerState::from_snapshot(
       ),
     )
   }
+  state.inbound_qos2_total = total_inbound
   state.inflight_total = total_inflight
   state.pending_qos1_total = total_pending
   match state.check_invariants() {

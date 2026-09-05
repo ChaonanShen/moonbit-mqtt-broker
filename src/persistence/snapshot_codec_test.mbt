@@ -11,12 +11,12 @@ fn codec_limits(
 }
 
 ///|
-fn empty_snapshot() -> @router.BrokerSnapshotV1 {
+fn empty_snapshot() -> @router.BrokerSnapshotV3 {
   { version: 2, sessions: [], retained: [] }
 }
 
 ///|
-fn representative_snapshot() -> @router.BrokerSnapshotV1 {
+fn representative_snapshot() -> @router.BrokerSnapshotV3 {
   {
     version: 2,
     sessions: [
@@ -29,17 +29,22 @@ fn representative_snapshot() -> @router.BrokerSnapshotV1 {
           { filter: "telemetry/+", qos: 0 },
           { filter: "状态/#", qos: 1 },
         ],
+        inbound_qos2: [],
         inflight: [
           {
             packet_id: 42,
-            message: {
+            phase: 1,
+            message: Some({
               topic: "状态/online",
               payload: Bytes::makei(256, index => index.to_byte()),
               retain: false,
-            },
+              qos: 1,
+            }),
           },
         ],
-        pending: [{ topic: "telemetry/2", payload: b"pending", retain: true }],
+        pending: [
+          { topic: "telemetry/2", payload: b"pending", retain: true, qos: 1 },
+        ],
       },
     ],
     retained: [{ topic: "retained/value", payload: b"\x00\xffvalue", qos: 1 }],
@@ -84,7 +89,7 @@ test "snapshot codec is deterministic and checksum protected" {
 
 ///|
 test "disk v1 empty snapshot golden bytes are stable" {
-  let legacy : @router.BrokerSnapshotV1 = {
+  let legacy : @router.BrokerSnapshotV3 = {
     version: 1,
     sessions: [],
     retained: [],
@@ -99,14 +104,14 @@ test "disk v1 empty snapshot golden bytes are stable" {
 }
 
 ///|
-test "Disk V1 Session decodes as LegacyAnonymous and rewrites as V2" {
+test "Disk V1 Session decodes as LegacyAnonymous and rewrites as V3" {
   let current = representative_snapshot()
   let legacy_session = {
     ..current.sessions[0],
     owner_principal: "legacy-anonymous",
     detached_at_ms: 0L,
   }
-  let legacy : @router.BrokerSnapshotV1 = {
+  let legacy : @router.BrokerSnapshotV3 = {
     version: 1,
     sessions: [legacy_session],
     retained: current.retained,
@@ -121,7 +126,7 @@ test "Disk V1 Session decodes as LegacyAnonymous and rewrites as V2" {
     decoded,
   ).unwrap()
   let rewritten = restored.export_snapshot()
-  assert_eq(rewritten.version, 2)
+  assert_eq(rewritten.version, 3)
   assert_eq(rewritten.sessions[0].owner_principal, "legacy-anonymous")
 }
 
@@ -152,8 +157,8 @@ test "snapshot envelope rejects every structural corruption class" {
     is Err(InvalidMagic),
   )
   assert_true(
-    decode_snapshot(replace_byte(encoded, 9, 3), codec_limits())
-    is Err(UnsupportedEnvelopeVersion(3)),
+    decode_snapshot(replace_byte(encoded, 9, 4), codec_limits())
+    is Err(UnsupportedEnvelopeVersion(4)),
   )
   assert_true(
     decode_snapshot(replace_byte(encoded, 11, 1), codec_limits())
@@ -177,13 +182,13 @@ test "snapshot envelope rejects every structural corruption class" {
 
 ///|
 test "snapshot decoder rejects invalid utf8 bool qos and packet ids" {
-  let invalid_qos : @router.BrokerSnapshotV1 = {
+  let invalid_qos : @router.BrokerSnapshotV3 = {
     version: 1,
     sessions: [],
     retained: [{ topic: "valid", payload: b"x", qos: 2 }],
   }
   assert_true(encode_snapshot(invalid_qos) is Err(InvalidValue(..)))
-  let invalid_packet : @router.BrokerSnapshotV1 = {
+  let invalid_packet : @router.BrokerSnapshotV3 = {
     version: 1,
     sessions: [
       {
@@ -192,6 +197,7 @@ test "snapshot decoder rejects invalid utf8 bool qos and packet ids" {
         detached_at_ms: 0L,
         next_packet_id: 0,
         subscriptions: [],
+        inbound_qos2: [],
         inflight: [],
         pending: [],
       },
@@ -248,6 +254,6 @@ test "snapshot model and envelope versions must agree" {
     is Ok(_),
   )
   assert_true(
-    encode_snapshot({ ..empty_snapshot(), version: 3 }) is Err(InvalidValue(..)),
+    encode_snapshot({ ..empty_snapshot(), version: 4 }) is Err(InvalidValue(..)),
   )
 }

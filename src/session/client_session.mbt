@@ -6,6 +6,7 @@ pub struct ClientSession {
   allocator : PacketIdAllocator
   mut inflight : Array[OutboundInflight]
   mut pending : Array[SessionMessage]
+  mut inbound_qos2 : Array[SessionPacketId]
   owner : @security.Principal
   mut detached_at_ms : Int64?
 } derive(Eq, Debug)
@@ -24,6 +25,7 @@ pub fn ClientSession::new(
     allocator: PacketIdAllocator::new().unwrap(),
     inflight: [],
     pending: [],
+    inbound_qos2: [],
     owner,
     detached_at_ms: if attached {
       None
@@ -41,30 +43,45 @@ pub fn ClientSession::restore(
   pending : Array[SessionMessage],
   owner? : @security.Principal = @security.Principal::Anonymous,
   detached_at_ms? : Int64 = 0L,
+  inbound_qos2? : Array[SessionPacketId] = [],
 ) -> Result[ClientSession, SessionError] {
   let allocator = match PacketIdAllocator::new(next=next_packet_id) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
+  let seen_inbound : Map[SessionPacketId, Bool] = Map([])
+  for id in inbound_qos2 {
+    if seen_inbound.contains(id) {
+      return Err(
+        SessionInvariantViolation("duplicate restored inbound packet id"),
+      )
+    }
+    seen_inbound.set(id, true)
+  }
+  for message in pending {
+    if message.qos == QoS0 {
+      return Err(SessionInvariantViolation("restored pending QoS 0"))
+    }
+  }
   let stored_inflight : Array[OutboundInflight] = []
   for item in inflight {
+    match (item.phase, item.message) {
+      (AwaitPuback, Some({ qos: QoS1, .. })) => ()
+      (AwaitPubrec, Some({ qos: QoS2, .. })) => ()
+      (AwaitPubcomp, None) => ()
+      _ =>
+        return Err(
+          SessionInvariantViolation("restored inflight phase/message mismatch"),
+        )
+    }
     if stored_inflight.any(existing => existing.packet_id == item.packet_id) {
       return Err(
         SessionInvariantViolation("duplicate restored inflight packet id"),
       )
     }
-    stored_inflight.push({
-      packet_id: item.packet_id,
-      message: SessionMessage::new(
-        item.message.topic,
-        item.message.payload,
-        item.message.retain,
-      ),
-    })
+    stored_inflight.push(item.copy())
   }
-  let stored_pending = pending.map(message => {
-    SessionMessage::new(message.topic, message.payload, message.retain)
-  })
+  let stored_pending = pending.map(message => message.copy())
   Ok({
     client_id,
     mode: Persistent,
@@ -72,6 +89,7 @@ pub fn ClientSession::restore(
     allocator,
     inflight: stored_inflight,
     pending: stored_pending,
+    inbound_qos2: inbound_qos2.copy(),
     owner,
     detached_at_ms: Some(detached_at_ms),
   })
@@ -109,21 +127,12 @@ pub fn ClientSession::next_packet_id(self : ClientSession) -> Int {
 
 ///|
 pub fn ClientSession::inflight(self : ClientSession) -> Array[OutboundInflight] {
-  self.inflight.map(item => {
-    packet_id: item.packet_id,
-    message: SessionMessage::new(
-      item.message.topic,
-      item.message.payload,
-      item.message.retain,
-    ),
-  })
+  self.inflight.map(item => item.copy())
 }
 
 ///|
 pub fn ClientSession::pending(self : ClientSession) -> Array[SessionMessage] {
-  self.pending.map(message => {
-    SessionMessage::new(message.topic, message.payload, message.retain)
-  })
+  self.pending.map(message => message.copy())
 }
 
 ///|
@@ -154,17 +163,9 @@ fn ClientSession::stage_inflight(
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  let stored = SessionMessage::new(
-    message.topic,
-    message.payload,
-    message.retain,
-  )
-  self.inflight.push({ packet_id, message: stored })
-  Ok({
-    packet_id,
-    message: SessionMessage::new(message.topic, message.payload, message.retain),
-    dup: false,
-  })
+  let phase = if message.qos == QoS2 { AwaitPubrec } else { AwaitPuback }
+  self.inflight.push({ packet_id, message: Some(message.copy()), phase })
+  Ok({ packet_id, message: Some(message.copy()), dup: false })
 }
 
 ///|
@@ -173,12 +174,13 @@ pub fn ClientSession::stage(
   message : SessionMessage,
   limits : SessionLimits,
 ) -> Result[SessionStage, SessionError] {
+  if message.qos == QoS0 {
+    return Err(SessionInvariantViolation("queued message must use QoS 1 or 2"))
+  }
   if self.attached && self.inflight.length() < limits.max_inflight {
     self.stage_inflight(message).map(delivery => SendNow(delivery))
   } else if self.pending.length() < limits.max_pending {
-    self.pending.push(
-      SessionMessage::new(message.topic, message.payload, message.retain),
-    )
+    self.pending.push(message.copy())
     Ok(Queued)
   } else {
     Err(PendingLimitReached(limits.max_pending))
@@ -199,9 +201,11 @@ fn ClientSession::promote_pending(
     for index in 1..<self.pending.length() {
       remaining.push(self.pending[index])
     }
-    self.pending = remaining
     match self.stage_inflight(message) {
-      Ok(delivery) => deliveries.push(delivery)
+      Ok(delivery) => {
+        self.pending = remaining
+        deliveries.push(delivery)
+      }
       Err(error) => return Err(error)
     }
   }
@@ -213,11 +217,16 @@ pub fn ClientSession::ack(
   self : ClientSession,
   packet_id : SessionPacketId,
   limits : SessionLimits,
+  pubcomp? : Bool = false,
 ) -> Result[SessionAck, SessionError] {
   let remaining : Array[OutboundInflight] = []
   let mut found = false
   for item in self.inflight {
     if !found && item.packet_id == packet_id {
+      let expected = if pubcomp { AwaitPubcomp } else { AwaitPuback }
+      if item.phase != expected {
+        return Err(InvalidAcknowledgement)
+      }
       found = true
     } else {
       remaining.push(item)
@@ -253,12 +262,8 @@ pub fn ClientSession::attach(
   for item in self.inflight {
     deliveries.push({
       packet_id: item.packet_id,
-      message: SessionMessage::new(
-        item.message.topic,
-        item.message.payload,
-        item.message.retain,
-      ),
-      dup: true,
+      message: item.message.map(message => message.copy()),
+      dup: item.phase != AwaitPubcomp,
     })
   }
   match self.promote_pending(limits) {
@@ -279,8 +284,30 @@ pub fn ClientSession::check_invariants(
   if self.pending.length() > limits.max_pending {
     return Err(SessionInvariantViolation("pending limit exceeded"))
   }
+  if self.inbound_qos2.length() > limits.max_inbound_qos2 {
+    return Err(SessionInvariantViolation("inbound QoS 2 limit exceeded"))
+  }
+  let seen_inbound : Map[SessionPacketId, Bool] = Map([])
+  for id in self.inbound_qos2 {
+    if seen_inbound.contains(id) {
+      return Err(SessionInvariantViolation("duplicate inbound packet id"))
+    }
+    seen_inbound.set(id, true)
+  }
+  for message in self.pending {
+    if message.qos == QoS0 {
+      return Err(SessionInvariantViolation("pending QoS 0"))
+    }
+  }
   for index in 0..<self.inflight.length() {
     let item = self.inflight[index]
+    match (item.phase, item.message) {
+      (AwaitPuback, Some({ qos: QoS1, .. })) => ()
+      (AwaitPubrec, Some({ qos: QoS2, .. })) => ()
+      (AwaitPubcomp, None) => ()
+      _ =>
+        return Err(SessionInvariantViolation("inflight phase/message mismatch"))
+    }
     if item.packet_id.value() < 1 || item.packet_id.value() > 65535 {
       return Err(SessionInvariantViolation("invalid inflight packet id"))
     }
@@ -291,4 +318,113 @@ pub fn ClientSession::check_invariants(
     }
   }
   Ok(())
+}
+
+///|
+pub fn ClientSession::inbound_qos2(
+  self : ClientSession,
+) -> Array[SessionPacketId] {
+  self.inbound_qos2.copy()
+}
+
+///|
+pub fn ClientSession::inbound_qos2_count(self : ClientSession) -> Int {
+  self.inbound_qos2.length()
+}
+
+///|
+pub fn ClientSession::has_inbound_qos2(
+  self : ClientSession,
+  id : SessionPacketId,
+) -> Bool {
+  self.inbound_qos2.contains(id)
+}
+
+///|
+pub fn ClientSession::begin_inbound_qos2(
+  self : ClientSession,
+  id : SessionPacketId,
+  limits : SessionLimits,
+) -> Result[Bool, SessionError] {
+  if self.has_inbound_qos2(id) {
+    return Ok(false)
+  }
+  if self.inbound_qos2.length() >= limits.max_inbound_qos2 {
+    return Err(InboundQoS2LimitReached(limits.max_inbound_qos2))
+  }
+  self.inbound_qos2.push(id)
+  Ok(true)
+}
+
+///|
+pub fn ClientSession::complete_inbound_qos2(
+  self : ClientSession,
+  id : SessionPacketId,
+) -> Bool {
+  if !self.has_inbound_qos2(id) {
+    return false
+  }
+  self.inbound_qos2 = self.inbound_qos2.filter(value => value != id)
+  true
+}
+
+///|
+/// Returns true only for the first PUBREC. Unknown IDs elicit a stateless PUBREL.
+pub fn ClientSession::pubrec(
+  self : ClientSession,
+  id : SessionPacketId,
+) -> Result[Bool, SessionError] {
+  for item in self.inflight {
+    if item.packet_id != id {
+      continue
+    }
+    match item.phase {
+      AwaitPuback => return Err(InvalidAcknowledgement)
+      AwaitPubcomp => return Ok(false)
+      AwaitPubrec => {
+        // Move exactly once: preserve both required replay subsequences.
+        self.inflight = self.inflight.filter(value => value.packet_id != id)
+        self.inflight.push({ packet_id: id, phase: AwaitPubcomp, message: None })
+        return Ok(true)
+      }
+    }
+  }
+  Ok(false)
+}
+
+///|
+/// Payload ownership exposed without cloning, for later byte-budget integration.
+pub fn ClientSession::outbound_message_bytes(self : ClientSession) -> Int64 {
+  let mut total = 0L
+  for item in self.inflight {
+    if item.message is Some(message) {
+      total += @utf8.encode(message.topic.value()).length().to_int64() +
+        message.payload.length().to_int64()
+    }
+  }
+  for message in self.pending {
+    total += @utf8.encode(message.topic.value()).length().to_int64() +
+      message.payload.length().to_int64()
+  }
+  total
+}
+
+///|
+pub fn ClientSession::phase_count(
+  self : ClientSession,
+  phase : OutboundPhase,
+) -> Int {
+  self.inflight.filter(item => item.phase == phase).length()
+}
+
+///|
+/// An isolated copy used by the router's prepare/install transaction.
+pub fn ClientSession::copy(self : ClientSession) -> ClientSession {
+  {
+    ..self,
+    allocator: PacketIdAllocator::new(next=self.allocator.next()).unwrap(),
+    inflight: self.inflight(),
+    pending: self.pending(),
+    inbound_qos2: self.inbound_qos2.copy(),
+  }
 }

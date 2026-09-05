@@ -8,6 +8,8 @@ pub(all) enum LimitKind {
   InflightTotal
   PendingQoS1PerSession
   PendingQoS1Total
+  InboundQoS2PerSession
+  InboundQoS2Total
 } derive(Eq, Debug)
 
 ///|
@@ -22,6 +24,7 @@ pub(all) enum RouterError {
   SessionLimitReached(Int)
   InvalidSessionState(@session.ClientId)
   QoS1ResourceLimit(@session.ClientId, LimitKind)
+  InboundQoS2ResourceLimit(LimitKind)
   SessionFailure(@session.SessionError)
   RetainedLimitReached(Int)
   InvariantViolation(String)

@@ -57,4 +57,16 @@ pub(all) enum BrokerEvent {
   Unsubscribe(UnsubscribeRequest)
   Publish(PublishInput)
   Puback(PubackRequest)
+  Pubrec(PubackRequest)
+  Pubrel(PubackRequest)
+  Pubcomp(PubackRequest)
+  ReceiveQoS2(InboundQoS2Request)
+} derive(Eq, Debug)
+
+///|
+/// None is an ACL-dropped exchange that must still finish the handshake.
+pub(all) struct InboundQoS2Request {
+  client_id : @session.ClientId
+  packet_id : @session.SessionPacketId
+  publish : PublishInput?
 } derive(Eq, Debug)
