@@ -92,6 +92,25 @@ if "${BROKER_EXECUTABLE}" --config "${WORK_DIR}/duplicate.toml" --check-config >
   exit 1
 fi
 
+# QoS 1/2 pending aliases share one value; conflicts within one source are fatal.
+"$BROKER_EXECUTABLE" --max-pending-total 3 --max-inbound-qos2-per-session 7 \
+  --print-effective-config >"$WORK_DIR/qos2-effective.toml"
+grep -qxF 'max_pending_total = 3' "$WORK_DIR/qos2-effective.toml"
+grep -qxF 'max_inbound_qos2_per_session = 7' "$WORK_DIR/qos2-effective.toml"
+if "$BROKER_EXECUTABLE" --max-pending-total 3 --max-pending-qos1-total 3 --check-config >/dev/null 2>&1; then
+  echo 'conflicting CLI pending aliases accepted' >&2
+  exit 1
+fi
+printf '[broker]\nmax_pending_total = 3\nmax_pending_qos1_total = 3\n' >"$WORK_DIR/qos2-conflict.toml"
+if "$BROKER_EXECUTABLE" --config "$WORK_DIR/qos2-conflict.toml" --check-config >/dev/null 2>&1; then
+  echo 'conflicting TOML pending aliases accepted' >&2
+  exit 1
+fi
+printf '[broker]\nmax_pending_total = 3\n' >"$WORK_DIR/qos2-valid.toml"
+"$BROKER_EXECUTABLE" --config "$WORK_DIR/qos2-valid.toml" --max-pending-qos1-total 5 \
+  --print-effective-config >"$WORK_DIR/qos2-override.toml"
+grep -qxF 'max_pending_total = 5' "$WORK_DIR/qos2-override.toml"
+
 port="$(free_port)"
 broker_log="${WORK_DIR}/broker.log"
 setsid stdbuf -oL "${BROKER_EXECUTABLE}" --config "${config_file}" \

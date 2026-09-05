@@ -61,6 +61,14 @@ fn map_section(
     TomlTable(value) => value
     _ => raise ConfigFileError(section_name + " must be a table")
   }
+  if section_name == "broker" {
+    for suffix in ["per_session", "total"] {
+      if table.get("max_pending_" + suffix) is Some(_) &&
+        table.get("max_pending_qos1_" + suffix) is Some(_) {
+        raise ConfigFileError("conflicting pending limit aliases: " + suffix)
+      }
+    }
+  }
   for key, entry in table {
     let full_key = section_name + "." + key
     match full_key {
@@ -95,6 +103,14 @@ fn map_section(
         add_integer(args, "--max-pending-qos1-per-session", entry, full_key)
       "broker.max_pending_qos1_total" =>
         add_integer(args, "--max-pending-qos1-total", entry, full_key)
+      "broker.max_pending_per_session" =>
+        add_integer(args, "--max-pending-per-session", entry, full_key)
+      "broker.max_pending_total" =>
+        add_integer(args, "--max-pending-total", entry, full_key)
+      "broker.max_inbound_qos2_per_session" =>
+        add_integer(args, "--max-inbound-qos2-per-session", entry, full_key)
+      "broker.max_inbound_qos2_total" =>
+        add_integer(args, "--max-inbound-qos2-total", entry, full_key)
       "broker.persistent_session_expiry" =>
         add_string(args, "--persistent-session-expiry", entry, full_key)
       "broker.max_session_expirations_per_tick" =>
