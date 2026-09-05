@@ -1,5 +1,8 @@
 ///|
 pub struct BrokerMetrics {
+  mut qos2_received : Int64
+  mut qos2_duplicates : Int64
+  mut qos2_rejected : Int64
   started_at_ms : Int64
   mut messages_received : Int64
   mut messages_sent : Int64
@@ -12,6 +15,9 @@ pub struct BrokerMetrics {
 ///|
 pub fn BrokerMetrics::new(started_at_ms : Int64) -> BrokerMetrics {
   {
+    qos2_received: 0L,
+    qos2_duplicates: 0L,
+    qos2_rejected: 0L,
     started_at_ms,
     messages_received: 0L,
     messages_sent: 0L,
@@ -94,4 +100,32 @@ pub fn BrokerMetrics::record_tls_handshake_failure(
   self : BrokerMetrics,
 ) -> Unit {
   self.tls_handshake_failures = self.tls_handshake_failures + 1L
+}
+
+///|
+pub fn BrokerMetrics::qos2_received(self : BrokerMetrics) -> Int64 {
+  self.qos2_received
+}
+
+///|
+pub fn BrokerMetrics::qos2_duplicates(self : BrokerMetrics) -> Int64 {
+  self.qos2_duplicates
+}
+
+///|
+pub fn BrokerMetrics::qos2_rejected(self : BrokerMetrics) -> Int64 {
+  self.qos2_rejected
+}
+
+///|
+fn BrokerMetrics::record_qos2(self : BrokerMetrics, duplicate~ : Bool) -> Unit {
+  self.qos2_received += 1L
+  if duplicate {
+    self.qos2_duplicates += 1L
+  }
+}
+
+///|
+fn BrokerMetrics::record_qos2_rejection(self : BrokerMetrics) -> Unit {
+  self.qos2_rejected += 1L
 }

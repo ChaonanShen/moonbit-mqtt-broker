@@ -81,7 +81,7 @@ fn qos_from_protocol(qos : @protocol.QoS) -> @session.DeliveryQoS? {
   match qos {
     QoS0 => Some(@session.DeliveryQoS::QoS0)
     QoS1 => Some(@session.DeliveryQoS::QoS1)
-    QoS2 => None
+    QoS2 => Some(@session.DeliveryQoS::QoS2)
   }
 }
 
@@ -178,7 +178,7 @@ fn BrokerRuntime::map_broker_actions(
                   }),
                 )
               }
-              QoS1 => {
+              QoS1 | QoS2 => {
                 let packet_id = match delivery.packet_id {
                   Some(value) => @protocol.PacketId::new(value.value()).unwrap()
                   None => continue
@@ -190,7 +190,11 @@ fn BrokerRuntime::map_broker_actions(
                     packet: Publish({
                       topic: delivery.topic.value(),
                       payload: copy_runtime_bytes(delivery.payload),
-                      qos: @protocol.QoS::QoS1,
+                      qos: if delivery.qos == @session.DeliveryQoS::QoS2 {
+                        @protocol.QoS::QoS2
+                      } else {
+                        @protocol.QoS::QoS1
+                      },
                       packet_id: Some(packet_id),
                       dup: delivery.dup,
                       retain: delivery.retain,
@@ -200,6 +204,16 @@ fn BrokerRuntime::map_broker_actions(
               }
             }
           }
+        }
+      SendPubrec(ack) | SendPubrel(ack) | SendPubcomp(ack) =>
+        if self.active_by_client.get(ack.client_id) is Some(connection_id) {
+          let id = @protocol.PacketId::new(ack.packet_id.value()).unwrap()
+          let packet = match broker_action {
+            SendPubrec(_) => @protocol.Packet::Pubrec(id)
+            SendPubrel(_) => @protocol.Packet::Pubrel(id)
+            _ => @protocol.Packet::Pubcomp(id)
+          }
+          actions.push(SendPacket({ connection_id, packet }))
         }
       DeliveryDroppedResourceLimit(_) => self.metrics.record_dropped()
       SessionExpired(client_id) =>
@@ -420,11 +434,6 @@ fn BrokerRuntime::handle_connect(
   let stored_will = match packet.will {
     None => None
     Some(will) => {
-      match will.qos {
-        QoS1 => ()
-        QoS2 => return self.terminate(connection_id, ProtocolError)
-        QoS0 => ()
-      }
       let topic = match @topic.TopicName::new(will.topic) {
         Err(_) => return self.terminate(connection_id, ProtocolError)
         Ok(value) => value
@@ -585,6 +594,12 @@ fn BrokerRuntime::handle_subscribe(
   principal : @security.Principal,
   packet : @protocol.SubscribePacket,
 ) -> Array[RuntimeAction] {
+  if self.broker_state.has_inbound_qos2(
+      client_id,
+      @session.SessionPacketId::new(packet.packet_id.value()).unwrap(),
+    ) {
+    return self.close_protocol_error(connection_id)
+  }
   let entries : Array[@router.SubscribeEntry] = []
   let authorized : Array[Bool] = []
   for subscription in packet.subscriptions {
@@ -657,6 +672,7 @@ fn BrokerRuntime::handle_subscribe(
                 match qos {
                   QoS0 => GrantedQoS0
                   QoS1 => GrantedQoS1
+                  QoS2 => GrantedQoS2
                 },
               )
             RejectedLimit(_) => return_codes.push(Failure)
@@ -683,6 +699,12 @@ fn BrokerRuntime::handle_unsubscribe(
   client_id : @session.ClientId,
   packet : @protocol.UnsubscribePacket,
 ) -> Array[RuntimeAction] {
+  if self.broker_state.has_inbound_qos2(
+      client_id,
+      @session.SessionPacketId::new(packet.packet_id.value()).unwrap(),
+    ) {
+    return self.close_protocol_error(connection_id)
+  }
   let filters : Array[@topic.TopicFilter] = []
   for filter_value in packet.topic_filters {
     match @topic.TopicFilter::new(filter_value) {
@@ -719,21 +741,67 @@ fn BrokerRuntime::handle_active_packet(
           }
           None
         }
-        QoS1 =>
+        QoS1 | QoS2 =>
           match publish_packet.packet_id {
             Some(value) => Some(value)
             None => return self.close_protocol_error(connection_id)
           }
-        QoS2 => return self.close_protocol_error(connection_id)
       }
-      let qos = if incoming_packet_id is Some(_) {
-        @session.DeliveryQoS::QoS1
-      } else {
-        @session.DeliveryQoS::QoS0
-      }
+      let qos = qos_from_protocol(publish_packet.qos).unwrap()
       let topic = match @topic.TopicName::new(publish_packet.topic) {
         Err(_) => return self.close_protocol_error(connection_id)
         Ok(value) => value
+      }
+      if publish_packet.qos == @protocol.QoS::QoS2 {
+        let packet_id = @session.SessionPacketId::new(
+          incoming_packet_id.unwrap().value(),
+        ).unwrap()
+        let duplicate = self.broker_state.has_inbound_qos2(client_id, packet_id)
+        let allowed = duplicate ||
+          self.security.can_write_topic(principal, topic)
+        if !allowed {
+          self.metrics.record_acl_denial()
+          self.metrics.record_dropped()
+        }
+        let input = if duplicate || !allowed {
+          None
+        } else {
+          Some(@router.PublishInput::{
+            origin: Client(client_id),
+            topic,
+            payload: publish_packet.payload,
+            qos,
+            retain: publish_packet.retain,
+          })
+        }
+        return match
+          self.broker_state.apply(
+            @router.BrokerEvent::ReceiveQoS2({
+              client_id,
+              packet_id,
+              publish: input,
+            }),
+          ) {
+          Ok(actions) => {
+            self.metrics.record_qos2(duplicate~)
+            self.map_broker_actions(actions)
+          }
+          Err(@router.RouterError::QoS1ResourceLimit(_, _))
+          | Err(@router.RouterError::InboundQoS2ResourceLimit(_))
+          | Err(@router.RouterError::RetainedLimitReached(_)) => {
+            self.metrics.record_qos2_rejection()
+            self.terminate(connection_id, ResourceExhausted)
+          }
+          Err(_) => self.close_protocol_error(connection_id)
+        }
+      }
+      if incoming_packet_id is Some(id) {
+        if self.broker_state.has_inbound_qos2(
+            client_id,
+            @session.SessionPacketId::new(id.value()).unwrap(),
+          ) {
+          return self.close_protocol_error(connection_id)
+        }
       }
       if !self.security.can_write_topic(principal, topic) {
         self.metrics.record_acl_denial()
@@ -780,15 +848,21 @@ fn BrokerRuntime::handle_active_packet(
         Err(_) => self.close_protocol_error(connection_id)
       }
     }
-    Puback(packet_id) => {
-      let session_packet_id = @session.SessionPacketId::new(packet_id.value()).unwrap()
-      match
-        self.broker_state.apply(
-          @router.BrokerEvent::Puback({
-            client_id,
-            packet_id: session_packet_id,
-          }),
-        ) {
+    Puback(packet_id)
+    | Pubrec(packet_id)
+    | Pubrel(packet_id)
+    | Pubcomp(packet_id) => {
+      let request : @router.PubackRequest = {
+        client_id,
+        packet_id: @session.SessionPacketId::new(packet_id.value()).unwrap(),
+      }
+      let event = match packet {
+        Puback(_) => @router.BrokerEvent::Puback(request)
+        Pubrec(_) => @router.BrokerEvent::Pubrec(request)
+        Pubrel(_) => @router.BrokerEvent::Pubrel(request)
+        _ => @router.BrokerEvent::Pubcomp(request)
+      }
+      match self.broker_state.apply(event) {
         Ok(actions) => self.map_broker_actions(actions)
         Err(_) => self.close_protocol_error(connection_id)
       }
@@ -820,6 +894,9 @@ fn BrokerRuntime::handle_packet(
         _ => self.close_protocol_error(event.connection_id)
       }
     Active(client_id) => {
+      if self.active_by_client.get(client_id) != Some(event.connection_id) {
+        return []
+      }
       self.connections.set(event.connection_id, {
         ..meta,
         last_control_at_ms: event.received_at_ms,
@@ -926,6 +1003,20 @@ fn BrokerRuntime::emit_system_metrics(
     ("retained/count", state.retained_count().to_string()),
     ("qos1/inflight", state.inflight_count().to_string()),
     ("qos1/pending", state.pending_qos1_count().to_string()),
+    ("qos/inflight", state.inflight_count().to_string()),
+    ("qos/pending", state.pending_qos1_count().to_string()),
+    ("qos2/inbound", state.inbound_qos2_count().to_string()),
+    (
+      "qos2/await_pubrec",
+      state.phase_count(@session.OutboundPhase::AwaitPubrec).to_string(),
+    ),
+    (
+      "qos2/await_pubcomp",
+      state.phase_count(@session.OutboundPhase::AwaitPubcomp).to_string(),
+    ),
+    ("qos2/received", self.metrics.qos2_received().to_string()),
+    ("qos2/duplicates", self.metrics.qos2_duplicates().to_string()),
+    ("qos2/rejected", self.metrics.qos2_rejected().to_string()),
     ("messages/received", self.metrics.messages_received().to_string()),
     ("messages/sent", self.metrics.messages_sent().to_string()),
     ("messages/dropped", self.metrics.messages_dropped().to_string()),

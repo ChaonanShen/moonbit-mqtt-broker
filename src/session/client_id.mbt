@@ -11,6 +11,8 @@ pub(all) enum SessionError {
   SessionAlreadyAttached
   SessionNotAttached
   SessionInvariantViolation(String)
+  InvalidAcknowledgement
+  InboundQoS2LimitReached(Int)
 } derive(Eq, Debug)
 
 ///|

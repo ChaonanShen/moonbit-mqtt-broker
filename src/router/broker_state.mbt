@@ -6,6 +6,7 @@ pub struct BrokerState {
   priv retained : RetainedStore
   priv mut inflight_total : Int
   priv mut pending_qos1_total : Int
+  priv mut inbound_qos2_total : Int
   priv mut snapshot_revision : Int64
   priv mut last_expiration_check_ms : Int64?
   priv mut time_regression_reported : Bool
@@ -54,6 +55,7 @@ pub fn BrokerState::new(config : BrokerConfig) -> BrokerState {
     retained: RetainedStore::new(),
     inflight_total: 0,
     pending_qos1_total: 0,
+    inbound_qos2_total: 0,
     snapshot_revision: 0L,
     last_expiration_check_ms: None,
     time_regression_reported: false,
@@ -205,6 +207,7 @@ fn BrokerState::session_limits(
   @session.SessionLimits::new(
     max_inflight.unwrap_or(self.config.max_inflight_per_session()),
     max_pending.unwrap_or(self.config.max_pending_qos1_per_session()),
+    max_inbound_qos2=self.config.max_inbound_qos2_per_session(),
   ).unwrap()
 }
 
@@ -243,6 +246,7 @@ fn BrokerState::remove_session(
     None => return Err(SessionNotFound(client_id))
     Some(value) => value
   }
+  self.inbound_qos2_total -= session.inbound_qos2_count()
   self.inflight_total = self.inflight_total - session.inflight_count()
   self.pending_qos1_total = self.pending_qos1_total - session.pending_count()
   ignore(self.subscriptions.remove_all(client_id))
@@ -350,7 +354,7 @@ fn BrokerState::delivery_candidates(
     candidates.push({
       recipient: subscription.client_id,
       topic: input.topic,
-      payload: copy_router_bytes(input.payload),
+      payload: input.payload,
       qos: @session.min_qos(input.qos, subscription.qos),
       retain,
     })
@@ -382,7 +386,7 @@ fn BrokerState::preflight_deliveries(
         if session.is_attached() {
           planned.push({ candidate, destination: DirectQoS0 })
         }
-      QoS1 => {
+      QoS1 | QoS2 => {
         let extra_inflight = planned_inflight
           .get(candidate.recipient)
           .unwrap_or(0)
@@ -423,11 +427,14 @@ fn BrokerState::preflight_deliveries(
 }
 
 ///|
-fn BrokerState::commit_deliveries(
+fn BrokerState::prepare_deliveries(
   self : BrokerState,
   planned : Array[PlannedDelivery],
-) -> Result[Array[BrokerAction], RouterError] {
+) -> Result[PreparedDeliveries, RouterError] {
   let actions : Array[BrokerAction] = []
+  let updates : Map[@session.ClientId, @session.ClientSession] = Map([])
+  let mut inflight_added = 0
+  let mut pending_added = 0
   for item in planned {
     let candidate = item.candidate
     match item.destination {
@@ -444,7 +451,14 @@ fn BrokerState::commit_deliveries(
           }),
         )
       StageInflight | StagePending => {
-        let session = self.sessions.get(candidate.recipient).unwrap()
+        let session = match updates.get(candidate.recipient) {
+          Some(value) => value
+          None => {
+            let value = self.sessions.get(candidate.recipient).unwrap().copy()
+            updates.set(candidate.recipient, value)
+            value
+          }
+        }
         let max_inflight = match item.destination {
           StageInflight => session.inflight_count() + 1
           _ => session.inflight_count()
@@ -459,6 +473,7 @@ fn BrokerState::commit_deliveries(
               candidate.topic,
               candidate.payload,
               candidate.retain,
+              qos=candidate.qos,
             ),
             self.session_limits(max_inflight~, max_pending~),
           ) {
@@ -467,27 +482,27 @@ fn BrokerState::commit_deliveries(
         }
         match stage {
           SendNow(delivery) => {
-            self.inflight_total = self.inflight_total + 1
+            inflight_added += 1
             actions.push(
               Deliver({
                 recipient: candidate.recipient,
-                topic: delivery.message.topic,
-                payload: copy_router_bytes(delivery.message.payload),
-                qos: QoS1,
-                retain: delivery.message.retain,
+                topic: delivery.message.unwrap().topic,
+                payload: copy_router_bytes(delivery.message.unwrap().payload),
+                qos: delivery.message.unwrap().qos,
+                retain: delivery.message.unwrap().retain,
                 packet_id: Some(delivery.packet_id),
                 dup: delivery.dup,
               }),
             )
           }
-          Queued => self.pending_qos1_total = self.pending_qos1_total + 1
+          Queued => pending_added += 1
         }
       }
       DropResource(_) =>
         actions.push(DeliveryDroppedResourceLimit(candidate.recipient))
     }
   }
-  Ok(actions)
+  Ok({ actions, updates, inflight_added, pending_added })
 }
 
 ///|
@@ -531,13 +546,17 @@ fn BrokerState::attach_session(
   }
   let actions : Array[BrokerAction] = [SessionAttached(client_id)]
   for delivery in deliveries {
+    if delivery.message is None {
+      actions.push(SendPubrel({ client_id, packet_id: delivery.packet_id }))
+      continue
+    }
     actions.push(
       Deliver({
         recipient: client_id,
-        topic: delivery.message.topic,
-        payload: copy_router_bytes(delivery.message.payload),
-        qos: QoS1,
-        retain: delivery.message.retain,
+        topic: delivery.message.unwrap().topic,
+        payload: copy_router_bytes(delivery.message.unwrap().payload),
+        qos: delivery.message.unwrap().qos,
+        retain: delivery.message.unwrap().retain,
         packet_id: Some(delivery.packet_id),
         dup: delivery.dup,
       }),
@@ -551,6 +570,7 @@ fn BrokerState::ack_delivery(
   self : BrokerState,
   client_id : @session.ClientId,
   packet_id : @session.SessionPacketId,
+  pubcomp? : Bool = false,
 ) -> Result[Array[BrokerAction], RouterError] {
   let session = match self.sessions.get(client_id) {
     Some(value) => value
@@ -566,7 +586,11 @@ fn BrokerState::ack_delivery(
     self.config.max_inflight_per_session()
   }
   let ack = match
-    session.ack(packet_id, self.session_limits(max_inflight=effective_max)) {
+    session.ack(
+      packet_id,
+      self.session_limits(max_inflight=effective_max),
+      pubcomp~,
+    ) {
     Ok(value) => value
     Err(error) => return Err(SessionFailure(error))
   }
@@ -587,10 +611,10 @@ fn BrokerState::ack_delivery(
         actions.push(
           Deliver({
             recipient: client_id,
-            topic: delivery.message.topic,
-            payload: copy_router_bytes(delivery.message.payload),
-            qos: QoS1,
-            retain: delivery.message.retain,
+            topic: delivery.message.unwrap().topic,
+            payload: copy_router_bytes(delivery.message.unwrap().payload),
+            qos: delivery.message.unwrap().qos,
+            retain: delivery.message.unwrap().retain,
             packet_id: Some(delivery.packet_id),
             dup: false,
           }),
@@ -693,14 +717,18 @@ pub fn BrokerState::apply(
             candidates.push({
               recipient: client_id,
               topic: message.topic,
-              payload: copy_router_bytes(message.payload),
+              payload: message.payload,
               qos: @session.min_qos(message.qos, subscription.qos),
               retain: true,
             })
           }
         }
       }
-      let planned = match self.preflight_deliveries(candidates, true) {
+      let preparation = match self.preflight_deliveries(candidates, true) {
+        Ok(planned) => self.prepare_deliveries(planned)
+        Err(error) => Err(error)
+      }
+      let prepared = match preparation {
         Ok(value) => value
         Err(error) => {
           for filter, previous in originals {
@@ -716,11 +744,9 @@ pub fn BrokerState::apply(
       let actions : Array[BrokerAction] = [
         SubscriptionsApplied({ client_id, results }),
       ]
-      let delivery_changed = self.planned_changes_snapshot(planned)
-      match self.commit_deliveries(planned) {
-        Ok(deliveries) => actions.append(deliveries)
-        Err(error) => return Err(error)
-      }
+      let delivery_changed = prepared.inflight_added > 0 ||
+        prepared.pending_added > 0
+      actions.append(self.install_deliveries(prepared))
       if persistent && (subscriptions_changed || delivery_changed) {
         self.mark_snapshot_dirty()
       }
@@ -744,48 +770,12 @@ pub fn BrokerState::apply(
       }
       Ok([UnsubscriptionsApplied({ client_id, removed })])
     }
-    Publish(input) => {
-      if input.retain &&
-        input.payload.length() > 0 &&
-        self.retained.get(input.topic) is None &&
-        self.retained.count() >= self.config.max_retained_messages() {
-        return Err(RetainedLimitReached(self.config.max_retained_messages()))
-      }
-      let strict = input.origin is Client(_)
-      let planned = match
-        self.preflight_deliveries(
-          self.delivery_candidates(input, false),
-          strict,
-        ) {
-        Ok(value) => value
-        Err(error) => return Err(error)
-      }
-      let delivery_changed = self.planned_changes_snapshot(planned)
-      let mut retained_changed = false
-      if input.retain {
-        let previous = self.retained.get(input.topic)
-        if input.payload.length() == 0 {
-          self.retained.remove(input.topic)
-          retained_changed = previous is Some(_)
-        } else {
-          retained_changed = previous !=
-            Some({ topic: input.topic, payload: input.payload, qos: input.qos })
-          ignore(
-            self.retained.put(
-              input.topic,
-              input.payload,
-              input.qos,
-              self.config.max_retained_messages(),
-            ),
-          )
-        }
-      }
-      let actions = self.commit_deliveries(planned)
-      if actions is Ok(_) && (retained_changed || delivery_changed) {
-        self.mark_snapshot_dirty()
-      }
-      actions
-    }
+    Publish(input) => self.publish_input(input)
+    ReceiveQoS2(request) => self.receive_qos2(request)
+    Pubrel(request) => self.complete_qos2(request)
+    Pubrec(request) => self.receive_pubrec(request)
+    Pubcomp(request) =>
+      self.ack_delivery(request.client_id, request.packet_id, pubcomp=true)
     Puback(request) => self.ack_delivery(request.client_id, request.packet_id)
   }
 }
@@ -821,6 +811,7 @@ pub fn BrokerState::check_invariants(
   }
   let mut actual_inflight = 0
   let mut actual_pending = 0
+  let mut actual_inbound = 0
   for client_id, session in self.sessions {
     match session.check_invariants(self.session_limits()) {
       Ok(_) => ()
@@ -829,8 +820,15 @@ pub fn BrokerState::check_invariants(
     if session.client_id() != client_id {
       return Err(InvariantViolation("session id/key mismatch"))
     }
+    actual_inbound += session.inbound_qos2_count()
     actual_inflight = actual_inflight + session.inflight_count()
     actual_pending = actual_pending + session.pending_count()
+  }
+  if actual_inbound != self.inbound_qos2_total ||
+    actual_inbound > self.config.max_inbound_qos2_total() {
+    return Err(
+      InvariantViolation("inbound QoS 2 count inconsistent or exceeded"),
+    )
   }
   if actual_inflight != self.inflight_total ||
     actual_pending != self.pending_qos1_total {
@@ -846,4 +844,200 @@ pub fn BrokerState::check_invariants(
     }
   }
   Ok(())
+}
+
+///|
+fn BrokerState::publish_input(
+  self : BrokerState,
+  input : PublishInput,
+) -> Result[Array[BrokerAction], RouterError] {
+  if input.retain &&
+    input.payload.length() > 0 &&
+    self.retained.get(input.topic) is None &&
+    self.retained.count() >= self.config.max_retained_messages() {
+    return Err(RetainedLimitReached(self.config.max_retained_messages()))
+  }
+  let strict = input.origin is Client(_)
+  let planned = match
+    self.preflight_deliveries(self.delivery_candidates(input, false), strict) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let delivery_changed = self.planned_changes_snapshot(planned)
+  let prepared = match self.prepare_deliveries(planned) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let mut retained_changed = false
+  if input.retain {
+    let previous = self.retained.get(input.topic)
+    if input.payload.length() == 0 {
+      self.retained.remove(input.topic)
+      retained_changed = previous is Some(_)
+    } else {
+      retained_changed = previous !=
+        Some({ topic: input.topic, payload: input.payload, qos: input.qos })
+      ignore(
+        self.retained.put(
+          input.topic,
+          input.payload,
+          input.qos,
+          self.config.max_retained_messages(),
+        ),
+      )
+    }
+  }
+  let actions = self.install_deliveries(prepared)
+  if retained_changed || delivery_changed {
+    self.mark_snapshot_dirty()
+  }
+  Ok(actions)
+}
+
+///|
+pub fn BrokerState::inbound_qos2_count(self : BrokerState) -> Int {
+  self.inbound_qos2_total
+}
+
+///|
+pub fn BrokerState::has_inbound_qos2(
+  self : BrokerState,
+  client_id : @session.ClientId,
+  packet_id : @session.SessionPacketId,
+) -> Bool {
+  match self.sessions.get(client_id) {
+    Some(session) => session.has_inbound_qos2(packet_id)
+    None => false
+  }
+}
+
+///|
+pub fn BrokerState::phase_count(
+  self : BrokerState,
+  phase : @session.OutboundPhase,
+) -> Int {
+  let mut total = 0
+  for _, session in self.sessions {
+    total += session.phase_count(phase)
+  }
+  total
+}
+
+///|
+fn BrokerState::receive_qos2(
+  self : BrokerState,
+  request : InboundQoS2Request,
+) -> Result[Array[BrokerAction], RouterError] {
+  let session = match self.sessions.get(request.client_id) {
+    Some(value) => value
+    None => return Err(SessionNotFound(request.client_id))
+  }
+  if !session.is_attached() {
+    return Err(InvalidSessionState(request.client_id))
+  }
+  if request.publish is Some(input) {
+    if input.qos != QoS2 || input.origin != Client(request.client_id) {
+      return Err(InvariantViolation("invalid inbound QoS 2 publication"))
+    }
+  }
+  let ack : BrokerAction = SendPubrec({
+    client_id: request.client_id,
+    packet_id: request.packet_id,
+  })
+  if session.has_inbound_qos2(request.packet_id) {
+    return Ok([ack])
+  }
+  if session.inbound_qos2_count() >= self.config.max_inbound_qos2_per_session() {
+    return Err(InboundQoS2ResourceLimit(InboundQoS2PerSession))
+  }
+  if self.inbound_qos2_total >= self.config.max_inbound_qos2_total() {
+    return Err(InboundQoS2ResourceLimit(InboundQoS2Total))
+  }
+  // All count checks and fallible routing preparation precede mutation. This
+  // single-writer event has no await or externally observable intermediate state.
+  let deliveries = match request.publish {
+    Some(input) =>
+      match self.publish_input(input) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+    None => []
+  }
+  // The publisher may also be a routed recipient whose prepared copy was installed.
+  let session = self.sessions.get(request.client_id).unwrap()
+  ignore(
+    session
+    .begin_inbound_qos2(request.packet_id, self.session_limits())
+    .unwrap(),
+  )
+  self.inbound_qos2_total += 1
+  if session.mode() == @session.SessionMode::Persistent {
+    self.mark_snapshot_dirty()
+  }
+  let actions = [ack]
+  actions.append(deliveries)
+  Ok(actions)
+}
+
+///|
+fn BrokerState::complete_qos2(
+  self : BrokerState,
+  request : PubackRequest,
+) -> Result[Array[BrokerAction], RouterError] {
+  let session = match self.sessions.get(request.client_id) {
+    Some(value) => value
+    None => return Err(SessionNotFound(request.client_id))
+  }
+  if session.complete_inbound_qos2(request.packet_id) {
+    self.inbound_qos2_total -= 1
+    if session.mode() == @session.SessionMode::Persistent {
+      self.mark_snapshot_dirty()
+    }
+  }
+  Ok([
+    SendPubcomp({ client_id: request.client_id, packet_id: request.packet_id }),
+  ])
+}
+
+///|
+fn BrokerState::receive_pubrec(
+  self : BrokerState,
+  request : PubackRequest,
+) -> Result[Array[BrokerAction], RouterError] {
+  let session = match self.sessions.get(request.client_id) {
+    Some(value) => value
+    None => return Err(SessionNotFound(request.client_id))
+  }
+  match session.pubrec(request.packet_id) {
+    Err(error) => return Err(SessionFailure(error))
+    Ok(changed) =>
+      if changed && session.mode() == @session.SessionMode::Persistent {
+        self.mark_snapshot_dirty()
+      }
+  }
+  Ok([
+    SendPubrel({ client_id: request.client_id, packet_id: request.packet_id }),
+  ])
+}
+
+///|
+priv struct PreparedDeliveries {
+  actions : Array[BrokerAction]
+  updates : Map[@session.ClientId, @session.ClientSession]
+  inflight_added : Int
+  pending_added : Int
+}
+
+///|
+/// Installs only fully constructed state. All recoverable failures occur in prepare.
+fn BrokerState::install_deliveries(
+  self : BrokerState,
+  prepared : PreparedDeliveries,
+) -> Array[BrokerAction] {
+  for client_id, session in prepared.updates {
+    self.sessions.set(client_id, session)
+  }
+  self.inflight_total += prepared.inflight_added
+  self.pending_qos1_total += prepared.pending_added
+  prepared.actions
 }

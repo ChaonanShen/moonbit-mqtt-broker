@@ -13,14 +13,14 @@ fn persistence_broker_config() -> @router.BrokerConfig {
 }
 
 ///|
-fn empty_snapshot() -> @router.BrokerSnapshotV1 {
-  { version: 2, sessions: [], retained: [] }
+fn empty_snapshot() -> @router.BrokerSnapshotV3 {
+  { version: 3, sessions: [], retained: [] }
 }
 
 ///|
-fn representative_snapshot() -> @router.BrokerSnapshotV1 {
+fn representative_snapshot() -> @router.BrokerSnapshotV3 {
   {
-    version: 2,
+    version: 3,
     sessions: [
       {
         client_id: "store-client",
@@ -28,17 +28,22 @@ fn representative_snapshot() -> @router.BrokerSnapshotV1 {
         detached_at_ms: 0L,
         next_packet_id: 43,
         subscriptions: [{ filter: "state/#", qos: 1 }],
+        inbound_qos2: [],
         inflight: [
           {
             packet_id: 42,
-            message: {
+            phase: 1,
+            message: Some({
               topic: "state/inflight",
               payload: b"inflight",
               retain: false,
-            },
+              qos: 1,
+            }),
           },
         ],
-        pending: [{ topic: "state/pending", payload: b"pending", retain: true }],
+        pending: [
+          { topic: "state/pending", payload: b"pending", retain: true, qos: 1 },
+        ],
       },
     ],
     retained: [{ topic: "state/value", payload: b"value", qos: 1 }],
@@ -262,19 +267,20 @@ async test "snapshot store rejects corrupt oversize symlink and nonregular main"
 ///|
 async test "snapshot import rejects duplicate domain keys atomically" {
   with_store_dir("duplicates", path => {
-    let duplicate : @router.SnapshotSessionV1 = {
+    let duplicate : @router.SnapshotSessionV3 = {
       client_id: "same",
       owner_principal: "legacy-anonymous",
       detached_at_ms: 0L,
       next_packet_id: 1,
       subscriptions: [],
+      inbound_qos2: [],
       inflight: [],
       pending: [],
     }
     let store = SnapshotStore::open(store_config(path)).unwrap()
     ignore(
       store
-      .save({ version: 2, sessions: [duplicate, duplicate], retained: [] })
+      .save({ version: 3, sessions: [duplicate, duplicate], retained: [] })
       .unwrap(),
     )
     assert_true(

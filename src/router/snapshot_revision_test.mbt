@@ -249,6 +249,7 @@ test "restored snapshot revision starts at zero" {
         detached_at_ms: 0L,
         next_packet_id: 7,
         subscriptions: [],
+        inbound_qos2: [],
         inflight: [],
         pending: [],
       },

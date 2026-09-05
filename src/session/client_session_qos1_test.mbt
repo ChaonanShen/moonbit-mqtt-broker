@@ -46,12 +46,12 @@ test "puback promotes pending qos1 in fifo order" {
     _ => fail("matching PUBACK must be acknowledged")
   }
   assert_eq(promoted.length(), 1)
-  assert_eq(promoted[0].message.payload, b"second")
+  assert_eq(promoted[0].message.unwrap().payload, b"second")
   let next = match session.ack(promoted[0].packet_id, limits).unwrap() {
     Acknowledged(value) => value
     _ => fail("matching PUBACK must promote third message")
   }
-  assert_eq(next[0].message.payload, b"third")
+  assert_eq(next[0].message.unwrap().payload, b"third")
 }
 
 ///|
@@ -67,7 +67,7 @@ test "unacknowledged qos1 replay keeps packet id and sets dup" {
   assert_eq(replay.length(), 1)
   assert_eq(replay[0].packet_id, original.packet_id)
   assert_true(replay[0].dup)
-  assert_eq(replay[0].message.payload, b"saved")
+  assert_eq(replay[0].message.unwrap().payload, b"saved")
   assert_eq(session.check_invariants(limits), Ok(()))
 }
 

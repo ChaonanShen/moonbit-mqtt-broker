@@ -80,12 +80,15 @@ test "snapshot roundtrip preserves persistent qos1 state" {
     ),
   )
   let exported = state.export_snapshot()
-  assert_eq(exported.version, 2)
+  assert_eq(exported.version, 3)
   assert_eq(exported.sessions.length(), 1)
   assert_eq(exported.sessions[0].client_id, "persistent")
   assert_eq(exported.sessions[0].owner_principal, "anonymous")
   assert_eq(exported.sessions[0].detached_at_ms, 0L)
-  assert_eq(exported.sessions[0].inflight[0].message.payload, b"inflight")
+  assert_eq(
+    exported.sessions[0].inflight[0].message.unwrap().payload,
+    b"inflight",
+  )
   assert_eq(exported.sessions[0].pending[0].payload, b"pending")
   assert_eq(exported.retained.length(), 1)
   let restored = BrokerState::from_snapshot(config, exported).unwrap()
@@ -104,17 +107,18 @@ test "snapshot roundtrip preserves persistent qos1 state" {
 ///|
 test "snapshot import rejects corruption without partial state" {
   let config = snapshot_config()
-  let empty : BrokerSnapshotV1 = { version: 1, sessions: [], retained: [] }
+  let empty : BrokerSnapshotV3 = { version: 1, sessions: [], retained: [] }
   assert_true(
-    BrokerState::from_snapshot(config, { ..empty, version: 3 })
-    is Err(SnapshotError::UnsupportedVersion(3)),
+    BrokerState::from_snapshot(config, { ..empty, version: 4 })
+    is Err(SnapshotError::UnsupportedVersion(4)),
   )
-  let duplicate_session : SnapshotSessionV1 = {
+  let duplicate_session : SnapshotSessionV3 = {
     client_id: "duplicate",
     owner_principal: "legacy-anonymous",
     detached_at_ms: 0L,
     next_packet_id: 1,
     subscriptions: [],
+    inbound_qos2: [],
     inflight: [],
     pending: [],
   }
@@ -126,20 +130,23 @@ test "snapshot import rejects corruption without partial state" {
     })
     is Err(SnapshotError::DuplicateSession("duplicate")),
   )
-  let duplicate_id : SnapshotSessionV1 = {
+  let duplicate_id : SnapshotSessionV3 = {
     client_id: "ids",
     owner_principal: "legacy-anonymous",
     detached_at_ms: 0L,
     next_packet_id: 2,
     subscriptions: [],
+    inbound_qos2: [],
     inflight: [
       {
         packet_id: 1,
-        message: { topic: "valid", payload: b"a", retain: false },
+        phase: 1,
+        message: Some({ topic: "valid", payload: b"a", retain: false, qos: 1 }),
       },
       {
         packet_id: 1,
-        message: { topic: "valid", payload: b"b", retain: false },
+        phase: 1,
+        message: Some({ topic: "valid", payload: b"b", retain: false, qos: 1 }),
       },
     ],
     pending: [],
@@ -152,7 +159,7 @@ test "snapshot import rejects corruption without partial state" {
     })
     is Err(SnapshotError::InvalidState("duplicate inflight packet id")),
   )
-  let invalid_topic : BrokerSnapshotV1 = {
+  let invalid_topic : BrokerSnapshotV3 = {
     version: 1,
     sessions: [],
     retained: [{ topic: "bad/+", payload: b"x", qos: 1 }],
@@ -168,7 +175,7 @@ test "snapshot import rejects corruption without partial state" {
 }
 
 ///|
-test "Snapshot V2 preserves owner and detach time while V1 migrates to legacy anonymous" {
+test "Snapshot V3 preserves owner and detach time while V1 migrates to legacy anonymous" {
   let config = snapshot_config()
   let state = BrokerState::new(config)
   let client = snapshot_client("owned")
@@ -186,7 +193,7 @@ test "Snapshot V2 preserves owner and detach time while V1 migrates to legacy an
     state.apply(DetachSessionAt({ client_id: client, detached_at_ms: 123456L })),
   )
   let snapshot = state.export_snapshot()
-  assert_eq(snapshot.version, 2)
+  assert_eq(snapshot.version, 3)
   assert_eq(snapshot.sessions[0].owner_principal, "user:alice")
   assert_eq(snapshot.sessions[0].detached_at_ms, 123456L)
   let restored = BrokerState::from_snapshot(config, snapshot).unwrap()
@@ -205,6 +212,7 @@ test "Snapshot V2 preserves owner and detach time while V1 migrates to legacy an
         detached_at_ms: 0L,
         next_packet_id: 1,
         subscriptions: [],
+        inbound_qos2: [],
         inflight: [],
         pending: [],
       },
