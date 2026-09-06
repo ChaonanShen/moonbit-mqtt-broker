@@ -3,7 +3,7 @@
 # Argon2id authentication returns distinct MQTT 3.1.1 rejection codes
 # ACLs enforce partial SUBACK, publish, retained, Will, and $SYS policy
 # Principal ownership blocks active/offline/restart Client ID attacks
-# Snapshot V2 preserves owner state while logs never contain credentials
+# Snapshot V3 preserves owner state while logs never contain credentials
 set -euo pipefail
 ulimit -c 0
 
@@ -124,4 +124,4 @@ node tests/integration/security.mjs verify "${URL}" "${WORK_DIR}/server.crt"
 kill -s TERM -- "-${BROKER_PID}"
 wait "${BROKER_PID}"
 BROKER_PID=""
-echo 'SECURITY Argon2id, ACL, Principal ownership, Snapshot V2, TLS, and restart passed'
+echo 'SECURITY Argon2id, ACL, Principal ownership, Snapshot V3, TLS, and restart passed'

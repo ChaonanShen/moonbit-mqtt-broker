@@ -226,8 +226,11 @@ const fullMatrix = async () => {
 
   const qos2 = await rawConnect('release-full-qos2')
   qos2.client.send({ cmd: 'publish', topic: 'release/full/qos2', payload: Buffer.from('x'), qos: 2, messageId: 7 })
-  await expectClosed(qos2.client, 'QoS2 close')
-  result.qos2Closes = true
+  await qos2.client.next(packet => packet.cmd === 'pubrec' && packet.messageId === 7, 'QoS2 PUBREC')
+  qos2.client.send({ cmd: 'pubrel', messageId: 7 })
+  await qos2.client.next(packet => packet.cmd === 'pubcomp' && packet.messageId === 7, 'QoS2 PUBCOMP')
+  qos2.client.send({ cmd: 'disconnect' })
+  result.qos2Handshake = true
 
   const ping = await rawConnect('release-full-ping', true, 0)
   ping.client.send({ cmd: 'pingreq' })
