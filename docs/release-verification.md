@@ -234,3 +234,13 @@ This is a 2026-09-07 snapshot, not a live assertion that future HEADs pass:
 - After correcting negative images, all four runtime profiles passed independently.
 - Final implementation commit `9c693c0` had two complete-run attempts fail with Mooncakes Git-index and dependency-ZIP network timeouts, both exit 255. No complete pass was claimed for that commit.
 - The default ten-minute soak was not executed then. A release still needs current-candidate complete success evidence.
+
+QoS 2 development verification: scripts/verify-qos2-docker.sh. The cumulative
+verify-release.sh (also called by the distribution build) invokes verify-qos2.sh,
+including raw handshakes, committed-phase SIGKILL recovery, MQTT.js/Mosquitto,
+1,000 publications and 100 reconnects. Worktree results do not replace strict
+verification of a committed candidate HEAD in four runtime environments.
+
+The worktree Docker wrapper trusts only /workspace through process-local Git
+configuration. This accommodates the host UID/container root mismatch without
+changing the host Git configuration or trusting arbitrary directories.

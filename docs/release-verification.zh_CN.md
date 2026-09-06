@@ -307,3 +307,10 @@ CI 在 push、pull request 和手动触发时运行；手动触发可选择 soak
 - 修正缺库环境后，四种实际运行 profile 的独立矩阵全部通过。
 - 最终实现提交 `9c693c0` 的两次完整复核分别遇到 Mooncakes Git 索引连接超时、依赖 ZIP 下载超时，退出码均为 255；因此当时没有宣称该提交整条流程通过。
 - 默认十分钟 soak 当时未执行。发布前必须另有当前候选的完整成功记录。
+
+QoS 2 日常入口：scripts/verify-qos2-docker.sh。累计 verify-release.sh（分发构建也调用它）
+已接入 verify-qos2.sh，包含逐报文握手、已提交阶段 SIGKILL 恢复、MQTT.js/Mosquitto、
+1,000 条发布和 100 次重连。工作树验证不能代替已提交候选 HEAD 的四环境严格分发验证。
+
+工作树 Docker 包装器通过进程级 Git 配置仅信任 /workspace，兼容宿主机 UID 与
+容器 root 的差异；不修改宿主机 Git 配置，也不放宽任意目录信任。

@@ -8,3 +8,7 @@ tmp
 *.log
 .env
 .env.*
+
+# Agent workspace instructions are not published application files.
+AGENTS.md
+AGENTS.local.md

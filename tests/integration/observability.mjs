@@ -20,8 +20,18 @@ const base = (clientId, password = 'observer-secret', certificate = ca) => ({
 })
 const connect = (clientId, overrides = {}) => new Promise((resolve, reject) => {
   const client = mqtt.connect(url, { ...base(clientId), ...overrides })
-  const messages = []
-  client.on('message', (topic, payload, packet) => messages.push({ topic, value: payload.toString(), packet }))
+  const messages = [], metricCycles = []
+  let currentMetrics = {}
+  client.on('message', (topic, payload, packet) => {
+    const value = payload.toString()
+    messages.push({ topic, value, packet })
+    if (!topic.startsWith('$SYS/broker/')) return
+    if (topic === '$SYS/broker/version') currentMetrics = {}
+    currentMetrics[topic] = value
+    // Runtime emits persistence/state last. MQTT preserves this connection's
+    // packet order, so only this boundary represents a complete metric cycle.
+    if (topic === '$SYS/broker/persistence/state') metricCycles.push({ ...currentMetrics })
+  })
   const onError = error => {
     client.end(true)
     reject(error)
@@ -29,7 +39,7 @@ const connect = (clientId, overrides = {}) => new Promise((resolve, reject) => {
   client.once('error', onError)
   client.once('connect', () => {
     client.off('error', onError)
-    resolve({ client, messages })
+    resolve({ client, messages, metricCycles })
   })
 })
 const expectRejected = async (options, description) => {
@@ -67,6 +77,8 @@ const ordinary = await connect('observability-ordinary', {
   password: 'ordinary-secret'
 })
 await subscribe(ordinary.client, '#')
+// Ensure the test contains a stale pre-publication cycle, even on a fast host.
+await waitUntil(() => observer.metricCycles.length > 0, 'pre-publication metric cycle')
 await publish(observer.client, 'allowed/application', 'OBSERVABILITY_PAYLOAD_SECRET_MARKER', { qos: 1 })
 await publish(observer.client, '$SYS/broker/forged', 'OBSERVABILITY_FORGED_SECRET_MARKER', { qos: 1, retain: true })
 
@@ -74,11 +86,13 @@ const required = [
   'version', 'uptime_seconds', 'clients/connected', 'sessions/count',
   'subscriptions/count', 'retained/count', 'qos1/inflight', 'qos1/pending',
   'messages/received', 'messages/sent', 'messages/dropped', 'auth/failures',
-  'acl/denials', 'tls/handshake_failures', 'persistence/state'
+  'acl/denials', 'tls/handshake_failures', 'persistence/state',
+  'qos/inflight', 'qos/pending', 'qos2/inbound', 'qos2/await_pubrec',
+  'qos2/await_pubcomp', 'qos2/received', 'qos2/duplicates', 'qos2/rejected'
 ].map(name => `$SYS/broker/${name}`)
 await waitUntil(
-  () => required.every(topic => observer.messages.some(message => message.topic === topic)),
-  'complete system metric set'
+  () => observer.metricCycles.some(cycle => required.every(topic => topic in cycle) && Number(cycle['$SYS/broker/messages/received']) >= 2),
+  'complete post-publication system metric set'
 )
 if (ordinary.messages.some(message => message.topic.startsWith('$SYS/'))) {
   throw new Error('ordinary # subscription received a system metric')
@@ -86,7 +100,7 @@ if (ordinary.messages.some(message => message.topic.startsWith('$SYS/'))) {
 if (observer.messages.some(message => message.topic === '$SYS/broker/forged')) {
   throw new Error('client forged a system metric')
 }
-const values = () => Object.fromEntries(observer.messages.map(message => [message.topic, message.value]))
+const values = () => observer.metricCycles.at(-1)
 const first = values()
 if (first['$SYS/broker/version'] !== '0.1.0') throw new Error('version metric mismatch')
 if (first['$SYS/broker/persistence/state'] !== 'healthy') throw new Error('persistence metric mismatch')
@@ -96,9 +110,9 @@ if (Number(first['$SYS/broker/auth/failures']) < 1) throw new Error('auth counte
 if (Number(first['$SYS/broker/acl/denials']) < 1) throw new Error('ACL counter too small')
 if (Number(first['$SYS/broker/tls/handshake_failures']) < 1) throw new Error('TLS counter too small')
 if (first['$SYS/broker/retained/count'] !== '0') throw new Error('system/denied publish polluted retained state')
-const receivedCount = observer.messages.filter(message => message.topic === '$SYS/broker/messages/received').length
+const cycleCount = observer.metricCycles.length
 await waitUntil(
-  () => observer.messages.filter(message => message.topic === '$SYS/broker/messages/received').length > receivedCount,
+  () => observer.metricCycles.length > cycleCount,
   'second system metric cycle'
 )
 const second = values()

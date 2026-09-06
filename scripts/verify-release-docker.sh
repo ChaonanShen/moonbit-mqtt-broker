@@ -4,6 +4,9 @@ set -euo pipefail
 readonly IMAGE="${MOONBIT_MQTT_IMAGE:-moonbit-mqtt-broker-dev}"
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 exec docker run --rm --platform linux/amd64 --entrypoint bash \
+  --env GIT_CONFIG_COUNT=1 \
+  --env GIT_CONFIG_KEY_0=safe.directory \
+  --env GIT_CONFIG_VALUE_0=/workspace \
   --env "RELEASE_SOAK=${RELEASE_SOAK:-0}" \
   --env "RELEASE_SOAK_SECONDS=${RELEASE_SOAK_SECONDS:-600}" \
   --env "RELEASE_SOAK_PUBLICATIONS=${RELEASE_SOAK_PUBLICATIONS:-100000}" \
