@@ -8,26 +8,26 @@
 | MQTT 3.1.1 CONNECT / CONNACK | 支持 | 完整 Clean/Persistent `session_present` 语义 |
 | TCP 拆包/粘包 framing | 支持 | 感知容量的 reader 和有界三态 decoder |
 | 相同 packet/receive 上限 | 支持 | 16/16 边界覆盖完整 CONNECT 加粘连 PINGREQ |
-| QoS 0/1 packet codec | 支持 | 完整 frame adapter；校验 Packet ID/DUP 组合 |
-| MQTT.js 5.15.2 互操作 | 0.1.0 支持 | QoS 0/1、retained/Will、Persistent Session 和跨进程重启 |
-| Mosquitto 2.0.18 互操作 | 0.1.0 支持 | QoS 0/1、retained 和 Persistent Session 离线重启投递 |
+| QoS 0/1/2 packet codec | 支持 | 完整 frame adapter；校验 Packet ID/DUP 组合 |
+| MQTT.js 5.15.2 互操作 | 0.1.0 支持 | QoS 0/1/2、retained/Will、Persistent Session 和跨进程重启 |
+| Mosquitto 2.0.18 互操作 | 0.1.0 支持 | QoS 0/1/2、retained 和 Persistent Session 离线重启投递 |
 | Aedes 1.1.1 参考矩阵 | 仅测试 | 比较规范化的公共行为；不是运行时依赖，也不声明插件兼容性 |
 | Topic 校验与路由 | 支持 | `+`、`#`、`$SYS`、重叠合并和确定性顺序 |
 | Keep Alive 和 PING | 支持 | 1.5 倍 deadline；零表示禁用空闲超时 |
 | Client ID 接管 | 支持 | 使用连接 generation 隔离旧事件 |
 | Retained 投递 | 支持 | 实时 `RETAIN=0`、重放 `RETAIN=1`、空 payload 删除 |
-| QoS 0/1 Will | 支持 | EOF、I/O/协议失败、超时和接管；DISCONNECT 抑制 |
+| QoS 0/1/2 Will | 支持 | EOF、I/O/协议失败、超时和接管；DISCONNECT 抑制 |
 | 网络 SUBACK / UNSUBACK | 支持 | 保留输入 Packet ID 和订阅顺序 |
 | 空 Client ID | Clean Session 时支持 | 使用进程内唯一 ID |
 | QoS 1 PUBACK / inflight | 支持 | 入站使用同 ID PUBACK；每个 Session 独立出站 ID 和有序 inflight |
 | `clean_session=false` | 非空 Client ID 时支持 | 空 ID 返回 `IdentifierRejected` |
-| Persistent Session | 跨连接支持 | 订阅、inflight 和有界离线 QoS 1 可在重连后恢复 |
-| 重连 DUP 重放 | 支持 | 原 inflight 保留 Packet ID，并设置 `DUP=1` |
-| Snapshot V2 数据边界 | 支持 | 保存 Principal 和 detach epoch；读取旧 V1 并重写 V2 |
+| Persistent Session | 跨连接支持 | 订阅、inflight 和有界离线 QoS 1/2 可在重连后恢复 |
+| 重连 DUP 重放 | 支持 | 按阶段保留原 ID，重放 DUP=1 的 PUBLISH 或 PUBREL 0x62 |
+| Snapshot V3 数据边界 | 支持 | 保存 Principal 和 detach epoch；读取旧 V1/V2 并写入 V3 |
 | Broker 重启后状态 | 设置 `--data-dir` 时支持 | debounce 本地快照，恢复到最近提交 revision |
 | SIGTERM / SIGINT 退出 | 支持 | 正常停止、抑制活动 Will、强制并排空最新 Snapshot |
 | TLS listener | 可选支持 | 单个纯 TLS listener；启动时校验 PEM，握手有界 |
-| MQTT.js/Mosquitto TLS | 0.1.0 支持 | QoS 0/1、retained、Persistent Session 和重启恢复 |
+| MQTT.js/Mosquitto TLS | 0.1.0 支持 | QoS 0/1/2、retained、Persistent Session 和重启恢复 |
 | Argon2id 认证 | 可选支持 | 只接受编码哈希；默认允许匿名 |
 | 静态仅允许式 ACL | 可选支持 | 读/写过滤、部分 SUBACK、禁止客户端写 `$SYS` |
 | Principal 所有 Client ID | 支持 | 跨 Principal 接管、清理和恢复在重启后仍被拒绝 |
@@ -35,15 +35,16 @@
 | `$SYS/broker` 指标 | 支持 | 需显式订阅/读 ACL；QoS 0、不 retained、不持久化/自计数 |
 | 文本/JSON 结构化日志 | 支持 | error/warn/info/debug，字段稳定并隐藏 secret/payload |
 | TOML 配置 | 支持 | CLI > TOML > 默认值；未知/重复键致命；支持检查/打印模式 |
-| QoS 2 / MQTT 5 | 不支持 | 明确拒绝/不在范围内 |
+| QoS 2 | 支持 | Method B 入站去重、有界状态、按阶段重连和 V3 恢复 |
+| MQTT 5 | 不支持 | 不在范围内 |
 | WebSocket | 不支持 | 不在当前版本范围内 |
 | 共享订阅 / Bridge / 插件 / 集群 | 不支持 | 仅单机 Broker |
 | 外部数据库 / WAL / 零丢失持久化 | 不支持 | 仅最近提交的本地快照 |
 
 CONNECT 必须是第一个 packet。非法 frame、超大声明、方向错误、重复 CONNECT、
-QoS 2 或其他不支持的流程都会关闭连接。客户端发出的 QoS 1 publication 如果
+其他不支持的流程都会关闭连接。客户端发出的 QoS 1/2 publication 如果
 超过 Session inflight/pending 资源，会被原子拒绝且不返回 PUBACK，客户端可以
-按其 Session 生命周期重试。QoS 1 Will/内部 publication 只丢弃容量已满的
+按其 Session 生命周期重试。QoS 1/2 Will/内部 publication 只丢弃容量已满的
 接收方，并继续向健康接收方路由。
 
 receive-buffer 上限作用于尚未解码的缓冲字节。测试覆盖了恰好达到上限的 packet、
@@ -51,7 +52,7 @@ receive-buffer 上限作用于尚未解码的缓冲字节。测试覆盖了恰�
 packet 会在产生无界缓冲前关闭连接。
 
 Broker 不会在保持连接期间周期性重传。Persistent Session 恢复时会重传未确认的
-出站 QoS 1。启用持久化后，retained、持久订阅、inflight/pending QoS 1、原始
+出站 QoS 1。启用持久化后，retained、持久订阅、inflight/pending QoS 1/2 和入站 QoS 2 ID、原始
 Packet ID 和下一个 Packet ID 可跨 Broker 重启。Clean Session、离线 QoS 0、
 连接、Keep Alive timer 和尚未触发的 Will 不会持久化。
 
@@ -74,3 +75,24 @@ experimental；本版本固定其精确版本，并在 CI 中验证启动、拒�
 支持的 `$SYS/broker` 指标包括版本、uptime、已连接客户端、Session、订阅、
 retained、QoS 1 inflight/pending、收发/丢弃消息、认证失败、ACL 拒绝、TLS
 握手失败和持久化状态。根据 MQTT 3.1.1，单独的 `#` 订阅不匹配 `$SYS`。
+
+## QoS 2 交换边界
+
+首次准入的 QoS 2 PUBLISH 在单写者事件中一并提交入站 Packet ID、路由和 retained
+变化，采用 MQTT 3.1.1 Method B。同一个尚未完成的 ID 再次出现时只回复 PUBREC，
+不依赖 DUP，也不按重复报文替换原 payload。PUBREL 删除入站记录并回复 PUBCOMP；
+未知 PUBREL 也回复 PUBCOMP。ACL 拒绝的发布保留有界握手记录，但不路由。
+
+出站 QoS 1/2 共用 Packet ID 和 inflight 窗口。PUBREC 释放 QoS 2 的 topic/payload，
+保留 AwaitPubcomp 槽；PUBCOMP 才释放 ID 并提升 pending FIFO。持久重连先发 CONNACK，
+再按阶段重放原 ID、DUP=1 的 PUBLISH，或固定头为 0x62 的 PUBREL。
+未知 PUBREC 无状态回复 PUBREL；现存交换收到错误阶段的确认会关闭连接。
+
+QoS 保证针对每段 MQTT 交换，降级为 QoS 1 的下游仍可能重复。
+PUBREC/PUBCOMP 不代表已 fsync；崩溃恢复仍以 latest-committed 快照为边界，
+不承诺端到端业务 exactly-once 或崩溃零丢失。
+
+指标 qos/inflight、qos/pending 统计 QoS 1/2 合计，旧 qos1 名称保留为总数别名。
+qos2/inbound、qos2/await_pubrec、qos2/await_pubcomp 统计当前状态；qos2/received
+统计成功准入的 PUBLISH（含重复），qos2/duplicates 统计去重响应，qos2/rejected
+统计资源拒绝。

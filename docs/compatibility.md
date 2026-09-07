@@ -8,26 +8,26 @@
 | MQTT 3.1.1 CONNECT / CONNACK | Supported | Full clean/persistent `session_present` semantics |
 | TCP split/sticky packet framing | Supported | Capacity-aware reader plus bounded three-state decoder |
 | Equal packet/receive limits | Supported | 16/16 boundary covers complete CONNECT plus sticky PINGREQ |
-| Packet codec for QoS 0/1 families | Supported | Complete-frame adapter; Packet ID/DUP combinations gated |
-| MQTT.js 5.15.2 interoperability | Supported for 0.1.0 | QoS 0/1, retained/Will, persistent Session and multi-process restart |
-| Mosquitto 2.0.18 interoperability | Supported for 0.1.0 | QoS 0/1, retained and persistent offline restart delivery |
+| Packet codec for QoS 0/1/2 families | Supported | Complete-frame adapter; Packet ID/DUP combinations gated |
+| MQTT.js 5.15.2 interoperability | Supported for 0.1.0 | QoS 0/1/2, retained/Will, persistent Session and multi-process restart |
+| Mosquitto 2.0.18 interoperability | Supported for 0.1.0 | QoS 0/1/2, retained and persistent offline restart delivery |
 | Aedes 1.1.1 reference matrix | Test-only | Normalized common behavior; no runtime dependency or plugin compatibility claim |
 | Topic validation and PUBLISH/SUBSCRIBE routing | Supported | `+`, `#`, `$SYS`, overlap merge, deterministic order |
 | Keep Alive and PING | Supported | 1.5× deadline; zero disables idle timeout |
 | Client ID takeover | Supported | Connection-generation stale event isolation |
 | Retained delivery | Supported | Live `RETAIN=0`, replay `RETAIN=1`, empty payload deletes |
-| QoS 0/1 Will | Supported | EOF, I/O/protocol failure, timeout, and takeover; DISCONNECT suppresses |
+| QoS 0/1/2 Will | Supported | EOF, I/O/protocol failure, timeout, and takeover; DISCONNECT suppresses |
 | Network SUBACK / UNSUBACK | Supported | Input Packet ID and subscription order preserved |
 | Empty Client ID | Supported with clean session | Unique internal process-local ID |
 | QoS 1 PUBACK / inflight | Supported | Same-ID inbound PUBACK; per-Session outbound IDs and ordered inflight |
 | `clean_session=false` | Supported with nonempty Client ID | Empty ID is `IdentifierRejected` |
-| Persistent Session | Supported across connections | Subscriptions, inflight and bounded offline QoS 1 survive reconnect |
-| Reconnect DUP replay | Supported | Existing inflight keeps original Packet ID and sets `DUP=1` |
-| Snapshot V2 data boundary | Supported | Principal and detach epoch; reads legacy V1 and rewrites V2 |
+| Persistent Session | Supported across connections | Subscriptions, inflight and bounded offline QoS 1/2 survive reconnect |
+| Reconnect DUP replay | Supported | Original IDs; PUBLISH with DUP=1 or PUBREL 0x62 by phase |
+| Snapshot V3 data boundary | Supported | Inbound IDs and outbound phases; reads legacy V1/V2 and writes V3 |
 | State across Broker restart | Supported when `--data-dir` is set | Debounced local snapshot to latest committed revision |
 | SIGTERM / SIGINT shutdown | Supported | Stops normally, suppresses active Wills, forces and drains latest Snapshot |
 | TLS listener | Supported, opt-in | TLS-only single listener; PEM startup validation and bounded handshakes |
-| MQTT.js/Mosquitto over TLS | Supported for 0.1.0 | QoS 0/1, retained, persistent Session and restart recovery |
+| MQTT.js/Mosquitto over TLS | Supported for 0.1.0 | QoS 0/1/2, retained, persistent Session and restart recovery |
 | Argon2id authentication | Supported, opt-in | Encoded hashes only; anonymous allowed by default |
 | Static allow-only ACL | Supported, opt-in | Read/write filters, partial SUBACK, `$SYS` client-write denial |
 | Principal-owned Client IDs | Supported | Cross-Principal takeover/clean/resume rejected across restart |
@@ -35,16 +35,17 @@
 | `$SYS/broker` metrics | Supported | Explicit subscription/read ACL; QoS 0, non-retained, not persisted/counted |
 | Text/JSON structured logs | Supported | error/warn/info/debug with stable fields and secret/payload redaction |
 | TOML configuration | Supported | CLI > TOML > defaults; unknown/duplicate keys fatal; check/print modes |
-| QoS 2 / MQTT 5 | Unsupported | Explicitly rejected / out of scope |
+| QoS 2 | Supported | Method B inbound deduplication, bounded state, phase-aware reconnect and V3 recovery |
+| MQTT 5 | Unsupported | Out of scope |
 | WebSocket | Unsupported | Out of current release scope |
 | Shared subscriptions / Bridge / plugins / cluster | Unsupported | Single-node Broker only |
 | External database / WAL / zero-loss durability | Unsupported | Latest-committed local snapshot only |
 
 CONNECT must be the first packet. Malformed frames, oversize declarations,
-direction errors, duplicate CONNECT, QoS 2, or other unsupported flows close
-the connection. A client-origin QoS 1 publication that exceeds Session
-inflight/pending resources is rejected atomically without PUBACK so the client
-can retry according to its Session lifecycle. QoS 1 Will/internal publication
+direction errors, duplicate CONNECT, or other unsupported flows close
+the connection. A client-origin QoS 1/2 publication that exceeds Session
+inflight/pending resources is rejected atomically without PUBACK/PUBREC so the client
+can retry according to its Session lifecycle. QoS 1/2 Will/internal publication
 drops only saturated recipients and continues routing to healthy recipients.
 
 The receive-buffer limit applies to undecoded buffered bytes. Exact-limit
@@ -53,9 +54,9 @@ control packets are covered over real TCP. Declared oversize and malformed
 packets continue to close before unbounded buffering.
 
 The Broker does not perform periodic retransmission on an otherwise connected network.
-Unacknowledged outbound QoS 1 is retransmitted when a persistent Session is
+Unacknowledged outbound QoS 1/2 is retransmitted when a persistent Session is
 resumed. With persistence enabled, retained messages, persistent subscriptions,
-inflight/pending QoS 1, original Packet IDs, and the next Packet ID survive a
+inflight/pending QoS 1/2, inbound QoS 2 IDs, original Packet IDs, and the next Packet ID survive a
 Broker restart. Clean Sessions, QoS 0 offline messages, connections, Keep Alive
 timers, and Wills that have not yet fired are not persisted.
 
@@ -83,3 +84,27 @@ The supported `$SYS/broker` set includes version, uptime, connected clients,
 Sessions, subscriptions, retained, QoS 1 inflight/pending, received/sent/dropped
 messages, authentication failures, ACL denials, TLS handshake failures, and
 persistence state. A bare `#` subscription does not match `$SYS` per MQTT 3.1.1.
+
+## QoS 2 exchange boundary
+
+The first accepted QoS 2 PUBLISH commits inbound Packet ID metadata, routing and
+retained effects in one single-writer event (MQTT 3.1.1 Method B). A duplicate
+uncompleted ID only receives PUBREC, even if DUP is clear or payload differs.
+PUBREL removes that record and receives PUBCOMP; an unknown PUBREL also receives
+PUBCOMP. ACL-denied publications use the same bounded handshake without routing.
+
+Outbound QoS 1/2 share Packet IDs and inflight capacity. PUBREC releases the
+QoS 2 topic/payload while retaining an AwaitPubcomp slot. PUBCOMP releases the ID
+and promotes pending FIFO messages. Persistent reconnect sends CONNACK first,
+replays PUBLISH with original ID and DUP=1, and replays AwaitPubcomp as PUBREL
+with fixed header 0x62. Unknown PUBREC receives stateless PUBREL; confirmations
+for an existing but incompatible phase close the connection.
+
+The guarantee applies to each MQTT exchange. Downstream QoS 1 can still repeat.
+PUBREC/PUBCOMP do not imply fsync: crash recovery remains latest-committed
+snapshot recovery, without end-to-end exactly-once or zero-loss durability.
+
+Metrics qos/inflight and qos/pending count QoS 1/2; legacy qos1 names remain aliases.
+qos2/inbound, qos2/await_pubrec and qos2/await_pubcomp report held state.
+qos2/received counts admitted PUBLISH packets including duplicates; qos2/duplicates
+counts dedup responses, and qos2/rejected counts resource rejections.

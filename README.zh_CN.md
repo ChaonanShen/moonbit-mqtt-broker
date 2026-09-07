@@ -8,7 +8,7 @@
 
 `0.1.0` 是一个可实际运行的 Linux x86_64 Native 版本，适用于小型部署、
 本地开发、互操作测试和 MoonBit MQTT 应用。它支持多个 TCP 或 TLS 客户端、
-QoS 0/1、通配符订阅、保留消息、Will、Keep Alive、持久会话、可选的重启
+QoS 0/1/2、通配符订阅、保留消息、Will、Keep Alive、持久会话、可选的重启
 持久化、身份认证、ACL、指标、结构化日志和 TOML 配置。
 
 ## 快速开始
@@ -36,15 +36,15 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 | 范围 | 0.1.0 支持情况 |
 | --- | --- |
 | 协议 | 基于 TCP 或 TLS 的 MQTT 3.1.1 |
-| 消息投递 | QoS 0/1 发布订阅；出站 inflight 使用原 Packet ID 和 `DUP=1` 重放 |
+| 消息投递 | QoS 0/1/2 发布订阅；出站按阶段重放 PUBLISH/PUBREL |
 | Topic | `+`、`#` 过滤器，重叠订阅确定性合并，保留消息 |
-| 会话 | Clean/Persistent Session、Client ID 接管、有界离线 QoS 1 |
-| 生命周期 | PING、Keep Alive、QoS 0/1 Will、SIGTERM/SIGINT 优雅退出 |
+| 会话 | Clean/Persistent Session、Client ID 接管、有界离线 QoS 1/2 |
+| 生命周期 | PING、Keep Alive、QoS 0/1/2 Will、SIGTERM/SIGINT 优雅退出 |
 | 持久化 | 可选本地校验快照和严格启动恢复 |
 | 安全 | 可选 Argon2id 密码、仅允许式 ACL、Principal 所有权会话 |
 | 运维 | TOML 配置、资源限制、`$SYS/broker/#` 指标、文本/JSON 日志 |
 
-MQTT 5、QoS 2、WebSocket、共享订阅、Bridge、插件、集群、外部数据库、
+MQTT 5、WebSocket、共享订阅、Bridge、插件、集群、外部数据库、
 WAL 和零丢失持久化明确不在本版本范围内。可选持久化只保证恢复到最近一次
 成功提交的快照，不提供同步消息持久化。详细边界见
 [兼容性矩阵](docs/compatibility.zh_CN.md)。
@@ -62,8 +62,8 @@ scripts/moon-docker.sh run --target native src/cmd/broker -- \
   --max-sessions 1024 \
   --max-inflight-per-session 16 \
   --max-inflight-total 512 \
-  --max-pending-qos1-per-session 64 \
-  --max-pending-qos1-total 1024
+  --max-pending-per-session 64 \
+  --max-pending-total 1024
 ```
 
 通过 `--data-dir` 启用本地重启持久化：
@@ -192,3 +192,6 @@ Argon2、只有 OpenSSL、两者齐全。Broker 环境没有 MoonBit、编译器
 版本、许可证和使用方式记录在
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 中。Broker 为原创 MoonBit
 代码，没有复制 Aedes 或 Mosquitto 的实现源码。
+
+QoS 2 采用 Method B 去重和按阶段恢复；PUBREC/PUBCOMP 不代表已 fsync，持久性仍以
+最新成功提交快照为边界。详见[兼容性](docs/compatibility.zh_CN.md)及[V3 迁移](docs/persistence.zh_CN.md)。

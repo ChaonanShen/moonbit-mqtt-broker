@@ -30,7 +30,7 @@ TCP or TLS connection
 third-party codec. Direction, flags, sizes, and supported QoS combinations are
 validated before a packet reaches broker state.
 
-Malformed input, an invalid first packet, duplicate CONNECT, QoS 2, or an
+Malformed input, an invalid first packet, duplicate CONNECT, or an
 unsupported flow closes only the affected connection.
 
 ## State and routing
@@ -42,8 +42,8 @@ highest effective QoS, and delivery order is based on the original UTF-8 bytes
 rather than map iteration order.
 
 Each persistent Session owns its Packet ID allocator, ordered outbound
-inflight entries, and offline QoS 1 FIFO. Reconnect sends CONNACK first, replays
-inflight entries with the original Packet IDs and `DUP=1`, then promotes queued
+inflight entries, and offline QoS 1/2 FIFO. Reconnect sends CONNACK first, replays
+PUBLISH with original IDs and DUP=1 or AwaitPubcomp as PUBREL, then promotes queued
 messages. Per-Session and global limits bound all retained, subscription,
 inflight, pending, connection, event, and transport queues.
 
@@ -61,7 +61,7 @@ an independent deadline.
 
 ## Persistence
 
-When `--data-dir` is enabled, the runtime exports immutable Snapshot V2 values
+When `--data-dir` is enabled, the runtime exports immutable Snapshot V3 values
 to a capacity-one, latest-wins writer:
 
 ```text
@@ -84,3 +84,22 @@ keys, ACL contents, and payloads are excluded from logs.
 Metrics are process-local and excluded from snapshots. `$SYS/broker/#`
 messages use an isolated QoS 0 path, do not count themselves, do not consume
 retained capacity, and still require an explicit matching subscription and ACL.
+
+## QoS 2 exchange boundary
+
+The first accepted QoS 2 PUBLISH commits inbound Packet ID metadata, routing and
+retained effects in one single-writer event (MQTT 3.1.1 Method B). A duplicate
+uncompleted ID only receives PUBREC, even if DUP is clear or payload differs.
+PUBREL removes that record and receives PUBCOMP; an unknown PUBREL also receives
+PUBCOMP. ACL-denied publications use the same bounded handshake without routing.
+
+Outbound QoS 1/2 share Packet IDs and inflight capacity. PUBREC releases the
+QoS 2 topic/payload while retaining an AwaitPubcomp slot. PUBCOMP releases the ID
+and promotes pending FIFO messages. Persistent reconnect sends CONNACK first,
+replays PUBLISH with original ID and DUP=1, and replays AwaitPubcomp as PUBREL
+with fixed header 0x62. Unknown PUBREC receives stateless PUBREL; confirmations
+for an existing but incompatible phase close the connection.
+
+The guarantee applies to each MQTT exchange. Downstream QoS 1 can still repeat.
+PUBREC/PUBCOMP do not imply fsync: crash recovery remains latest-committed
+snapshot recovery, without end-to-end exactly-once or zero-loss durability.

@@ -24,8 +24,10 @@ max_retained_messages = 1024
 max_sessions = 1024
 max_inflight_per_session = 16
 max_inflight_total = 512
-max_pending_qos1_per_session = 64
-max_pending_qos1_total = 1024
+max_pending_per_session = 64
+max_pending_total = 1024
+max_inbound_qos2_per_session = 64
+max_inbound_qos2_total = 4096
 persistent_session_expiry = "30d"
 max_session_expirations_per_tick = 128
 
@@ -73,3 +75,10 @@ docker stop --signal=SIGTERM --time=30 moonbit-mqtt-broker
 
 SIGTERM/SIGINT suppress active Wills and drain the newest snapshot. SIGKILL
 retains only the latest committed snapshot and is not a normal stop mechanism.
+
+Pending QoS 1/2 share one queue: max_pending_per_session/total are the canonical
+keys. The old max_pending_qos1_per_session/total keys and CLI flags remain aliases.
+Using both names in one TOML file or one CLI invocation is an error; CLI still
+overrides TOML. Inbound QoS 2 has independent per-session (0..65535, default 64)
+and global (nonnegative, default 4096) limits. These are count limits; a unified
+global byte ledger and authentication worker isolation are separate work.

@@ -8,7 +8,7 @@ A lightweight, single-node MQTT 3.1.1 broker implemented in MoonBit.
 
 Version `0.1.0` is a usable Linux x86_64 Native release for small deployments,
 local development, interoperability testing, and MoonBit MQTT applications. It
-supports multiple TCP or TLS clients, QoS 0/1, wildcard subscriptions, retained
+supports multiple TCP or TLS clients, QoS 0/1/2, wildcard subscriptions, retained
 messages, Wills, Keep Alive, persistent Sessions, optional restart persistence,
 authentication, ACLs, metrics, structured logs, and TOML configuration.
 
@@ -37,15 +37,15 @@ security example, read the [getting-started guide](docs/getting-started.md).
 | Area | Version 0.1.0 |
 | --- | --- |
 | Protocol | MQTT 3.1.1 over TCP or TLS |
-| Delivery | QoS 0 and QoS 1 publish/subscribe; outbound inflight replay with `DUP=1` |
+| Delivery | QoS 0/1/2 publish/subscribe; phase-aware PUBLISH/PUBREL replay |
 | Topics | `+` and `#` filters, deterministic overlap merge, retained messages |
-| Sessions | Clean and persistent Sessions, Client ID takeover, bounded offline QoS 1 |
-| Lifecycle | PING, Keep Alive, QoS 0/1 Wills, graceful SIGTERM/SIGINT shutdown |
+| Sessions | Clean and persistent Sessions, Client ID takeover, bounded offline QoS 1/2 |
+| Lifecycle | PING, Keep Alive, QoS 0/1/2 Wills, graceful SIGTERM/SIGINT shutdown |
 | Persistence | Optional local checksummed snapshots with strict startup recovery |
 | Security | Optional Argon2id passwords, allow-only ACLs, Principal-owned Sessions |
 | Operations | TOML configuration, resource limits, `$SYS/broker/#` metrics, text/JSON logs |
 
-MQTT 5, QoS 2, WebSocket, shared subscriptions, bridges, plugins, clustering,
+MQTT 5, WebSocket, shared subscriptions, bridges, plugins, clustering,
 external databases, WAL, and zero-loss durability are intentionally out of
 scope. Optional persistence provides a latest-committed snapshot guarantee,
 not synchronous message durability. See the [compatibility matrix](docs/compatibility.md) for the exact
@@ -64,8 +64,8 @@ scripts/moon-docker.sh run --target native src/cmd/broker -- \
   --max-sessions 1024 \
   --max-inflight-per-session 16 \
   --max-inflight-total 512 \
-  --max-pending-qos1-per-session 64 \
-  --max-pending-qos1-total 1024
+  --max-pending-per-session 64 \
+  --max-pending-total 1024
 ```
 
 Enable local restart persistence with `--data-dir`:
@@ -191,3 +191,7 @@ Licensed under the Apache License 2.0. Runtime dependencies, test-only tools,
 standards, behavioral references, versions, licenses, and how each is used are
 recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The broker is
 original MoonBit code; no Aedes or Mosquitto implementation source is copied.
+
+QoS 2 uses Method B deduplication and stage-aware persistent recovery. PUBREC and
+PUBCOMP do not imply fsync; the durability boundary remains the latest-committed
+snapshot. See [compatibility](docs/compatibility.md) and [V3 migration](docs/persistence.md).

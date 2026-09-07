@@ -18,7 +18,7 @@
 
 规范化后的数据目录权限为 `0700`，其中只使用以下固定文件名：
 
-- `broker.snapshot`：已提交的 Disk V2（或可读取的旧版 V1），权限 `0600`；
+- `broker.snapshot`：已提交的 Disk V3（兼容读取旧版 V1/V2），权限 `0600`；
 - `broker.snapshot.tmp`：当前尚未提交的写入，权限 `0600`；
 - `broker.snapshot.lock`：进程排他锁，权限 `0600`。
 
@@ -42,7 +42,7 @@ Broker 会在绑定端口前失败。加锁后会尽力删除旧临时文件，�
 revision。日志示例：
 
 ```text
-snapshot restored version=1-or-2 sessions=2 retained=1 bytes=412 data_dir=/data
+snapshot restored version=1-or-2-or-3 sessions=2 retained=1 bytes=412 data_dir=/data
 snapshot failed revision=8 category=filesystem persistence=degraded
 snapshot persistence recovered revision=11
 snapshot committed revision=11 bytes=487
@@ -57,24 +57,40 @@ Will，并在进程退出前强制写入和排空最新内存 revision。进程�
 
 ## 持久化内容和恢复操作
 
-Disk V2 保存保留消息以及 `clean_session=false` Session，包括 Client ID、
-订阅 QoS、使用原 Packet ID 的出站 inflight、有序离线 QoS 1 队列、下一个
-Packet ID、所属 Principal 和 detach epoch。它不保存 Clean Session、离线
-QoS 0 消息、TCP 连接、attached 状态、Keep Alive 截止时间和尚未触发的连接
-Will。已经路由到 retained、inflight 或 pending 状态的 Will 会按普通消息保存。
+Disk V3 保存 retained 和持久会话，包括 Client ID、Principal、detach epoch、
+下一个 Packet ID、订阅、入站 AwaitPubrel ID、有序出站三个阶段和 pending QoS 1/2 FIFO。
+AwaitPubcomp 不保存 topic/payload；Clean Session、离线 QoS 0、连接、Keep Alive
+和尚未触发的 Will 不进入快照。
 
-Disk V2 以 `MBMQTT01` 开头，envelope 版本为 2、flags 为零，随后是无符号
-大端 payload 长度和 IEEE CRC-32。其规范 payload 是公开的 Snapshot V2 模型。
+24 字节 envelope 保持 MBMQTT01 magic，后接大端 u16 version=3、u16 flags=0、
+u64 payload 长度和 IEEE CRC-32。字符串及 bytes 均使用 u32 字节长度前缀。
 
-### V1 迁移和回滚
+| V3 payload 顺序 | 编码 |
+| --- | --- |
+| 模型及会话数 | u32 version=3、u32 count |
+| 会话身份 | string Client ID、string Principal、string 非负 detach 毫秒、u16 next ID |
+| 订阅 | u32 count；string filter、u8 QoS 0..2 |
+| 入站 QoS 2 | u32 count；按接收顺序保存非零且唯一的 u16 ID |
+| 出站 inflight | u32 count；u16 ID、u8 phase 1/2/3；仅 phase 1/2 带 message |
+| pending | u32 count；按 FIFO 保存 message |
+| message | string topic、bytes payload、u8 retain 0/1、u8 QoS 1/2 |
+| 所有会话后的 retained | u32 count；string topic、bytes payload、u8 QoS 0..2 |
 
-版本 1 会被严格解码，不会在原文件上重新解释。其 Session 会获得
-`legacy-anonymous` owner 和未知 detach epoch；完整的配置过期窗口从恢复后
-首次观察时开始计算。下一次状态变化或退出提交会写入版本 2。测试套件保留了
-V1 golden fixtures。
+phase 1/2/3 分别是 AwaitPuback/AwaitPubrec/AwaitPubcomp。消息 QoS 必须与
+phase 1/2 一致，phase 3 不得带消息。有序数组同时保留 PUBLISH 顺序和首次 PUBREC
+顺序，无需会溢出的序号。监听前完整校验格式、状态不变量和配置上限。
+当前公开快照类型使用 V3 后缀，inflight.message 为可选值，pending 显式携带 QoS。
 
-升级前请停止旧 Broker，并复制完整数据目录。一旦提交 V2，仅支持 V1 的二进制
-文件将无法读取它。因此回滚必须恢复停止状态下制作的 V1 备份，不支持原地降级。
+### V1/V2 迁移和回滚
+
+旧格式按原字段顺序与 QoS 0/1 范围严格读取。旧 inflight 转为 AwaitPuback，
+pending 转为 QoS 1，入站 QoS 2 为空。V1 获得 LegacyAnonymous 与未知 detach
+epoch，V2 保留 owner 与 epoch。下一次状态变化或停机提交写 V3。
+测试保留非空 V1/V2 及 V3 固定字节 golden fixture。
+
+升级前停旧服务并备份完整 data-dir。首次写入 V3 后，仅支持 V1/V2 的程序无法读取。
+回滚须停止新程序、保留 V3 目录，再恢复停机前旧版本备份；备份后接收的状态会被舍弃。
+不执行隐式 V3→V2 降级。
 
 磁盘满、权限或运行时 I/O 错误发生时，Broker 会继续服务、明确标记 degraded
 并重试。锁冲突和启动恢复错误是致命错误。系统不会自动修复损坏的主快照、回退
