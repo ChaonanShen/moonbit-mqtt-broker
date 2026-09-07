@@ -19,7 +19,7 @@ Snapshot tuning options without `--data-dir` are configuration errors.
 
 The canonicalized data directory is mode `0700`. It contains only fixed names:
 
-- `broker.snapshot`: committed Disk V2 (or readable legacy V1), mode `0600`;
+- `broker.snapshot`: committed Disk V3 (readable legacy V1/V2), mode `0600`;
 - `broker.snapshot.tmp`: current uncommitted write, mode `0600`;
 - `broker.snapshot.lock`: exclusive process lock, mode `0600`.
 
@@ -47,14 +47,14 @@ state. A later success logs recovery and the committed revision. Example log
 forms are:
 
 ```text
-snapshot restored version=1-or-2 sessions=2 retained=1 bytes=412 data_dir=/data
+snapshot restored version=1-or-2-or-3 sessions=2 retained=1 bytes=412 data_dir=/data
 snapshot failed revision=8 category=filesystem persistence=degraded
 snapshot persistence recovered revision=11
 snapshot committed revision=11 bytes=487
 ```
 
 The durability boundary is the latest successful `snapshot committed` line.
-This design has no WAL and does not synchronize before PUBACK; debounce-window
+This design has no WAL and does not synchronize before PUBACK, PUBREC or PUBCOMP; debounce-window
 changes may be lost after `SIGKILL`, host failure, or power loss. Natural
 `--once` completion drains a final submitted revision. SIGTERM and SIGINT are
 converted into a normal service-stop request: the listener and connection tasks
@@ -64,29 +64,47 @@ and drained before the process exits. The process-level shutdown test uses a
 
 ## Persisted state and recovery operations
 
-Disk V2 contains retained messages and `clean_session=false` Sessions: client
-ID, subscription QoS, outbound inflight with original Packet IDs, offline
-pending QoS 1 FIFO, next Packet ID, owning Principal, and detach epoch. It
-excludes clean Sessions, QoS 0
-offline messages, TCP connections, attached status, Keep Alive deadlines, and
-unfired connection Wills. A Will already routed into retained/inflight/pending
-state is included normally.
+Disk V3 contains retained messages and persistent Sessions: Client ID, Principal,
+detach epoch, next Packet ID, subscriptions, inbound AwaitPubrel IDs, ordered
+outbound AwaitPuback/AwaitPubrec/AwaitPubcomp records, and pending QoS 1/2 FIFO.
+AwaitPubcomp has no topic/payload. Clean Sessions, offline QoS 0, live transports,
+Keep Alive timers and unfired Wills are excluded.
 
-Disk V2 begins with `MBMQTT01`, envelope version 2, zero flags, unsigned
-big-endian payload length, and IEEE CRC-32. Its canonical payload is the public
-Snapshot V2 model.
+The 24-byte envelope is unchanged: magic MBMQTT01, big-endian u16 version=3,
+u16 flags=0, u64 payload length, and IEEE CRC-32. Payload integers are big endian;
+strings and byte arrays have a u32 byte length prefix.
 
-### V1 migration and rollback
+| V3 payload order | Encoding |
+| --- | --- |
+| Model, Sessions | u32 version=3, u32 count |
+| Session identity | string Client ID, string Principal, string nonnegative detach milliseconds, u16 next Packet ID |
+| Subscriptions | u32 count; string filter, u8 QoS 0..2 |
+| Inbound QoS 2 | u32 count; nonzero unique u16 IDs in receive order |
+| Outbound inflight | u32 count; nonzero unique u16 ID, u8 phase 1/2/3; message only for phase 1/2 |
+| Pending | u32 count; messages in FIFO order |
+| Message | string topic, bytes payload, u8 retain 0/1, u8 QoS 1/2 |
+| Retained, after all Sessions | u32 count; string topic, bytes payload, u8 QoS 0..2 |
 
-Version 1 is decoded strictly and never reinterpreted in place. Its Sessions
-receive the `legacy-anonymous` owner and an unknown detach epoch; their full
-configured expiry window starts at first post-recovery observation. The next
-state-changing or shutdown commit writes version 2. Golden V1 fixtures remain
-in the test suite.
+Phases 1/2/3 mean AwaitPuback/AwaitPubrec/AwaitPubcomp. Message QoS must match
+phase 1/2; phase 3 must not contain a message. Ordered arrays preserve PUBLISH
+order and first-PUBREC order without a wrapping sequence counter. Decode and
+Router import validate the entire state and configured limits before listen.
+Current public snapshot types use V3 suffixes; inflight messages are optional
+and pending messages explicitly carry QoS.
 
-Before upgrading, stop the old Broker and copy the complete data directory.
-Once V2 has been committed, a V1-only binary cannot read it. Rollback therefore
-requires restoring that stopped V1 backup; there is no in-place downgrade.
+### V1/V2 migration and rollback
+
+Old envelopes retain their exact layouts and QoS 0/1 restrictions. Legacy
+inflight becomes AwaitPuback, pending becomes QoS 1, and inbound QoS 2 starts
+empty. V1 Sessions receive LegacyAnonymous and an unknown detach epoch; V2
+retains its Principal and epoch. The next state-changing or shutdown commit
+writes V3. Fixed, nonempty V1/V2 and V3 golden fixtures cover these conversions.
+
+Stop the old Broker and back up the full data directory before upgrading.
+After the first V3 commit, a V1/V2-only binary cannot read this directory.
+Rollback requires stopping the new Broker, preserving its V3 directory, and
+restoring the stopped old-version backup. State accepted after that backup is
+discarded by rollback. There is no implicit V3-to-V2 downgrade.
 
 On disk-full, permission, or runtime I/O errors, the Broker continues serving
 and retries while explicitly degraded. Lock conflict and startup recovery errors

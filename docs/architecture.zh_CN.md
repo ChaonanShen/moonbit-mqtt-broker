@@ -28,7 +28,7 @@ TCP 或 TLS 连接
 拥有项目的 packet model，并隔离第三方 codec。packet 到达 Broker 状态前会校验
 方向、flags、大小以及受支持的 QoS 组合。
 
-非法输入、第一个 packet 无效、重复 CONNECT、QoS 2 或不支持的流程只会关闭
+非法输入、第一个 packet 无效、重复 CONNECT 或不支持的流程只会关闭
 受影响的连接。
 
 ## 状态和路由
@@ -38,8 +38,8 @@ TCP 或 TLS 连接
 投递顺序依据原始 UTF-8 字节，而不是 map 迭代顺序。
 
 每个 Persistent Session 拥有自己的 Packet ID allocator、有序出站 inflight
-条目和离线 QoS 1 FIFO。重连时先发送 CONNACK，再用原 Packet ID 和 `DUP=1`
-重放 inflight，最后提升 queued message。每个 Session 和全局上限会约束 retained、
+条目和离线 QoS 1/2 FIFO。重连时先发送 CONNACK，再用原 Packet ID 按阶段
+重放 DUP=1 的 PUBLISH 或 PUBREL，最后提升 queued message。每个 Session 和全局上限会约束 retained、
 subscription、inflight、pending、connection、event 和 transport queue。
 
 ## 连接隔离
@@ -54,7 +54,7 @@ TLS 与明文 TCP 使用相同 transport 接口。凭据会在监听前校验，
 
 ## 持久化
 
-启用 `--data-dir` 后，运行时将不可变 Snapshot V2 值导出到容量为一、
+启用 `--data-dir` 后，运行时将不可变 Snapshot V3 值导出到容量为一、
 latest-wins 的 writer：
 
 ```text
@@ -74,3 +74,19 @@ state revision → debounce/max-delay → snapshot writer
 
 指标属于当前进程，不写入快照。`$SYS/broker/#` 消息使用隔离的 QoS 0 路径，
 不会自计数，也不占用 retained 容量，但仍要求显式匹配的订阅和 ACL。
+
+## QoS 2 交换边界
+
+首次准入的 QoS 2 PUBLISH 在单写者事件中一并提交入站 Packet ID、路由和 retained
+变化，采用 MQTT 3.1.1 Method B。同一个尚未完成的 ID 再次出现时只回复 PUBREC，
+不依赖 DUP，也不按重复报文替换原 payload。PUBREL 删除入站记录并回复 PUBCOMP；
+未知 PUBREL 也回复 PUBCOMP。ACL 拒绝的发布保留有界握手记录，但不路由。
+
+出站 QoS 1/2 共用 Packet ID 和 inflight 窗口。PUBREC 释放 QoS 2 的 topic/payload，
+保留 AwaitPubcomp 槽；PUBCOMP 才释放 ID 并提升 pending FIFO。持久重连先发 CONNACK，
+再按阶段重放原 ID、DUP=1 的 PUBLISH，或固定头为 0x62 的 PUBREL。
+未知 PUBREC 无状态回复 PUBREL；现存交换收到错误阶段的确认会关闭连接。
+
+QoS 保证针对每段 MQTT 交换，降级为 QoS 1 的下游仍可能重复。
+PUBREC/PUBCOMP 不代表已 fsync；崩溃恢复仍以 latest-committed 快照为边界，
+不承诺端到端业务 exactly-once 或崩溃零丢失。

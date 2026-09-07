@@ -24,8 +24,10 @@ max_retained_messages = 1024
 max_sessions = 1024
 max_inflight_per_session = 16
 max_inflight_total = 512
-max_pending_qos1_per_session = 64
-max_pending_qos1_total = 1024
+max_pending_per_session = 64
+max_pending_total = 1024
+max_inbound_qos2_per_session = 64
+max_inbound_qos2_total = 4096
 persistent_session_expiry = "30d"
 max_session_expirations_per_tick = 128
 
@@ -79,3 +81,9 @@ docker stop --signal=SIGTERM --time=30 moonbit-mqtt-broker
 SIGTERM/SIGINT 会抑制活动连接的 Will 并写入最新快照。SIGKILL 只能保留
 最近一次已提交的快照，不属于正常停止方式。
 
+
+pending QoS 1/2 共用一套队列，规范键为 max_pending_per_session/total。
+旧 max_pending_qos1_per_session/total 及 CLI flag 保留为别名；同一 TOML 或同次
+CLI 同时使用新旧名称会报冲突，CLI 仍可覆盖 TOML。入站 QoS 2 使用独立上限：
+每会话 0..65535（默认 64），全局非负（默认 4096）。这些是条数上限；统一全局
+字节账本和认证 worker 隔离属于独立后续工作。

@@ -2,6 +2,14 @@
 
 All notable user-visible changes are documented here.
 
+## [Unreleased]
+
+- Implement MQTT 3.1.1 QoS 2 in both directions: duplicate handling, persistent
+  reconnect, retained/Will, bounded inbound state and shared QoS 1/2 pending limits.
+- Write Snapshot/Disk V3 with inbound IDs and outbound phases; retain strict V1/V2 readers.
+- Add native, oracle, raw TCP, crash recovery and MQTT.js/Mosquitto QoS 2 gates.
+- Preserve latest-committed snapshot durability; acknowledgements do not imply fsync.
+
 ## [0.1.0] - 2026-08-24
 
 - Released a single-node MQTT 3.1.1 TCP/TLS broker for Linux x86_64 Native
