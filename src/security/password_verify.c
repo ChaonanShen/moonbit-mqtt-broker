@@ -1,44 +1,9 @@
-#include <dlfcn.h>
+#include "argon2_backend.h"
+
 #include <moonbit.h>
-#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-typedef int (*argon2id_verify_fn)(
-  const char *encoded,
-  const void *password,
-  size_t password_length
-);
-
-static argon2id_verify_fn moonbit_mqtt_argon2id_verify = NULL;
-static void *moonbit_mqtt_argon2_library = NULL;
-static pthread_once_t moonbit_mqtt_argon2_once = PTHREAD_ONCE_INIT;
-
-static void initialize_argon2id_verify(void) {
-  const char *names[] = { "libargon2.so.1", "libargon2.so" };
-  for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); index++) {
-    void *library = dlopen(names[index], RTLD_NOW | RTLD_LOCAL);
-    if (library == NULL) {
-      continue;
-    }
-    argon2id_verify_fn verify =
-      (argon2id_verify_fn)dlsym(library, "argon2id_verify");
-    if (verify != NULL) {
-      moonbit_mqtt_argon2_library = library;
-      moonbit_mqtt_argon2id_verify = verify;
-      return;
-    }
-    dlclose(library);
-  }
-}
-
-static argon2id_verify_fn load_argon2id_verify(void) {
-  if (pthread_once(&moonbit_mqtt_argon2_once, initialize_argon2id_verify) != 0) {
-    return NULL;
-  }
-  return moonbit_mqtt_argon2id_verify;
-}
 
 MOONBIT_FFI_EXPORT
 int32_t moonbit_mqtt_verify_argon2id(
@@ -47,12 +12,6 @@ int32_t moonbit_mqtt_verify_argon2id(
   moonbit_bytes_t password,
   int32_t password_length
 ) {
-  argon2id_verify_fn verify = load_argon2id_verify();
-  if (verify == NULL) {
-    return -1000;
-  }
-  // Bytes has a documented C ABI; do not call private String/UTF-16 runtime
-  // entry points or pass a non-MoonBit allocation to those entry points.
   if (encoded_length <= 0 || password_length < 0 ||
       memchr(encoded, '\0', (size_t)encoded_length) != NULL) {
     return -32; // ARGON2_DECODING_FAIL
@@ -63,7 +22,11 @@ int32_t moonbit_mqtt_verify_argon2id(
   }
   memcpy(encoded_utf8, encoded, (size_t)encoded_length);
   encoded_utf8[encoded_length] = '\0';
-  int result = verify(encoded_utf8, password, (size_t)password_length);
+  int result = moonbit_mqtt_argon2_verify(
+    encoded_utf8,
+    password,
+    (size_t)password_length
+  );
   memset(encoded_utf8, 0, (size_t)encoded_length);
   free(encoded_utf8);
   return result;
