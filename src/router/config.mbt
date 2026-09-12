@@ -1,5 +1,6 @@
 ///|
 pub struct BrokerConfig {
+  resources : @budget.Limits
   max_subscriptions_per_session : Int
   max_subscriptions_total : Int
   max_retained_messages : Int
@@ -20,6 +21,7 @@ pub fn BrokerConfig::new(
   total : Int,
   retained : Int,
   max_sessions? : Int = 1024,
+  resources? : @budget.Limits = @budget.Limits::default(),
   max_inflight_per_session? : Int = 16,
   max_inflight_total? : Int = 512,
   max_pending_qos1_per_session? : Int,
@@ -31,6 +33,9 @@ pub fn BrokerConfig::new(
   persistent_session_expiry_ms? : Int64 = -1L,
   max_session_expirations_per_tick? : Int = 128,
 ) -> Result[BrokerConfig, RouterError] {
+  if resources.validate() is Err(_) {
+    return Err(InvalidConfiguration("invalid byte budget limits"))
+  }
   if (
       max_pending_qos1_per_session is Some(_) &&
       max_pending_per_session is Some(_)
@@ -65,6 +70,7 @@ pub fn BrokerConfig::new(
     Err(InvalidConfiguration("max_inflight_per_session must not exceed 65535"))
   } else {
     Ok({
+      resources,
       max_subscriptions_per_session: per_session,
       max_subscriptions_total: total,
       max_retained_messages: retained,
@@ -157,4 +163,9 @@ pub fn BrokerConfig::max_pending_per_session(self : BrokerConfig) -> Int {
 ///|
 pub fn BrokerConfig::max_pending_total(self : BrokerConfig) -> Int {
   self.max_pending_qos1_total
+}
+
+///|
+pub fn BrokerConfig::resources(self : BrokerConfig) -> @budget.Limits {
+  self.resources
 }

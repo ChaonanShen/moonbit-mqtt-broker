@@ -84,6 +84,17 @@ test "broker state rejects total and retained capacity corruption" {
 test "broker state accepts sessions without subscriptions" {
   let state = BrokerState::new(BrokerConfig::new(1, 1, 1).unwrap())
   let client = invariant_state_client("idle")
-  state.sessions.set(client, @session.ClientSession::new(client))
+  ignore(state.apply(CreateSession(client)).unwrap())
   assert_eq(state.check_invariants(), Ok(()))
+}
+
+///|
+test "broker detects session storage bypassing byte ownership" {
+  let state = BrokerState::new(BrokerConfig::new(1, 1, 1).unwrap())
+  let client = invariant_state_client("unaccounted")
+  state.sessions.set(client, @session.ClientSession::new(client))
+  assert_eq(
+    state.check_invariants(),
+    Err(InvariantViolation("resource owner/retained mismatch")),
+  )
 }

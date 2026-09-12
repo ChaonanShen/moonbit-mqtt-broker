@@ -245,3 +245,20 @@ pub fn SubscriptionIndex::check_invariants(self : SubscriptionIndex) -> Bool {
   reverse_count == self.count &&
   forward_count == reverse_count
 }
+
+///|
+fn SubscriptionIndex::cost_for(
+  self : SubscriptionIndex,
+  client_id : @session.ClientId,
+) -> Int64 {
+  let mut cost = 0L
+  if self.by_client.get(client_id) is Some(filters) {
+    for filter, _ in filters {
+      cost = @budget.checked_add(
+        cost,
+        @budget.subscription_cost(filter.value()),
+      ).unwrap()
+    }
+  }
+  cost
+}

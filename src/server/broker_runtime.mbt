@@ -639,7 +639,8 @@ fn BrokerRuntime::handle_subscribe(
         @router.BrokerEvent::Subscribe({ client_id, entries }),
       )
     }) {
-    Err(@router.RouterError::QoS1ResourceLimit(_, _)) =>
+    Err(@router.RouterError::ByteResourceLimit(_))
+    | Err(@router.RouterError::QoS1ResourceLimit(_, _)) =>
       return self.terminate(connection_id, ResourceExhausted)
     Err(_) => return self.close_protocol_error(connection_id)
     Ok(value) => value
@@ -786,7 +787,8 @@ fn BrokerRuntime::handle_active_packet(
             self.metrics.record_qos2(duplicate~)
             self.map_broker_actions(actions)
           }
-          Err(@router.RouterError::QoS1ResourceLimit(_, _))
+          Err(@router.RouterError::ByteResourceLimit(_))
+          | Err(@router.RouterError::QoS1ResourceLimit(_, _))
           | Err(@router.RouterError::InboundQoS2ResourceLimit(_))
           | Err(@router.RouterError::RetainedLimitReached(_)) => {
             self.metrics.record_qos2_rejection()
@@ -843,7 +845,8 @@ fn BrokerRuntime::handle_active_packet(
           actions.append(deliveries)
           actions
         }
-        Err(@router.RouterError::QoS1ResourceLimit(_, _)) =>
+        Err(@router.RouterError::ByteResourceLimit(_))
+        | Err(@router.RouterError::QoS1ResourceLimit(_, _)) =>
           self.terminate(connection_id, ResourceExhausted)
         Err(_) => self.close_protocol_error(connection_id)
       }

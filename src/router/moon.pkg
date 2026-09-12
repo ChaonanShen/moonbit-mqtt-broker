@@ -1,4 +1,5 @@
 import {
+  "ChaonanShen/moonbit-mqtt-broker/resource_budget" @budget,
   "ChaonanShen/moonbit-mqtt-broker/security",
   "ChaonanShen/moonbit-mqtt-broker/session",
   "ChaonanShen/moonbit-mqtt-broker/topic",

@@ -44,6 +44,9 @@ pub(all) struct SessionDelivery {
 
 ///|
 pub(all) struct SessionLimits {
+  max_inflight_bytes : Int64
+  max_pending_bytes : Int64
+  max_state_bytes : Int64
   max_inflight : Int
   max_pending : Int
   max_inbound_qos2 : Int
@@ -54,7 +57,13 @@ pub fn SessionLimits::new(
   max_inflight : Int,
   max_pending : Int,
   max_inbound_qos2? : Int = 64,
+  max_inflight_bytes? : Int64 = 4194304L,
+  max_pending_bytes? : Int64 = 8388608L,
+  max_state_bytes? : Int64 = 12582912L,
 ) -> Result[SessionLimits, SessionError] {
+  if max_inflight_bytes < 0L || max_pending_bytes < 0L || max_state_bytes < 0L {
+    return Err(InvalidSessionLimit("byte limits must not be negative"))
+  }
   if max_inflight < 0 || max_inflight > 65535 {
     Err(InvalidSessionLimit("max_inflight must be in 0..65535"))
   } else if max_pending < 0 {
@@ -62,7 +71,14 @@ pub fn SessionLimits::new(
   } else if max_inbound_qos2 < 0 || max_inbound_qos2 > 65535 {
     Err(InvalidSessionLimit("max_inbound_qos2 must be in 0..65535"))
   } else {
-    Ok({ max_inflight, max_pending, max_inbound_qos2 })
+    Ok({
+      max_inflight,
+      max_pending,
+      max_inbound_qos2,
+      max_inflight_bytes,
+      max_pending_bytes,
+      max_state_bytes,
+    })
   }
 }
 
@@ -86,4 +102,17 @@ pub fn SessionMessage::copy(self : SessionMessage) -> SessionMessage {
 ///|
 pub fn OutboundInflight::copy(self : OutboundInflight) -> OutboundInflight {
   { ..self, message: self.message.map(message => message.copy()) }
+}
+
+///|
+pub fn SessionMessage::cost(self : SessionMessage) -> Int64 {
+  @budget.message_cost(self.topic.value(), self.payload.length().to_int64()).unwrap()
+}
+
+///|
+pub fn OutboundInflight::cost(self : OutboundInflight) -> Int64 {
+  match self.message {
+    Some(message) => message.cost()
+    None => @budget.qos2_metadata_cost()
+  }
 }

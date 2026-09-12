@@ -1,5 +1,7 @@
 ///|
 pub struct BrokerState {
+  priv mut promotion_cursor : Int
+  priv resources : RouterResources
   config : BrokerConfig
   priv sessions : Map[@session.ClientId, @session.ClientSession]
   priv subscriptions : SubscriptionIndex
@@ -50,6 +52,8 @@ fn copy_router_bytes(payload : Bytes) -> Bytes {
 pub fn BrokerState::new(config : BrokerConfig) -> BrokerState {
   {
     config,
+    promotion_cursor: 0,
+    resources: RouterResources::new(config.resources),
     sessions: Map([]),
     subscriptions: SubscriptionIndex::new(),
     retained: RetainedStore::new(),
@@ -208,6 +212,11 @@ fn BrokerState::session_limits(
     max_inflight.unwrap_or(self.config.max_inflight_per_session()),
     max_pending.unwrap_or(self.config.max_pending_qos1_per_session()),
     max_inbound_qos2=self.config.max_inbound_qos2_per_session(),
+    max_inflight_bytes=self.config.resources.get(
+      "max_inflight_bytes_per_session",
+    ),
+    max_pending_bytes=self.config.resources.get("max_pending_bytes_per_session"),
+    max_state_bytes=self.config.resources.get("max_session_state_bytes"),
   ).unwrap()
 }
 
@@ -221,6 +230,20 @@ fn BrokerState::create_session(
   }
   if self.sessions.length() >= self.config.max_sessions() {
     return Err(SessionLimitReached(self.config.max_sessions()))
+  }
+  match
+    self.resources.add_owner(request.client_id, {
+      inflight: 0L,
+      pending: 0L,
+      inbound: 0L,
+      subscriptions: 0L,
+      metadata: @budget.identity_cost(
+        request.client_id.value(),
+        request.owner.storage_value(),
+      ),
+    }) {
+    Err(e) => return Err(e)
+    Ok(_) => ()
   }
   self.sessions.set(
     request.client_id,
@@ -373,6 +396,10 @@ fn BrokerState::preflight_deliveries(
   let planned_pending : Map[@session.ClientId, Int] = Map([])
   let mut inflight_added = 0
   let mut pending_added = 0
+  let planned_inflight_bytes : Map[@session.ClientId, Int64] = Map([])
+  let planned_pending_bytes : Map[@session.ClientId, Int64] = Map([])
+  let mut inflight_bytes_added = 0L
+  let mut pending_bytes_added = 0L
   for candidate in candidates {
     let session = match self.sessions.get(candidate.recipient) {
       Some(value) => value
@@ -393,20 +420,73 @@ fn BrokerState::preflight_deliveries(
         let extra_pending = planned_pending
           .get(candidate.recipient)
           .unwrap_or(0)
+        let cost = @budget.message_cost(
+          candidate.topic.value(),
+          candidate.payload.length().to_int64(),
+        ).unwrap()
+        let usage = self.resources.owners.get(candidate.recipient).unwrap().usage
+        let inflight_extra = planned_inflight_bytes
+          .get(candidate.recipient)
+          .unwrap_or(0L)
+        let pending_extra = planned_pending_bytes
+          .get(candidate.recipient)
+          .unwrap_or(0L)
+        let limits = self.config.resources
+        let state_free = limits.get("max_session_state_bytes") -
+          usage.inflight -
+          usage.pending -
+          usage.inbound -
+          inflight_extra -
+          pending_extra
+        let global_free_bytes = self.resources.ledger.ordinary_available() -
+          inflight_bytes_added -
+          pending_bytes_added
+        let inflight_fits = cost <=
+          limits.get("max_inflight_bytes_per_session") -
+          usage.inflight -
+          inflight_extra &&
+          cost <=
+          limits.get("max_inflight_bytes_total") -
+          self.inflight_bytes() -
+          inflight_bytes_added
+        let pending_fits = cost <=
+          limits.get("max_pending_bytes_per_session") -
+          usage.pending -
+          pending_extra &&
+          cost <=
+          limits.get("max_pending_bytes_total") -
+          self.pending_bytes() -
+          pending_bytes_added
+        if cost > state_free ||
+          cost > global_free_bytes ||
+          cost > limits.get("max_inflight_bytes_per_session") {
+          if strict {
+            return Err(QoS1ResourceLimit(candidate.recipient, Bytes))
+          }
+          planned.push({ candidate, destination: DropResource(Bytes) })
+          continue
+        }
         let session_inflight = session.inflight_count() + extra_inflight
         let session_pending = session.pending_count() + extra_pending
         if session.is_attached() &&
+          session_pending == 0 &&
+          inflight_fits &&
           session_inflight < self.config.max_inflight_per_session() &&
           self.inflight_total + inflight_added <
           self.config.max_inflight_total() {
           planned_inflight.set(candidate.recipient, extra_inflight + 1)
           inflight_added = inflight_added + 1
+          inflight_bytes_added += cost
+          planned_inflight_bytes.set(candidate.recipient, inflight_extra + cost)
           planned.push({ candidate, destination: StageInflight })
-        } else if session_pending < self.config.max_pending_qos1_per_session() &&
+        } else if pending_fits &&
+          session_pending < self.config.max_pending_qos1_per_session() &&
           self.pending_qos1_total + pending_added <
           self.config.max_pending_qos1_total() {
           planned_pending.set(candidate.recipient, extra_pending + 1)
           pending_added = pending_added + 1
+          pending_bytes_added += cost
+          planned_pending_bytes.set(candidate.recipient, pending_extra + cost)
           planned.push({ candidate, destination: StagePending })
         } else {
           let limit = if session_pending >=
@@ -431,6 +511,64 @@ fn BrokerState::prepare_deliveries(
   self : BrokerState,
   planned : Array[PlannedDelivery],
 ) -> Result[PreparedDeliveries, RouterError] {
+  let usage_updates : Map[@session.ClientId, ResourceUsage] = Map([])
+  let copied : Map[@session.ClientId, Bool] = Map([])
+  let mut scratch_bytes = planned.length().to_int64() * 128L
+  for item in planned {
+    let candidate = item.candidate
+    let cost = @budget.message_cost(
+      candidate.topic.value(),
+      candidate.payload.length().to_int64(),
+    ).unwrap()
+    match item.destination {
+      DirectQoS0 =>
+        scratch_bytes = @budget.checked_add(
+          scratch_bytes,
+          @budget.checked_mul(cost, 3L).unwrap(),
+        ).unwrap()
+      StageInflight | StagePending => {
+        let id = candidate.recipient
+        let usage = usage_updates
+          .get(id)
+          .unwrap_or(self.resources.owners.get(id).unwrap().usage)
+        if !copied.contains(id) {
+          scratch_bytes = @budget.checked_add(
+            scratch_bytes,
+            @budget.checked_mul(
+              self.sessions.get(id).unwrap().state_bytes(),
+              2L,
+            ).unwrap(),
+          ).unwrap()
+          copied.set(id, true)
+        }
+        scratch_bytes = @budget.checked_add(
+          scratch_bytes,
+          @budget.checked_mul(cost, 6L).unwrap(),
+        ).unwrap()
+        usage_updates.set(
+          id,
+          match item.destination {
+            StageInflight => { ..usage, inflight: usage.inflight + cost }
+            _ => { ..usage, pending: usage.pending + cost }
+          },
+        )
+      }
+      DropResource(_) => ()
+    }
+  }
+  let scratch = match self.reserve_scratch(scratch_bytes) {
+    Ok(t) => t
+    Err(e) => return Err(e)
+  }
+  match self.resources.set_usages(usage_updates) {
+    Err(e) => {
+      scratch.release().unwrap()
+      return Err(e)
+    }
+    Ok(_) => ()
+  }
+  let mut prepared_ok = false
+  defer (if !prepared_ok { scratch.release().unwrap() })
   let actions : Array[BrokerAction] = []
   let updates : Map[@session.ClientId, @session.ClientSession] = Map([])
   let mut inflight_added = 0
@@ -502,7 +640,8 @@ fn BrokerState::prepare_deliveries(
         actions.push(DeliveryDroppedResourceLimit(candidate.recipient))
     }
   }
-  Ok({ actions, updates, inflight_added, pending_added })
+  prepared_ok = true
+  Ok({ actions, updates, inflight_added, pending_added, scratch })
 }
 
 ///|
@@ -520,15 +659,15 @@ fn BrokerState::attach_session(
   let before_inflight = session.inflight_count()
   let before_pending = session.pending_count()
   let before_next_packet_id = session.next_packet_id()
-  let global_free = self.config.max_inflight_total() - self.inflight_total
-  let effective_max = if before_inflight + global_free <
-    self.config.max_inflight_per_session() {
-    before_inflight + global_free
-  } else {
-    self.config.max_inflight_per_session()
+  let replay_scratch = match
+    self.reserve_scratch(
+      session.inflight_bytes() * 4L + session.inflight_count().to_int64() * 128L,
+    ) {
+    Ok(t) => t
+    Err(e) => return Err(e)
   }
-  let deliveries = match
-    session.attach(self.session_limits(max_inflight=effective_max)) {
+  defer replay_scratch.release().unwrap()
+  let deliveries = match session.attach(self.session_limits(max_inflight=0)) {
     Ok(value) => value
     Err(error) => return Err(SessionFailure(error))
   }
@@ -578,19 +717,8 @@ fn BrokerState::ack_delivery(
   }
   let before_inflight = session.inflight_count()
   let before_pending = session.pending_count()
-  let global_free = self.config.max_inflight_total() - self.inflight_total
-  let effective_max = if before_inflight + global_free <
-    self.config.max_inflight_per_session() {
-    before_inflight + global_free
-  } else {
-    self.config.max_inflight_per_session()
-  }
   let ack = match
-    session.ack(
-      packet_id,
-      self.session_limits(max_inflight=effective_max),
-      pubcomp~,
-    ) {
+    session.ack(packet_id, self.session_limits(max_inflight=0), pubcomp~) {
     Ok(value) => value
     Err(error) => return Err(SessionFailure(error))
   }
@@ -626,7 +754,7 @@ fn BrokerState::ack_delivery(
 }
 
 ///|
-pub fn BrokerState::apply(
+fn BrokerState::apply_event(
   self : BrokerState,
   event : BrokerEvent,
 ) -> Result[Array[BrokerAction], RouterError] {
@@ -702,6 +830,18 @@ pub fn BrokerState::apply(
           self.config.max_subscriptions_total() {
           results.push(RejectedLimit(SubscriptionsTotal))
         } else {
+          if existing is None {
+            let usage = self.resources.owners.get(client_id).unwrap().usage
+            let next = {
+              ..usage,
+              subscriptions: usage.subscriptions +
+              @budget.subscription_cost(entry.filter.value()),
+            }
+            if self.resources.set_usages(Map([(client_id, next)])) is Err(_) {
+              results.push(RejectedLimit(Bytes))
+              continue
+            }
+          }
           if existing != Some(entry.qos) {
             subscriptions_changed = true
           }
@@ -711,7 +851,7 @@ pub fn BrokerState::apply(
         }
       }
       let candidates : Array[DeliveryCandidate] = []
-      for message in self.retained.matching(successful) {
+      for message in self.retained.matching_for_router(successful) {
         for subscription in self.subscriptions.matches(message.topic) {
           if subscription.client_id == client_id {
             candidates.push({
@@ -843,6 +983,15 @@ pub fn BrokerState::check_invariants(
       return Err(InvariantViolation("per-session subscription limit exceeded"))
     }
   }
+  if self.resources.owners.length() != self.sessions.length() ||
+    self.resources.retained_bytes != self.retained.total_cost() {
+    return Err(InvariantViolation("resource owner/retained mismatch"))
+  }
+  for id, owner in self.resources.owners {
+    if owner.usage != self.resource_usage(id) {
+      return Err(InvariantViolation("session byte ledger mismatch"))
+    }
+  }
   Ok(())
 }
 
@@ -853,9 +1002,36 @@ fn BrokerState::publish_input(
 ) -> Result[Array[BrokerAction], RouterError] {
   if input.retain &&
     input.payload.length() > 0 &&
-    self.retained.get(input.topic) is None &&
+    self.retained.peek(input.topic) is None &&
     self.retained.count() >= self.config.max_retained_messages() {
     return Err(RetainedLimitReached(self.config.max_retained_messages()))
+  }
+  let descriptor_bytes = self.subscriptions.subscription_count().to_int64() *
+    192L
+  let new_retained_cost = if input.retain && input.payload.length() > 0 {
+    @budget.message_cost(input.topic.value(), input.payload.length().to_int64()).unwrap()
+  } else {
+    0L
+  }
+  if new_retained_cost > 0L &&
+    new_retained_cost - 96L >
+    self.config.resources.get("max_retained_message_bytes") {
+    return Err(ByteResourceLimit(@budget.BudgetError::InvalidAmount))
+  }
+  let scratch = match
+    self.reserve_scratch(descriptor_bytes + new_retained_cost * 2L) {
+    Ok(t) => t
+    Err(e) => return Err(e)
+  }
+  defer scratch.release().unwrap()
+  if input.retain {
+    let total = self.resources.retained_bytes -
+      self.retained.cost_at(input.topic) +
+      new_retained_cost
+    match self.resources.set_retained(total) {
+      Err(e) => return Err(e)
+      Ok(_) => ()
+    }
   }
   let strict = input.origin is Client(_)
   let planned = match
@@ -870,7 +1046,7 @@ fn BrokerState::publish_input(
   }
   let mut retained_changed = false
   if input.retain {
-    let previous = self.retained.get(input.topic)
+    let previous = self.retained.peek(input.topic)
     if input.payload.length() == 0 {
       self.retained.remove(input.topic)
       retained_changed = previous is Some(_)
@@ -953,6 +1129,14 @@ fn BrokerState::receive_qos2(
   if self.inbound_qos2_total >= self.config.max_inbound_qos2_total() {
     return Err(InboundQoS2ResourceLimit(InboundQoS2Total))
   }
+  let usage = self.resources.owners.get(request.client_id).unwrap().usage
+  match
+    self.resources.set_usages(
+      Map([(request.client_id, { ..usage, inbound: usage.inbound + 64L })]),
+    ) {
+    Err(e) => return Err(e)
+    Ok(_) => ()
+  }
   // All count checks and fallible routing preparation precede mutation. This
   // single-writer event has no await or externally observable intermediate state.
   let deliveries = match request.publish {
@@ -1022,6 +1206,7 @@ fn BrokerState::receive_pubrec(
 
 ///|
 priv struct PreparedDeliveries {
+  scratch : @budget.Ticket
   actions : Array[BrokerAction]
   updates : Map[@session.ClientId, @session.ClientSession]
   inflight_added : Int
@@ -1039,5 +1224,49 @@ fn BrokerState::install_deliveries(
   }
   self.inflight_total += prepared.inflight_added
   self.pending_qos1_total += prepared.pending_added
+  prepared.scratch.release().unwrap()
   prepared.actions
+}
+
+///|
+pub fn BrokerState::apply(
+  self : BrokerState,
+  event : BrokerEvent,
+) -> Result[Array[BrokerAction], RouterError] {
+  let temporary_bytes = match event {
+    Subscribe(request) =>
+      self.retained.count().to_int64() * 192L +
+      request.entries.length().to_int64() * 192L
+    _ => 0L
+  }
+  let temporary = if temporary_bytes == 0L {
+    None
+  } else {
+    match self.reserve_scratch(temporary_bytes) {
+      Ok(t) => Some(t)
+      Err(e) => return Err(e)
+    }
+  }
+  let before_bytes = self.managed_bytes() - temporary_bytes
+  let before_inflight = self.inflight_count()
+  let result = self.apply_event(event)
+  if temporary is Some(ticket) {
+    ticket.release().unwrap()
+  }
+  match self.settle_resources() {
+    Err(_) =>
+      Err(InvariantViolation("resource settlement exceeded prior admission"))
+    Ok(_) =>
+      match result {
+        Err(e) => Err(e)
+        Ok(actions) => {
+          if self.managed_bytes() < before_bytes ||
+            self.inflight_count() < before_inflight ||
+            event is AttachSession(_) {
+            actions.append(self.resume_pending())
+          }
+          Ok(actions)
+        }
+      }
+  }
 }
