@@ -17,7 +17,7 @@ fi
   -DMOONBIT_MQTT_AUTH_EXECUTOR_TESTING \
   src/security/argon2_backend.c \
   src/security/auth_executor.c \
-  tests/runtime/auth_executor_harness.c \
+  tests/integration/auth_executor_harness.c \
   -ldl -o "${OUTPUT}"
 ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=1:strict_string_checks=1}" \
 UBSAN_OPTIONS="${UBSAN_OPTIONS:-halt_on_error=1}" \
