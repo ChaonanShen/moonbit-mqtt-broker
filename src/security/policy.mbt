@@ -6,6 +6,12 @@ pub(all) enum ConnectAuthentication {
 } derive(Eq, Debug)
 
 ///|
+pub(all) enum AuthenticationPreparation {
+  Immediate(ConnectAuthentication)
+  HashRequired(PasswordAuthentication)
+}
+
+///|
 /// Immutable startup security policy. Missing ACL means allow application
 /// topics for compatibility; `$SYS` remains write-protected.
 pub struct SecurityPolicy {
@@ -29,28 +35,53 @@ pub fn SecurityPolicy::permissive() -> SecurityPolicy {
 }
 
 ///|
+pub fn SecurityPolicy::prepare_authentication(
+  self : SecurityPolicy,
+  username : String?,
+  password : Bytes?,
+) -> AuthenticationPreparation {
+  match (username, password) {
+    (None, None) =>
+      Immediate(
+        if self.allow_anonymous {
+          Accepted(Anonymous)
+        } else {
+          NotAuthorized
+        },
+      )
+    (Some(user), Some(secret)) =>
+      match self.passwords {
+        None => Immediate(BadCredentials)
+        Some(database) =>
+          match database.prepare_password(user, secret) {
+            None => Immediate(BadCredentials)
+            Some(request) => HashRequired(request)
+          }
+      }
+    _ => Immediate(BadCredentials)
+  }
+}
+
+///|
+pub fn PasswordAuthentication::complete_connect(
+  self : PasswordAuthentication,
+  matched : Bool,
+) -> ConnectAuthentication {
+  match self.complete(matched) {
+    Authenticated(principal) => Accepted(principal)
+    BadCredentials => BadCredentials
+  }
+}
+
+///|
 pub fn SecurityPolicy::authenticate(
   self : SecurityPolicy,
   username : String?,
   password : Bytes?,
 ) -> ConnectAuthentication {
-  match (username, password) {
-    (None, None) =>
-      if self.allow_anonymous {
-        Accepted(Anonymous)
-      } else {
-        NotAuthorized
-      }
-    (Some(user), Some(secret)) =>
-      match self.passwords {
-        None => BadCredentials
-        Some(database) =>
-          match database.authenticate(user, secret) {
-            Authenticated(principal) => Accepted(principal)
-            BadCredentials => BadCredentials
-          }
-      }
-    _ => BadCredentials
+  match self.prepare_authentication(username, password) {
+    Immediate(result) => result
+    HashRequired(request) => request.complete_connect(request.verify_sync())
   }
 }
 

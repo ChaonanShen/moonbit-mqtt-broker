@@ -240,3 +240,55 @@ test "password database caches verified workspace cost" {
   let (_, fallback_workspace) = database.verification_cost("missing", 12L)
   assert_eq(fallback_workspace, workspace)
 }
+
+///|
+test "password preparation resolves trusted identity without hashing" {
+  let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
+  let database = password_database_fixture("sensor01:" + encoded)
+  let known = database.prepare_password("sensor01", b"not verified").unwrap()
+  assert_eq(
+    known.complete(true),
+    AuthenticationResult::Authenticated(Principal::User("sensor01")),
+  )
+  assert_eq(known.complete(false), AuthenticationResult::BadCredentials)
+  assert_true(known.request_cost() > 128L)
+  assert_eq(known.workspace_cost(), 5505024L)
+  let unknown = database.prepare_password("missing", b"not verified").unwrap()
+  assert_eq(unknown.complete(true), AuthenticationResult::BadCredentials)
+}
+
+///|
+test "security policy classifies immediate and hash-required authentication" {
+  assert_true(
+    SecurityPolicy::permissive().prepare_authentication(None, None)
+    is AuthenticationPreparation::Immediate(
+      ConnectAuthentication::Accepted(Principal::Anonymous)
+    ),
+  )
+  assert_true(
+    SecurityPolicy::new(allow_anonymous=false).prepare_authentication(
+      None,
+      None,
+    )
+    is AuthenticationPreparation::Immediate(
+      ConnectAuthentication::NotAuthorized
+    ),
+  )
+  assert_true(
+    SecurityPolicy::permissive().prepare_authentication(Some("user"), None)
+    is AuthenticationPreparation::Immediate(
+      ConnectAuthentication::BadCredentials
+    ),
+  )
+  let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
+  let passwords = password_database_fixture("sensor01:" + encoded)
+  let policy = SecurityPolicy::new(passwords~)
+  match policy.prepare_authentication(Some("sensor01"), Some(b"deferred")) {
+    HashRequired(request) =>
+      assert_eq(
+        request.complete_connect(true),
+        ConnectAuthentication::Accepted(Principal::User("sensor01")),
+      )
+    Immediate(_) => fail("password-backed authentication must require hashing")
+  }
+}
