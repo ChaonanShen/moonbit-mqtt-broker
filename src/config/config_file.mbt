@@ -137,6 +137,18 @@ fn map_section(
       "security.password_file" =>
         add_string(args, "--password-file", entry, full_key)
       "security.acl_file" => add_string(args, "--acl-file", entry, full_key)
+      "security.auth_workers" =>
+        add_integer(args, "--auth-workers", entry, full_key)
+      "security.auth_queue_limit" =>
+        add_integer(args, "--auth-queue-limit", entry, full_key)
+      "security.auth_timeout_ms" =>
+        add_integer(args, "--auth-timeout-ms", entry, full_key)
+      "security.auth_poll_interval_ms" =>
+        add_integer(args, "--auth-poll-interval-ms", entry, full_key)
+      "security.auth_result_batch_limit" =>
+        add_integer(args, "--auth-result-batch-limit", entry, full_key)
+      "security.auth_shutdown_grace_ms" =>
+        add_integer(args, "--auth-shutdown-grace-ms", entry, full_key)
       "observability.system_metrics_interval_ms" =>
         add_integer(args, "--system-metrics-interval-ms", entry, full_key)
       "observability.log_format" =>

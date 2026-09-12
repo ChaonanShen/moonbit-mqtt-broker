@@ -58,6 +58,12 @@ handshake_timeout_ms = 500
 [security]
 allow_anonymous = false
 password_file = "${WORK_DIR}/passwords"
+auth_workers = 2
+auth_queue_limit = 3
+auth_timeout_ms = 9000
+auth_poll_interval_ms = 4
+auth_result_batch_limit = 5
+auth_shutdown_grace_ms = 8000
 acl_file = "${WORK_DIR}/acl"
 
 [observability]
@@ -77,6 +83,12 @@ grep -qxF 'max_connections = 7' "${effective}"
 grep -qxF 'persistent_session_expiry = "7200000ms"' "${effective}"
 grep -qxF 'key = "<redacted>"' "${effective}"
 grep -qxF 'password_file = "<redacted>"' "${effective}"
+grep -qxF 'auth_workers = 2' "${effective}"
+grep -qxF 'auth_queue_limit = 3' "${effective}"
+grep -qxF 'auth_timeout_ms = 9000' "${effective}"
+grep -qxF 'auth_poll_interval_ms = 4' "${effective}"
+grep -qxF 'auth_result_batch_limit = 5' "${effective}"
+grep -qxF 'auth_shutdown_grace_ms = 8000' "${effective}"
 ! grep -qF "${WORK_DIR}/server.key" "${effective}"
 ! grep -qF "${WORK_DIR}/passwords" "${effective}"
 test ! -e "${WORK_DIR}/data"
