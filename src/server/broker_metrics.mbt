@@ -1,5 +1,7 @@
 ///|
 pub struct BrokerMetrics {
+  mut snapshot_budget_deferred : Int64
+  mut snapshot_dirty_age_ms : Int64
   mut qos2_received : Int64
   mut qos2_duplicates : Int64
   mut qos2_rejected : Int64
@@ -15,6 +17,8 @@ pub struct BrokerMetrics {
 ///|
 pub fn BrokerMetrics::new(started_at_ms : Int64) -> BrokerMetrics {
   {
+    snapshot_budget_deferred: 0L,
+    snapshot_dirty_age_ms: 0L,
     qos2_received: 0L,
     qos2_duplicates: 0L,
     qos2_rejected: 0L,

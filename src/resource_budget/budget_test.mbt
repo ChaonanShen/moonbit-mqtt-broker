@@ -217,3 +217,15 @@ test "rate zero and invalid configurations have explicit meaning" {
   assert_true(Ledger::new(1L, 2L) is Err(_))
   assert_true(admit([(zero, -1L)], 0L) is Err(_))
 }
+
+///|
+test "budget exhaustion reports the precise category and records a bounded rejection" {
+  let ledger = Ledger::new(1000L, 0L).unwrap()
+  let pool = ledger.pool(Outbound, 10L).unwrap()
+  assert_true(
+    pool.reserve(11L) is Err(Exhausted(Category, "outbound", 0L, 11L, 10L)),
+  )
+  assert_eq(ledger.rejection_count("outbound"), 1L)
+  assert_eq(ledger.rejections_total(), 1L)
+  assert_eq(ledger.occupied(), 0L)
+}

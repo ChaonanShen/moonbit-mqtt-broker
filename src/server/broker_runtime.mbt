@@ -1003,6 +1003,12 @@ fn BrokerRuntime::emit_system_metrics(
   event : EmitSystemMetricsEvent,
 ) -> Array[RuntimeAction] {
   let state = self.broker_state
+  if state.admit_action_input(
+      state.subscription_count().to_int64() * 64L * 32L + 65536L,
+    )
+    is Err(_) {
+    return []
+  }
   let values : Array[(String, String)] = [
     ("version", "0.1.0"),
     ("uptime_seconds", self.metrics.uptime_seconds(event.now_ms).to_string()),
@@ -1036,6 +1042,22 @@ fn BrokerRuntime::emit_system_metrics(
       self.metrics.tls_handshake_failures().to_string(),
     ),
     ("persistence/state", event.persistence_state),
+    ("resources/used_bytes", state.resource_ledger().committed().to_string()),
+    ("resources/reserved_bytes", state.resource_ledger().reserved().to_string()),
+    (
+      "resources/rejections",
+      state.resource_ledger().rejections_total().to_string(),
+    ),
+    ("resources/usage", resource_usage_json(state.resource_ledger())),
+    ("limits/rejections", self.admission.rejections_json()),
+    (
+      "persistence/budget_deferred",
+      self.metrics.snapshot_budget_deferred.to_string(),
+    ),
+    (
+      "persistence/oldest_dirty_age_ms",
+      self.metrics.snapshot_dirty_age_ms.to_string(),
+    ),
   ]
   let actions : Array[RuntimeAction] = []
   for item in values {
@@ -1210,4 +1232,24 @@ fn BrokerRuntime::publish_stored_will(
       []
     }
   }
+}
+
+///|
+fn resource_usage_json(ledger : @budget.Ledger) -> String {
+  let parts : Array[String] = []
+  for entry in ledger.usage() {
+    let (kind, used, reserved, limit) = entry
+    parts.push(
+      "\"" +
+      kind.name() +
+      "\":{\"used\":" +
+      used.to_string() +
+      ",\"reserved\":" +
+      reserved.to_string() +
+      ",\"limit\":" +
+      limit.to_string() +
+      "}",
+    )
+  }
+  "{" + parts.join(",") + "}"
 }

@@ -14,6 +14,9 @@ pub struct SnapshotDriverConfig {
 
 ///|
 priv struct SnapshotDriverState {
+  mut oldest_uncommitted_ms : Int64?
+  mut budget_deferred : Int64
+  mut last_budget_log_ms : Int64
   sink : @persistence.SnapshotSink
   schedule : SnapshotSchedule
 }
@@ -36,6 +39,9 @@ pub fn RouterDriver::new(
   snapshot? : SnapshotDriverConfig,
 ) -> RouterDriver {
   let snapshot = snapshot.map(config => SnapshotDriverState::{
+    oldest_uncommitted_ms: None,
+    budget_deferred: 0L,
+    last_budget_log_ms: 0L,
     sink: config.sink,
     schedule: SnapshotSchedule::new(
       runtime.broker_state().snapshot_revision(),
@@ -62,10 +68,32 @@ fn RouterDriver::submit_snapshot(
   state : SnapshotDriverState,
   revision : Int64,
 ) -> Bool {
-  let submitted = state.sink.submit({
-    revision,
-    snapshot: self.runtime.broker_state().export_snapshot(),
-  })
+  let ledger = self.runtime.broker_state().resource_ledger()
+  let limit = self.runtime.config
+    .broker_config()
+    .resources()
+    .get("max_snapshot_work_bytes")
+  let pool = ledger.pool(Snapshot, limit).unwrap()
+  let cost = match self.runtime.broker_state().snapshot_work_cost() {
+    Ok(cost) => cost
+    Err(_) => {
+      self.snapshot_deferred(state)
+      return false
+    }
+  }
+  let ticket = match pool.reserve(cost) {
+    Ok(t) => t
+    Err(_) => {
+      self.snapshot_deferred(state)
+      return false
+    }
+  }
+  let snapshot = self.runtime.broker_state().export_snapshot()
+  ticket.commit().unwrap()
+  let submitted = state.sink.submit_accounted({ revision, snapshot }, ticket)
+  if !submitted {
+    ticket.release().unwrap()
+  }
   if submitted {
     state.schedule.mark_submitted(revision)
   }
@@ -77,6 +105,21 @@ pub fn RouterDriver::poll_snapshot(self : RouterDriver, now_ms : Int64) -> Bool 
   match self.snapshot {
     None => false
     Some(state) => {
+      let revision = self.runtime.broker_state().snapshot_revision()
+      if revision > 0L && revision > state.sink.committed_revision() {
+        if state.oldest_uncommitted_ms is None {
+          state.oldest_uncommitted_ms = Some(now_ms)
+        }
+        let age = now_ms - state.oldest_uncommitted_ms.unwrap()
+        self.runtime.metrics.snapshot_dirty_age_ms = if age < 0L {
+          0L
+        } else {
+          age
+        }
+      } else {
+        state.oldest_uncommitted_ms = None
+        self.runtime.metrics.snapshot_dirty_age_ms = 0L
+      }
       state.schedule.observe(
         self.runtime.broker_state().snapshot_revision(),
         now_ms,
@@ -330,5 +373,29 @@ async fn RouterDriver::run_budgeted(
     }
     self.handle(event)
     bus.completed(event)
+  }
+}
+
+///|
+fn RouterDriver::snapshot_deferred(
+  self : RouterDriver,
+  state : SnapshotDriverState,
+) -> Unit {
+  if state.budget_deferred < 9223372036854775807L {
+    state.budget_deferred += 1L
+    self.runtime.metrics.snapshot_budget_deferred = state.budget_deferred
+  }
+  let now = @budget.monotonic_ms()
+  if now - state.last_budget_log_ms >= 10000L {
+    state.last_budget_log_ms = now
+    self.runtime.logger.log(
+      @observability.LogRecord::new(
+        @async.now(),
+        @observability.Warn,
+        "snapshot_budget_deferred",
+        reason="snapshot_work_budget",
+        message="snapshot remains dirty; increase resource headroom or reduce retained/session backlog",
+      ),
+    )
   }
 }

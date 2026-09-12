@@ -76,7 +76,7 @@ data_dir="${WORK_DIR}/data"
 start_tls_broker() {
   : >"${broker_log}"
   setsid stdbuf -oL "${BROKER_EXECUTABLE}" \
-    --listen "127.0.0.1:${port}" \
+    --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" \
     --max-connections 128 \
     --data-dir "${data_dir}" \
     --snapshot-debounce-ms 60000 \

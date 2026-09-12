@@ -49,7 +49,7 @@ async fn read_transport(
       Ok(value) => value
     }
     let read_ticket = match
-      reserve_optional(receive, read_capacity.to_int64()) {
+      reserve_optional(receive, read_capacity.to_int64() * 3L) {
       Ok(t) => t
       Err(e) => return e
     }

@@ -31,7 +31,7 @@ start_broker() {
   local expiry="$1"
   : >"${broker_log}"
   setsid stdbuf -oL "${BROKER_EXECUTABLE}" \
-    --listen "127.0.0.1:${port}" \
+    --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" \
     --data-dir "${data_dir}" \
     --persistent-session-expiry "${expiry}" \
     --max-session-expirations-per-tick 2 \

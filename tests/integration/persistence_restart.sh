@@ -32,7 +32,7 @@ start_broker() {
   [[ -z "${BROKER_LOG}" ]] || rm -f "${BROKER_LOG}"
   BROKER_LOG="$(mktemp)"
   setsid stdbuf -oL moon run --target native src/cmd/broker -- \
-    --listen "127.0.0.1:${port}" \
+    --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" \
     --data-dir "${DATA_DIR}" \
     --snapshot-debounce-ms 2000 \
     --snapshot-max-delay-ms 60000 \

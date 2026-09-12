@@ -28,7 +28,7 @@ start_broker() {
   [[ -z "${BROKER_LOG}" ]] || rm -f "${BROKER_LOG}"
   BROKER_LOG="$(mktemp)"
   setsid stdbuf -oL moon run --target native src/cmd/broker -- \
-    --listen "127.0.0.1:${port}" --data-dir "${DATA_DIR}" \
+    --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" --data-dir "${DATA_DIR}" \
     --snapshot-debounce-ms 50 --snapshot-max-delay-ms 200 \
     >"${BROKER_LOG}" 2>&1 &
   BROKER_PID="$!"
@@ -76,7 +76,7 @@ printf corrupt >"${DATA_DIR}/broker.snapshot"
 BROKER_LOG="$(mktemp)"
 set +e
 moon run --target native src/cmd/broker -- \
-  --listen "127.0.0.1:${port}" --data-dir "${DATA_DIR}" >"${BROKER_LOG}" 2>&1
+  --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" --data-dir "${DATA_DIR}" >"${BROKER_LOG}" 2>&1
 status="$?"
 set -e
 test "${status}" -ne 0
@@ -89,7 +89,7 @@ mkfifo "${DATA_DIR}/broker.snapshot"
 BROKER_LOG="$(mktemp)"
 set +e
 timeout 2 moon run --target native src/cmd/broker -- \
-  --listen "127.0.0.1:${port}" --data-dir "${DATA_DIR}" >"${BROKER_LOG}" 2>&1
+  --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" --data-dir "${DATA_DIR}" >"${BROKER_LOG}" 2>&1
 status="$?"
 set -e
 test "${status}" -ne 0

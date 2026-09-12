@@ -70,7 +70,15 @@ pub fn Ledger::prepare_replacement(
       let used = charge.account.occupied()
       if increment > charge.account.limit - used {
         return Err(
-          Exhausted(charge.account.scope, used, increment, charge.account.limit),
+          self.record_rejection(
+            Exhausted(
+              charge.account.scope,
+              charge.account.label,
+              used,
+              increment,
+              charge.account.limit,
+            ),
+          ),
         )
       }
       extra.push({ account: charge.account, bytes: increment })

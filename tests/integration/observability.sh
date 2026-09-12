@@ -44,7 +44,7 @@ printf '%s\n' \
 port="$(free_port)"
 broker_log="${WORK_DIR}/broker.jsonl"
 setsid stdbuf -oL "${BROKER_EXECUTABLE}" \
-  --listen "127.0.0.1:${port}" \
+  --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" \
   --data-dir "${WORK_DIR}/data" \
   --snapshot-debounce-ms 20 \
   --snapshot-max-delay-ms 100 \
