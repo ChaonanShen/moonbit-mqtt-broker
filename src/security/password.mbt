@@ -134,20 +134,9 @@ pub fn PasswordDatabase::authenticate(
   username : String,
   password : Bytes,
 ) -> AuthenticationResult {
-  let selected = match self.hashes.get(username) {
-    Some(entry) => Some((entry, true))
-    None => self.fallback_hash.map(entry => (entry, false))
-  }
-  match selected {
+  match self.prepare_password(username, password) {
     None => BadCredentials
-    Some((entry, known_user)) => {
-      let verified = verify_argon2id(entry.encoded, password) == 0
-      if verified && known_user {
-        Authenticated(User(username))
-      } else {
-        BadCredentials
-      }
-    }
+    Some(request) => request.complete(request.verify_sync())
   }
 }
 
@@ -246,4 +235,69 @@ pub fn PasswordDatabase::verification_cost(
     Err(_) => -1L
   }
   (request, value.workspace_cost)
+}
+
+///|
+/// Opaque, short-lived input for the native authentication executor. It does
+/// not implement Debug so credentials and PHC data cannot be logged by accident.
+pub struct PasswordAuthentication {
+  entry : PasswordHash
+  username : String
+  password : Bytes
+  known_user : Bool
+}
+
+///|
+pub fn PasswordDatabase::prepare_password(
+  self : PasswordDatabase,
+  username : String,
+  password : Bytes,
+) -> PasswordAuthentication? {
+  let selected = match self.hashes.get(username) {
+    Some(entry) => Some((entry, true))
+    None => self.fallback_hash.map(entry => (entry, false))
+  }
+  match selected {
+    None => None
+    Some((entry, known_user)) => Some({ entry, username, password, known_user })
+  }
+}
+
+///|
+pub fn PasswordAuthentication::request_cost(
+  self : PasswordAuthentication,
+) -> Int64 {
+  let encoded_bytes = @budget.utf8_bytes(self.entry.encoded)
+  match @budget.checked_mul(encoded_bytes, 2L) {
+    Ok(copies) =>
+      match @budget.checked_add(copies, self.password.length().to_int64()) {
+        Ok(input) => @budget.checked_add(input, 128L).unwrap_or(-1L)
+        Err(_) => -1L
+      }
+    Err(_) => -1L
+  }
+}
+
+///|
+pub fn PasswordAuthentication::workspace_cost(
+  self : PasswordAuthentication,
+) -> Int64 {
+  self.entry.workspace_cost
+}
+
+///|
+pub fn PasswordAuthentication::complete(
+  self : PasswordAuthentication,
+  matched : Bool,
+) -> AuthenticationResult {
+  if matched && self.known_user {
+    Authenticated(User(self.username))
+  } else {
+    BadCredentials
+  }
+}
+
+///|
+fn PasswordAuthentication::verify_sync(self : PasswordAuthentication) -> Bool {
+  verify_argon2id(self.entry.encoded, self.password) == 0
 }
