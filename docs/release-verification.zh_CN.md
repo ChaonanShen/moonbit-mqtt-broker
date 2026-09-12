@@ -337,3 +337,5 @@ DISTRIBUTION_RUNTIME_REFERENCE=/absolute/repo/test-results/distribution/<success
 该模式首先校验参考记录的完成/退出码、四项 PASS、完整提交号、镜像 SHA-256 与 Linux/amd64 平台，并要求参考提交与候选的整个 `tests/runtime` Git tree 完全相同。任一条件不符即拒绝，不能用旧镜像掩盖运行环境配方变化。镜像按不可变摘要选取，映射写入 `runtime-reference.json`，结束时再次验证其哈希。
 
 源码仍只取当前已提交 HEAD，重新构建/打包/解包测试；四环境工具与库清单、真实收发、缺库失败、最终制品哈希检查全部执行。结果标记 `runtime_image_mode=verified-cache-reference` 并保存参考来源；它不表示重新拉取了最新系统包，也不把此前失败的运行改写成通过。恢复后必须从严格入口完整重跑，不能拼接失败运行与旧结果。
+
+发布主机需要 Python 3（标准库即可）运行缓存参考保护测试和解析器；这不是 Broker 的运行依赖，不要求开发/四环境容器安装 Python。严格入口在启动耗时验证前检查此依赖。资源容器门禁只使用镜像已有的 MoonBit、Node、Argon2 CLI 和 OpenSSL。
