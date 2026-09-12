@@ -171,6 +171,7 @@ pub fn BrokerState::export_snapshot(self : BrokerState) -> BrokerSnapshotV3 {
 pub fn BrokerState::from_snapshot(
   config : BrokerConfig,
   snapshot : BrokerSnapshotV3,
+  ledger? : @budget.Ledger,
 ) -> Result[BrokerState, SnapshotError] {
   if snapshot.version != 1 && snapshot.version != 2 && snapshot.version != 3 {
     return Err(UnsupportedVersion(snapshot.version))
@@ -181,7 +182,7 @@ pub fn BrokerState::from_snapshot(
   if snapshot.retained.length() > config.max_retained_messages() {
     return Err(LimitExceeded("retained limit exceeded"))
   }
-  let state = BrokerState::new(config)
+  let state = BrokerState::new(config, ledger?)
   let seen_sessions : Map[@session.ClientId, Bool] = Map([])
   let mut total_inflight = 0
   let mut total_pending = 0

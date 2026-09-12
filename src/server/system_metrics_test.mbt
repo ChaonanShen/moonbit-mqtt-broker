@@ -38,7 +38,19 @@ test "system metrics are qos0 read-only and do not feed back into state" {
   let actions = rt.apply(
     EmitSystemMetrics({ now_ms: 3500L, persistence_state: "healthy" }),
   )
-  assert_eq(actions.length(), 23)
+  assert_eq(actions.length(), 30)
+  for
+    suffix in [
+      "resources/used_bytes", "resources/reserved_bytes", "resources/rejections",
+      "resources/usage", "limits/rejections", "persistence/budget_deferred", "persistence/oldest_dirty_age_ms",
+    ] {
+    assert_true(
+      actions.any(action => {
+        action is SendPacket({ packet: Publish(packet), .. }) &&
+        packet.topic == "$SYS/broker/" + suffix
+      }),
+    )
+  }
   for action in actions {
     match action {
       SendPacket({ connection_id, packet: Publish(packet) }) => {
@@ -58,7 +70,7 @@ test "system metrics are qos0 read-only and do not feed back into state" {
     rt
     .apply(EmitSystemMetrics({ now_ms: 4500L, persistence_state: "degraded" }))
     .length(),
-    23,
+    30,
   )
   assert_eq(metrics.messages_sent(), 0L)
 }

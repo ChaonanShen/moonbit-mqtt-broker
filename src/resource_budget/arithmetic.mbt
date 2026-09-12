@@ -3,7 +3,7 @@ pub(all) enum BudgetError {
   InvalidAmount
   Overflow
   InvalidConfiguration
-  Exhausted(LimitScope, Int64, Int64, Int64)
+  Exhausted(LimitScope, String, Int64, Int64, Int64)
   TicketLimit
   InvalidTicketState
   ForeignAccount

@@ -29,7 +29,7 @@ start_broker() {
   local port="$1"
   BROKER_LOG="$(mktemp)"
   setsid stdbuf -oL moon run --target native src/cmd/broker -- \
-    --listen "127.0.0.1:${port}" \
+    --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" \
     --max-connections 64 \
     --max-packet-size 1048576 \
     --max-receive-buffer-size 1048576 \

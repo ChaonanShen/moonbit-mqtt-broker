@@ -51,13 +51,16 @@ fn copy_router_bytes(payload : Bytes) -> Bytes {
 }
 
 ///|
-pub fn BrokerState::new(config : BrokerConfig) -> BrokerState {
+pub fn BrokerState::new(
+  config : BrokerConfig,
+  ledger? : @budget.Ledger,
+) -> BrokerState {
   {
     config,
     action_scope: false,
     action_leases: [],
     promotion_cursor: 0,
-    resources: RouterResources::new(config.resources),
+    resources: RouterResources::new(config.resources, ledger?),
     sessions: Map([]),
     subscriptions: SubscriptionIndex::new(),
     retained: RetainedStore::new(),

@@ -36,7 +36,7 @@ fn PersistenceRuntime::driver_config(
 pub fn PersistenceRuntime::close(self : PersistenceRuntime) -> Unit {
   if !self.closed {
     self.closed = true
-    self.sink.close()
+    self.sink.discard()
     self.store.close()
   }
 }
@@ -65,6 +65,14 @@ async fn run_with_snapshot_writer(
         ignore(driver.force_snapshot())
         runtime.sink.close()
         @async.protect_from_cancel(() => writer_task.wait())
+        if driver.runtime.broker_state().snapshot_revision() > 0L &&
+          driver.runtime.broker_state().snapshot_revision() >
+          runtime.writer.committed_revision() {
+          raise @persistence.FileSystem(
+            operation="final-snapshot-not-committed",
+            path=runtime.store.main_path(),
+          )
+        }
       }
   }
 }

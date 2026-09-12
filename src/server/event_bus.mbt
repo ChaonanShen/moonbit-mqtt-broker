@@ -54,7 +54,7 @@ fn EventBus::new(
   let infrastructure = match
     ledger.reserve([
       control.allocation(config.max_connections().to_int64() * 512L + 256L),
-      fixed.allocation(config.max_runtime_events().to_int64() * 64L),
+      fixed.allocation(config.max_runtime_events().to_int64() * 64L + 16384L),
     ]) {
     Ok(t) => t
     Err(e) => return Err(e)
@@ -108,7 +108,11 @@ fn EventBus::register(
     )
     .unwrap()
   let event_cap = self.ledger
-    .account(Connection, limits.get("max_runtime_bytes_per_connection"))
+    .account(
+      Connection,
+      limits.get("max_runtime_bytes_per_connection"),
+      label="runtime_connection",
+    )
     .unwrap()
   let global_events = self.ledger
     .pool(RuntimeEvent, limits.get("max_runtime_bytes_total"))
@@ -122,7 +126,11 @@ fn EventBus::register(
     .with_account(event_cap)
     .unwrap()
   let outbound_cap = self.ledger
-    .account(Connection, limits.get("max_outbound_bytes_per_connection"))
+    .account(
+      Connection,
+      limits.get("max_outbound_bytes_per_connection"),
+      label="outbound_connection",
+    )
     .unwrap()
   let global_outbound = self.ledger
     .pool(Outbound, limits.get("max_outbound_bytes_total"))

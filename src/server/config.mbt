@@ -60,7 +60,7 @@ pub fn ServerConfig::new(
   }
   let resources = broker_config.resources()
   let fixed_control = max_connections.to_int64() * 512L + 256L
-  let fixed_data = max_runtime_events.to_int64() * 64L + 1024L
+  let fixed_data = max_runtime_events.to_int64() * 64L + 17408L
   if resources.get("control_reserve_bytes") < fixed_control ||
     resources.get("max_managed_bytes_total") -
     resources.get("control_reserve_bytes") <

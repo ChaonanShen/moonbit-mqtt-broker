@@ -1,6 +1,6 @@
 # Resource budget primitives
 
-The `resource_budget` package provides synchronous single-writer accounting and token buckets. Router/session byte admission is integrated, including retained/subscription/session identity, bidirectional QoS state and reconstruction from V1/V2/V3 snapshots. Transport, CLI/TOML, native monotonic time and connection/traffic admission are integrated. Snapshot workspace lifetime integration is the next step.
+The `resource_budget` package provides synchronous single-writer accounting and token buckets. Router/session byte admission is integrated, including retained/subscription/session identity, bidirectional QoS state and reconstruction from V1/V2/V3 snapshots. Transport, CLI/TOML, native monotonic time and connection/traffic admission are integrated. Snapshot export, encoding, queued/active writes and import workspace share the same ledger.
 
 ## Ownership and admission
 
@@ -55,3 +55,17 @@ TCP connections acquire global/IP admission before TLS and retain it through tra
 Authentication attempts requiring a verifier consume rate tokens once before memory admission. The current synchronous verifier reserves input and a conservative PHC-derived workspace until return; this is not authentication execution isolation. P0-03 still owns the future bounded executor and its actual completion lifecycle.
 
 Will storage is charged before copying and retained until orderly release or the completion of its internal publish. New connection activation prepares session state and all fallible allocations before retiring the old transport. Its CONNACK frame and encoding workspace are also reserved first. On takeover, the new connection's CONNACK precedes replay and any old Will delivery to that new connection. Failed preparation leaves the old connection and Will intact.
+
+## Snapshot workspace and failure handling
+
+Exports reserve a conservative overlap estimate before copying. The queue owns accepted request leases; replacing an older queued request releases that request, while an active writer retains its separate lease through save/sync completion. Cancellation cleans the active and queued leases. A closed writer does not retry a failed final save forever, and shutdown reports failure if dirty state was not committed.
+
+Import checks file type before opening (including size inspection), rejects excessive file size, and reserves read/decode/restore overlap in the ledger returned with the restored broker. The decoder peeks lengths and cumulatively checks category/session/global costs before allocating records or message copies. Binary writers check their output cap before buffer growth. Disk V3 and V1/V2 compatibility remain unchanged; resource counters are derived, not persisted.
+
+The conservative export estimate is eight times persistent/retained CostV1 plus 1024 bytes; import reserves four file-buffer lengths plus four times decoded CostV1, in addition to installed state. These are admission headroom estimates, not RSS measurements. A high backlog may defer snapshots under a small workspace limit. The dirty revision remains pending, diagnostics are rate-limited, and final shutdown cannot claim that an uncommitted snapshot was saved.
+
+## Resource observations
+
+Additional `$SYS/broker/` topics are `resources/used_bytes`, `resources/reserved_bytes`, `resources/rejections`, `resources/usage`, `limits/rejections`, `persistence/budget_deferred` and `persistence/oldest_dirty_age_ms`. `resources/usage` is a bounded JSON object keyed by resource category with used/reserved/limit values. Control frame/runtime subcaps are folded into their canonical outbound/runtime categories so summing categories does not double-count memory. `limits/rejections` uses fixed operation names, never IP/client/topic labels.
+
+Reservation rejections identify the violated scope and account label with used/requested/limit values. Rejection counters describe admission attempts, including optional promotion attempts, not just closed clients. Oldest dirty age tracks actual writer completion rather than queue submission. Prometheus and an administration API remain separate work.

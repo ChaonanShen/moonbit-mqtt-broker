@@ -90,6 +90,7 @@ pub fn admit(
       return Err(
         Exhausted(
           Global,
+          "rate",
           buckets[i].capacity - available,
           costs[i],
           buckets[i].capacity,

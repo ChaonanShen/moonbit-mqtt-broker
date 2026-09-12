@@ -24,8 +24,9 @@ fn encode_message(
 ///|
 fn encode_payload(
   snapshot : @router.BrokerSnapshotV3,
+  max_bytes : Int,
 ) -> Bytes raise PersistenceError {
-  let writer = BinaryWriter::new()
+  let writer = BinaryWriter::new(max_bytes~)
   writer.write_u32(snapshot.version, "snapshot-model-version")
   if snapshot.version != 1 && snapshot.version != 2 && snapshot.version != 3 {
     raise InvalidValue(field="snapshot-model-version", offset=0)
@@ -133,14 +134,17 @@ pub fn encode_snapshot(
     if max_snapshot_bytes < disk_header_bytes {
       raise InvalidConfiguration("max_snapshot_bytes must be at least 24")
     }
-    let payload = encode_payload(snapshot)
+    let payload = encode_payload(
+      snapshot,
+      max_snapshot_bytes - disk_header_bytes,
+    )
     if payload.length() > max_snapshot_bytes - disk_header_bytes {
       raise SnapshotTooLarge(
         actual=(disk_header_bytes + payload.length()).to_int64(),
         limit=max_snapshot_bytes.to_int64(),
       )
     }
-    let writer = BinaryWriter::new()
+    let writer = BinaryWriter::new(max_bytes=max_snapshot_bytes)
     writer.write_raw(disk_magic)
     writer.write_u16(snapshot.version, "envelope-version")
     writer.write_u16(0, "flags")
@@ -202,6 +206,7 @@ fn decode_payload(
   payload : Bytes,
   limits : SnapshotDecodeLimits,
   envelope_version : Int,
+  workspace : DecodeWorkspace?,
 ) -> @router.BrokerSnapshotV3 raise PersistenceError {
   let reader = BinaryReader::new(payload)
   let version = reader.read_u32("snapshot-model-version")
@@ -210,6 +215,7 @@ fn decode_payload(
     raise InvalidValue(field="snapshot-model-version", offset=0)
   }
   let broker = limits.broker_config()
+  let budget = DecodeBudget::new(broker.resources(), workspace)
   let session_count = checked_count(reader, "sessions", broker.max_sessions())
   let sessions : Array[@router.SnapshotSessionV3] = []
   let mut subscription_total = 0
@@ -217,6 +223,14 @@ fn decode_payload(
   let mut pending_total = 0
   let mut inbound_total = 0
   for _ in 0..<session_count {
+    budget.new_session()
+    let id_bytes = reader.peek_string_bytes()
+    let owner_bytes = if version >= 2 {
+      reader.peek_string_bytes(relative=4 + id_bytes).to_int64()
+    } else {
+      @budget.utf8_bytes("legacy-anonymous")
+    }
+    budget.charge("identity", id_bytes.to_int64() + owner_bytes + 256L)
     let client_id = reader.read_string()
     let owner_principal = if version >= 2 {
       reader.read_string()
@@ -257,6 +271,7 @@ fn decode_payload(
     subscription_total = subscription_total + subscription_count
     let subscriptions : Array[@router.SnapshotSubscriptionV3] = []
     for _ in 0..<subscription_count {
+      budget.charge("subscription", reader.peek_string_bytes().to_int64() + 64L)
       let filter = reader.read_string()
       let qos_offset = reader.position()
       let qos = reader.read_u8()
@@ -280,6 +295,7 @@ fn decode_payload(
         )
       }
       inbound_total += count
+      budget.charge("inbound", count.to_int64() * 64L)
       for _ in 0..<count {
         let offset = reader.position()
         let id = reader.read_u16()
@@ -315,8 +331,13 @@ fn decode_payload(
         raise InvalidValue(field="outbound-phase", offset~)
       }
       let message = if phase == 3 {
+        budget.charge("inflight", 64L)
         None
       } else {
+        budget.charge(
+          "inflight",
+          reader.peek_message_cost(limits.max_message_payload_bytes()),
+        )
         let message = decode_message(
           reader,
           limits.max_message_payload_bytes(),
@@ -344,6 +365,10 @@ fn decode_payload(
     pending_total = pending_total + pending_count
     let pending : Array[@router.SnapshotMessageV3] = []
     for _ in 0..<pending_count {
+      budget.charge(
+        "pending",
+        reader.peek_message_cost(limits.max_message_payload_bytes()),
+      )
       pending.push(
         decode_message(reader, limits.max_message_payload_bytes(), version),
       )
@@ -366,6 +391,10 @@ fn decode_payload(
   )
   let retained : Array[@router.SnapshotRetainedV3] = []
   for _ in 0..<retained_count {
+    budget.charge(
+      "retained",
+      reader.peek_message_cost(limits.max_message_payload_bytes()),
+    )
     let topic = reader.read_string()
     let bytes = reader.read_bytes(limits.max_message_payload_bytes())
     let qos_offset = reader.position()
@@ -385,6 +414,7 @@ fn decode_payload(
 pub fn decode_snapshot(
   data : Bytes,
   limits : SnapshotDecodeLimits,
+  workspace? : DecodeWorkspace,
 ) -> Result[@router.BrokerSnapshotV3, PersistenceError] {
   try {
     if data.length() > limits.max_snapshot_bytes() {
@@ -419,7 +449,7 @@ pub fn decode_snapshot(
     if actual_crc != expected_crc {
       raise ChecksumMismatch(expected=expected_crc, actual=actual_crc)
     }
-    Ok(decode_payload(payload, limits, envelope_version))
+    Ok(decode_payload(payload, limits, envelope_version, workspace))
   } catch {
     error => Err(error)
   }

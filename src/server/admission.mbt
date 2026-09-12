@@ -511,3 +511,12 @@ fn AdmissionState::reset_publisher(
     self.publishers.remove(id)
   }
 }
+
+///|
+fn AdmissionState::rejections_json(self : AdmissionState) -> String {
+  let parts : Array[String] = []
+  for name, count in self.rejections {
+    parts.push("\"" + name + "\":" + count.to_string())
+  }
+  "{" + parts.join(",") + "}"
+}

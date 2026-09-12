@@ -5,14 +5,49 @@ pub(all) struct SnapshotRequest {
 }
 
 ///|
+priv struct SnapshotEnvelope {
+  revision : Int64
+  snapshot : @router.BrokerSnapshotV3
+  ticket : @budget.Ticket?
+}
+
+///|
+fn SnapshotEnvelope::release(self : SnapshotEnvelope) -> Unit {
+  if self.ticket is Some(ticket) {
+    ticket.release().unwrap()
+  }
+}
+
+///|
 pub struct SnapshotSink {
-  queue : @async.Queue[SnapshotRequest]
+  priv queue : @async.Queue[SnapshotEnvelope]
+  mut committed : Int64
   mut closed : Bool
 }
 
 ///|
 pub fn SnapshotSink::new() -> SnapshotSink {
-  { queue: @async.Queue(kind=Blocking(1)), closed: false }
+  { queue: @async.Queue(kind=Blocking(1)), closed: false, committed: -1L }
+}
+
+///|
+fn SnapshotSink::submit_envelope(
+  self : SnapshotSink,
+  request : SnapshotEnvelope,
+) -> Bool {
+  if self.closed {
+    return false
+  }
+  if (self.queue.try_put(request) catch { _ => false }) {
+    return true
+  }
+  let previous = self.queue.try_get() catch { _ => return false }
+  if previous is Some(previous) {
+    previous.release()
+  }
+  self.queue.try_put(request) catch {
+    _ => false
+  }
 }
 
 ///|
@@ -20,17 +55,25 @@ pub fn SnapshotSink::submit(
   self : SnapshotSink,
   request : SnapshotRequest,
 ) -> Bool {
-  if self.closed {
-    return false
-  }
-  let submitted = self.queue.try_put(request) catch { _ => false }
-  if submitted {
-    return true
-  }
-  let _ = self.queue.try_get() catch { _ => return false }
-  self.queue.try_put(request) catch {
-    _ => false
-  }
+  self.submit_envelope({
+    revision: request.revision,
+    snapshot: request.snapshot,
+    ticket: None,
+  })
+}
+
+///|
+/// Ownership transfers iff true. The caller releases a rejected ticket.
+pub fn SnapshotSink::submit_accounted(
+  self : SnapshotSink,
+  request : SnapshotRequest,
+  ticket : @budget.Ticket,
+) -> Bool {
+  self.submit_envelope({
+    revision: request.revision,
+    snapshot: request.snapshot,
+    ticket: Some(ticket),
+  })
 }
 
 ///|
@@ -42,7 +85,21 @@ pub fn SnapshotSink::close(self : SnapshotSink) -> Unit {
 }
 
 ///|
+pub fn SnapshotSink::discard(self : SnapshotSink) -> Unit {
+  for ;; {
+    let next = self.queue.try_get() catch { _ => None }
+    match next {
+      Some(value) => value.release()
+      None => break
+    }
+  }
+  self.closed = true
+  self.queue.close(clear=true)
+}
+
+///|
 pub struct SnapshotWriter {
+  priv mut active : SnapshotEnvelope?
   store : SnapshotStore
   sink : SnapshotSink
   retry_ms : Int
@@ -65,6 +122,7 @@ pub fn SnapshotWriter::new(
     )
   }
   Ok({
+    active: None,
     store,
     sink,
     retry_ms: retry_ms.to_int(),
@@ -91,46 +149,64 @@ pub fn SnapshotWriter::attempt_count(self : SnapshotWriter) -> Int {
 }
 
 ///|
-fn SnapshotWriter::take_latest(
+fn SnapshotWriter::install_latest(
   self : SnapshotWriter,
-  initial : SnapshotRequest,
-) -> SnapshotRequest {
-  let mut latest = initial
+  request : SnapshotEnvelope,
+) -> Unit {
+  match self.active {
+    None => self.active = Some(request)
+    Some(previous) =>
+      if request.revision > previous.revision {
+        previous.release()
+        self.active = Some(request)
+      } else {
+        request.release()
+      }
+  }
+}
+
+///|
+fn SnapshotWriter::release_active(self : SnapshotWriter) -> Unit {
+  if self.active is Some(active) {
+    active.release()
+    self.active = None
+  }
+}
+
+///|
+fn SnapshotWriter::take_latest(self : SnapshotWriter) -> Unit {
   for ;; {
-    let next = self.sink.queue.try_get() catch { _ => return latest }
+    let next = self.sink.queue.try_get() catch { _ => None }
     match next {
-      Some(value) => if value.revision > latest.revision { latest = value }
-      None => return latest
+      Some(value) => self.install_latest(value)
+      None => return
     }
   }
 }
 
 ///|
-async fn SnapshotWriter::wait_retry_latest(
-  self : SnapshotWriter,
-  failed : SnapshotRequest,
-) -> SnapshotRequest {
-  let retry_at = @async.now() + self.retry_ms.to_int64()
-  let mut latest = failed
+async fn SnapshotWriter::wait_retry_latest(self : SnapshotWriter) -> Unit {
+  let deadline = @async.now() + self.retry_ms.to_int64()
   for ;; {
-    let remaining = retry_at - @async.now()
+    let remaining = deadline - @async.now()
     if remaining <= 0L {
-      return self.take_latest(latest)
+      self.take_latest()
+      return
     }
     let timeout = if remaining > 2147483647L {
       2147483647
     } else {
       remaining.to_int()
     }
-    let update = @async.with_timeout_opt(timeout, () => self.sink.queue.get()) catch {
+    let next = @async.with_timeout_opt(timeout, () => self.sink.queue.get()) catch {
       _ => None
     }
-    match update {
-      Some(request) =>
-        if request.revision > latest.revision {
-          latest = request
-        }
-      None => return self.take_latest(latest)
+    match next {
+      Some(value) => self.install_latest(value)
+      None => {
+        self.take_latest()
+        return
+      }
     }
   }
 }
@@ -138,14 +214,15 @@ async fn SnapshotWriter::wait_retry_latest(
 ///|
 async fn SnapshotWriter::commit(
   self : SnapshotWriter,
-  request : SnapshotRequest,
+  request : SnapshotEnvelope,
 ) -> Bool {
   self.attempts = self.attempts + 1
-  match self.store.save(request.snapshot) {
+  match @async.protect_from_cancel(() => self.store.save(request.snapshot)) {
     Ok(bytes) => {
       let recovered = self.degraded
       self.degraded = false
       self.committed_revision = request.revision
+      self.sink.committed = request.revision
       if recovered {
         self.logger.log(
           @observability.LogRecord::new(
@@ -195,21 +272,33 @@ async fn SnapshotWriter::commit(
 
 ///|
 pub async fn SnapshotWriter::run(self : SnapshotWriter) -> Unit {
-  let mut pending : SnapshotRequest? = None
+  defer {
+    self.release_active()
+    self.sink.discard()
+  }
   for ;; {
-    let request = match pending {
-      Some(value) => value
-      None => self.sink.queue.get() catch { _ => return }
+    if self.active is None {
+      let request = self.sink.queue.get() catch { _ => return }
+      self.active = Some(request)
     }
-    let latest = self.take_latest(request)
-    if latest.revision <= self.committed_revision {
-      pending = None
+    self.take_latest()
+    let request = self.active.unwrap()
+    if request.revision <= self.committed_revision {
+      self.release_active()
       continue
     }
-    if self.commit(latest) {
-      pending = None
+    if self.commit(request) {
+      self.release_active()
     } else {
-      pending = Some(self.wait_retry_latest(latest))
+      if self.sink.closed {
+        return
+      }
+      self.wait_retry_latest()
     }
   }
+}
+
+///|
+pub fn SnapshotSink::committed_revision(self : SnapshotSink) -> Int64 {
+  self.committed
 }

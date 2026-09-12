@@ -28,6 +28,7 @@ pub(all) enum ResourceKind {
 pub struct Account {
   authority : Array[Int]
   id : Int64
+  label : String
   scope : LimitScope
   limit : Int64
   priv mut committed : Int64
@@ -40,6 +41,7 @@ pub struct Ledger {
   total : Account
   ordinary : Account
   control : Account
+  rejections : Map[String, Int64]
   categories : Map[ResourceKind, Account]
   priv mut next_id : Int64
   priv mut live_tickets : Int
@@ -95,6 +97,7 @@ pub fn Ledger::new(
     total: {
       authority,
       id: 0L,
+      label: "managed",
       scope: Global,
       limit: total,
       committed: 0L,
@@ -103,6 +106,7 @@ pub fn Ledger::new(
     ordinary: {
       authority,
       id: 1L,
+      label: "ordinary",
       scope: Global,
       limit: total - control,
       committed: 0L,
@@ -111,11 +115,13 @@ pub fn Ledger::new(
     control: {
       authority,
       id: 2L,
+      label: "control",
       scope: Control,
       limit: control,
       committed: 0L,
       reserved: 0L,
     },
+    rejections: Map([]),
     categories: Map([]),
     next_id: 3L,
     live_tickets: 0,
@@ -128,6 +134,7 @@ pub fn Ledger::account(
   self : Ledger,
   scope : LimitScope,
   limit : Int64,
+  label? : String = "scope",
 ) -> Result[Account, BudgetError] {
   if limit < 0L {
     return Err(InvalidConfiguration)
@@ -141,6 +148,7 @@ pub fn Ledger::account(
     authority: self.authority,
     id,
     scope,
+    label,
     limit,
     committed: 0L,
     reserved: 0L,
@@ -162,7 +170,7 @@ pub fn Ledger::pool(
       account
     }
     None => {
-      let account = match self.account(Category, limit) {
+      let account = match self.account(Category, limit, label=kind.name()) {
         Ok(a) => a
         Err(e) => return Err(e)
       }
@@ -264,7 +272,15 @@ fn validate_charges(
       return Err(InvalidTicketState)
     }
     if charge.bytes > account.limit - used {
-      return Err(Exhausted(account.scope, used, charge.bytes, account.limit))
+      return Err(
+        Exhausted(
+          account.scope,
+          account.label,
+          used,
+          charge.bytes,
+          account.limit,
+        ),
+      )
     }
   }
   Ok(())
@@ -276,14 +292,14 @@ pub fn Ledger::reserve(
   allocations : Array[Allocation],
 ) -> Result[Ticket, BudgetError] {
   if self.live_tickets >= self.max_tickets {
-    return Err(TicketLimit)
+    return Err(self.record_rejection(TicketLimit))
   }
   let charges = match self.aggregate(allocations) {
     Ok(c) => c
-    Err(e) => return Err(e)
+    Err(e) => return Err(self.record_rejection(e))
   }
   match validate_charges(charges, []) {
-    Err(e) => return Err(e)
+    Err(e) => return Err(self.record_rejection(e))
     Ok(_) => ()
   }
   for charge in charges {
@@ -317,10 +333,10 @@ pub fn Ticket::replace(
   }
   let charges = match self.ledger.aggregate(allocations) {
     Ok(c) => c
-    Err(e) => return Err(e)
+    Err(e) => return Err(self.ledger.record_rejection(e))
   }
   match validate_charges(charges, self.charges) {
-    Err(e) => return Err(e)
+    Err(e) => return Err(self.ledger.record_rejection(e))
     Ok(_) => ()
   }
   for old in self.charges {
@@ -409,4 +425,92 @@ pub fn Pool::reserve(self : Pool, bytes : Int64) -> Result[Ticket, BudgetError] 
 /// Share a category constraint across ordinary and protected control pools.
 pub fn Pool::category_account(self : Pool) -> Account {
   self.accounts[2]
+}
+
+///|
+pub fn ResourceKind::name(self : ResourceKind) -> String {
+  match self {
+    Receive => "receive"
+    RuntimeEvent => "runtime"
+    Inflight => "inflight"
+    Pending => "pending"
+    InboundQoS2 => "inbound_qos2"
+    Retained => "retained"
+    Will => "will"
+    Subscription => "subscription"
+    SessionMetadata => "session_metadata"
+    Outbound => "outbound"
+    Routing => "routing"
+    Snapshot => "snapshot"
+    AuthRequest => "auth_request"
+    AuthWorkspace => "auth_workspace"
+    AuthResult => "auth_result"
+    ConnectionMetadata => "connection_metadata"
+    LimiterMetadata => "limiter_metadata"
+    Infrastructure => "infrastructure"
+    ControlEvent => "control_event"
+    ControlRuntime => "control_runtime"
+    ControlFrame => "control_frame"
+    ControlWork => "control_work"
+  }
+}
+
+///|
+pub fn Ledger::record_rejection(
+  self : Ledger,
+  error : BudgetError,
+) -> BudgetError {
+  let key = match error {
+    Exhausted(_, label, _, _, _) => label
+    TicketLimit => "ticket_count"
+    _ => "invariant"
+  }
+  // Diagnostic cardinality is bounded even for a custom library caller's labels.
+  let key = if self.rejections.length() >= 64 && !self.rejections.contains(key) {
+    "other"
+  } else {
+    key
+  }
+  let count = self.rejections.get(key).unwrap_or(0L)
+  self.rejections.set(
+    key,
+    if count < 9223372036854775807L {
+      count + 1L
+    } else {
+      count
+    },
+  )
+  error
+}
+
+///|
+/// ControlFrame/ControlRuntime are subcaps of the canonical outbound/runtime
+/// categories and are omitted to avoid counting their bytes twice.
+pub fn Ledger::usage(
+  self : Ledger,
+) -> Array[(ResourceKind, Int64, Int64, Int64)] {
+  let result : Array[(ResourceKind, Int64, Int64, Int64)] = []
+  for kind, account in self.categories {
+    if kind != ControlFrame && kind != ControlRuntime {
+      result.push((kind, account.committed, account.reserved, account.limit))
+    }
+  }
+  result
+}
+
+///|
+pub fn Ledger::rejection_count(self : Ledger, key : String) -> Int64 {
+  self.rejections.get(key).unwrap_or(0L)
+}
+
+///|
+pub fn Ledger::rejections_total(self : Ledger) -> Int64 {
+  let mut sum = 0L
+  for _, count in self.rejections {
+    sum = match checked_add(sum, count) {
+      Ok(n) => n
+      Err(_) => 9223372036854775807L
+    }
+  }
+  sum
 }

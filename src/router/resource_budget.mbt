@@ -27,11 +27,16 @@ priv struct RouterResources {
 }
 
 ///|
-fn RouterResources::new(limits : @budget.Limits) -> RouterResources {
-  let ledger = @budget.Ledger::new(
-    limits.get("max_managed_bytes_total"),
-    limits.get("control_reserve_bytes"),
-  ).unwrap()
+fn RouterResources::new(
+  limits : @budget.Limits,
+  ledger? : @budget.Ledger,
+) -> RouterResources {
+  let ledger = ledger.unwrap_or_else(() => {
+    @budget.Ledger::new(
+      limits.get("max_managed_bytes_total"),
+      limits.get("control_reserve_bytes"),
+    ).unwrap()
+  })
   let pools = [
     ledger.pool(Inflight, limits.get("max_inflight_bytes_total")).unwrap(),
     ledger.pool(Pending, limits.get("max_pending_bytes_total")).unwrap(),
@@ -84,7 +89,11 @@ fn RouterResources::add_owner(
   usage : ResourceUsage,
 ) -> Result[Unit, RouterError] {
   let combined = self.ledger
-    .account(Session, self.limits.get("max_session_state_bytes"))
+    .account(
+      Session,
+      self.limits.get("max_session_state_bytes"),
+      label="session_state",
+    )
     .unwrap()
   let pools = self.pools.copy()
   for index in 0..<3 {
@@ -98,7 +107,9 @@ fn RouterResources::add_owner(
     ] {
     let (index, key) = pair
     pools[index] = pools[index]
-      .with_account(self.ledger.account(Session, self.limits.get(key)).unwrap())
+      .with_account(
+        self.ledger.account(Session, self.limits.get(key), label=key).unwrap(),
+      )
       .unwrap()
   }
   let ticket = match self.ledger.reserve([]) {
@@ -382,5 +393,32 @@ pub fn BrokerState::admit_action_input(
       self.retain_action_lease(t)
       Ok(())
     }
+  }
+}
+
+///|
+/// Conservative overlap of export copies, encoder buffers and an active write.
+pub fn BrokerState::snapshot_work_cost(
+  self : BrokerState,
+) -> Result[Int64, @budget.BudgetError] {
+  let mut total = self.retained.total_cost()
+  for id, owner in self.resources.owners {
+    if self.sessions.get(id) is Some(session) &&
+      session.mode() == @session.SessionMode::Persistent {
+      let usage = owner.usage
+      let cost = usage.inflight +
+        usage.pending +
+        usage.inbound +
+        usage.metadata +
+        usage.subscriptions
+      total = match @budget.checked_add(total, cost) {
+        Ok(n) => n
+        Err(e) => return Err(e)
+      }
+    }
+  }
+  match @budget.checked_mul(total, 8L) {
+    Ok(n) => @budget.checked_add(n, 1024L)
+    Err(e) => Err(e)
   }
 }

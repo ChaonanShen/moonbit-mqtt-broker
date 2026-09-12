@@ -149,6 +149,15 @@ pub async fn SnapshotStore::snapshot_size(
   if !@fs.exists(self.main_path) {
     return Ok(None)
   }
+  let kind = @fs.kind(self.main_path, follow_symlink=false) catch {
+    _ =>
+      return Err(FileSystem(operation="inspect-snapshot", path=self.main_path))
+  }
+  if kind != Regular {
+    return Err(
+      FileSystem(operation="snapshot-not-regular", path=self.main_path),
+    )
+  }
   let file = @fs.open(self.main_path, mode=ReadOnly, create_mode=OpenExisting) catch {
     _ => return Err(FileSystem(operation="open-snapshot", path=self.main_path))
   }
@@ -246,7 +255,32 @@ pub async fn SnapshotStore::load_state(
   }
   try {
     let max_bytes = self.config.max_snapshot_bytes().to_int()
-    let data = bounded_read_regular(self.main_path, max_bytes)
+    let observed = match
+      (self.snapshot_size() catch {
+        _ => raise FileSystem(operation="stat-snapshot", path=self.main_path)
+      }) {
+      Ok(Some(size)) => size
+      Ok(None) => return Ok(@router.BrokerState::new(broker_config))
+      Err(e) => raise e
+    }
+    if observed > max_bytes.to_int64() {
+      raise SnapshotTooLarge(actual=observed, limit=max_bytes.to_int64())
+    }
+    let resources = broker_config.resources()
+    let ledger = @budget.Ledger::new(
+      resources.get("max_managed_bytes_total"),
+      resources.get("control_reserve_bytes"),
+    ).unwrap()
+    let pool = ledger
+      .pool(Snapshot, resources.get("max_snapshot_work_bytes"))
+      .unwrap()
+    let workspace = match
+      DecodeWorkspace::new(pool, (observed + 1L) * 4L + 1024L) {
+      Ok(w) => w
+      Err(e) => raise e
+    }
+    defer workspace.release()
+    let data = bounded_read_regular(self.main_path, observed.to_int())
     let limits = match
       SnapshotDecodeLimits::new(
         broker_config,
@@ -256,11 +290,11 @@ pub async fn SnapshotStore::load_state(
       Ok(value) => value
       Err(error) => raise error
     }
-    let snapshot = match decode_snapshot(data, limits) {
+    let snapshot = match decode_snapshot(data, limits, workspace~) {
       Ok(value) => value
       Err(error) => raise error
     }
-    match @router.BrokerState::from_snapshot(broker_config, snapshot) {
+    match @router.BrokerState::from_snapshot(broker_config, snapshot, ledger~) {
       Ok(state) => Ok(state)
       Err(_) => Err(SnapshotImport("router rejected decoded snapshot"))
     }
