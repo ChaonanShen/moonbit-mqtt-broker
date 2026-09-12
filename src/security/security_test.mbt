@@ -209,3 +209,34 @@ test "password hashes reject NUL suffixes and non-ASCII before C verification" {
     )
   }
 }
+
+///|
+test "password hash cost limits are checked before native verification" {
+  let salt = "MDEyMzQ1Njc4OWFiY2RlZg"
+  let digest = "L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
+  for parameters in ["m=65537,t=2,p=1", "m=4096,t=11,p=1", "m=4096,t=2,p=5"] {
+    let encoded = "$argon2id$v=19$" + parameters + "$" + salt + "$" + digest
+    assert_true(
+      PasswordDatabase::parse("user:" + encoded)
+      is Err(PasswordFileError::HashCostExceeded(1)),
+    )
+  }
+  let overflow = "$argon2id$v=19$m=9223372036854775808,t=2,p=1$" +
+    salt +
+    "$" +
+    digest
+  assert_true(
+    PasswordDatabase::parse("user:" + overflow)
+    is Err(PasswordFileError::InvalidHash(1)),
+  )
+}
+
+///|
+test "password database caches verified workspace cost" {
+  let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
+  let database = password_database_fixture("sensor01:" + encoded)
+  let (_, workspace) = database.verification_cost("sensor01", 12L)
+  assert_eq(workspace, 5505024L)
+  let (_, fallback_workspace) = database.verification_cost("missing", 12L)
+  assert_eq(fallback_workspace, workspace)
+}
