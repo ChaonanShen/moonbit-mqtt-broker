@@ -36,7 +36,7 @@ start_broker() {
     persistence_args=(--data-dir "${DATA_DIR}" --snapshot-debounce-ms 20 --snapshot-max-delay-ms 100 --snapshot-retry-ms 20)
   fi
   setsid stdbuf -oL moon run --target native src/cmd/broker -- \
-    --listen "127.0.0.1:${port}" --max-connections 160 \
+    --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" --max-connections 160 \
     --max-packet-size 4096 --max-receive-buffer-size 4096 \
     --max-outbound-queue 1024 --max-runtime-events 2048 \
     --max-sessions 256 --max-inflight-per-session 128 --max-inflight-total 2048 \

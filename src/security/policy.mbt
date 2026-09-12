@@ -92,3 +92,21 @@ pub fn SecurityPolicy::can_write_topic(
     Some(acl) => acl.can_write_topic(principal, topic)
   }
 }
+
+///|
+pub fn SecurityPolicy::has_passwords(self : SecurityPolicy) -> Bool {
+  self.passwords is Some(database) && database.user_count() > 0
+}
+
+///|
+pub fn SecurityPolicy::authentication_cost(
+  self : SecurityPolicy,
+  username : String?,
+  password : Bytes?,
+) -> (Int64, Int64)? {
+  match (self.passwords, username, password) {
+    (Some(database), Some(user), Some(secret)) if database.user_count() > 0 =>
+      Some(database.verification_cost(user, secret.length().to_int64()))
+    _ => None
+  }
+}

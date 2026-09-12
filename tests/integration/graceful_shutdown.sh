@@ -39,7 +39,7 @@ start_broker() {
   local broker_log="$3"
   : >"${broker_log}"
   setsid stdbuf -oL "${BROKER_EXECUTABLE}" \
-    --listen "127.0.0.1:${port}" \
+    --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" \
     --data-dir "${data_dir}" \
     --snapshot-debounce-ms 60000 \
     --snapshot-max-delay-ms 60000 \
@@ -69,7 +69,7 @@ run_without_persistence() {
   mkdir -p "${case_dir}"
   : >"${broker_log}"
   setsid stdbuf -oL "${BROKER_EXECUTABLE}" \
-    --listen "127.0.0.1:${port}" \
+    --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" \
     --keep-alive-check-interval-ms 20 >"${broker_log}" 2>&1 &
   BROKER_PID="$!"
   for _ in $(seq 1 300); do

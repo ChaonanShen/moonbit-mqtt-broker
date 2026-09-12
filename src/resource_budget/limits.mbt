@@ -43,6 +43,12 @@ pub fn Limits::default() -> Limits {
     let (_, key, value) = spec
     values.set(key, value)
   }
+  for spec in rate_limit_specs() {
+    let (_, key, value) = spec
+    values.set(key, value)
+  }
+  values.set("rate_limits_enabled", 1L)
+  values.set("per_ip_limits_enabled", 1L)
   { values, }
 }
 
@@ -73,5 +79,53 @@ pub fn Limits::validate(self : Limits) -> Result[Unit, BudgetError] {
   if self.get("control_reserve_bytes") > self.get("max_managed_bytes_total") {
     return Err(InvalidConfiguration)
   }
+  if self.get("rate_limits_enabled") > 1L ||
+    self.get("per_ip_limits_enabled") > 1L ||
+    self.get("max_ip_buckets") > 1048576L ||
+    self.get("max_runtime_events_per_connection") < 1L {
+    return Err(InvalidConfiguration)
+  }
   Ok(())
+}
+
+///|
+pub fn rate_limit_specs() -> Array[(String, String, Int64)] {
+  [
+    ("server", "max_connections_per_ip", 32L),
+    ("limits", "connect_rate_per_ip", 10L),
+    ("limits", "connect_burst_per_ip", 20L),
+    ("limits", "connect_rate_total", 100L),
+    ("limits", "connect_burst_total", 200L),
+    ("limits", "auth_rate_per_ip", 5L),
+    ("limits", "auth_burst_per_ip", 10L),
+    ("limits", "auth_rate_total", 20L),
+    ("limits", "auth_burst_total", 40L),
+    ("limits", "publish_messages_per_session", 100L),
+    ("limits", "publish_messages_burst_per_session", 200L),
+    ("limits", "publish_bytes_per_session", 1048576L),
+    ("limits", "publish_bytes_burst_per_session", 2097152L),
+    ("limits", "publish_messages_total", 5000L),
+    ("limits", "publish_messages_burst_total", 10000L),
+    ("limits", "publish_bytes_total", 16777216L),
+    ("limits", "publish_bytes_burst_total", 33554432L),
+    ("limits", "ingress_bytes_per_ip", 4194304L),
+    ("limits", "ingress_bytes_burst_per_ip", 8388608L),
+    ("limits", "ingress_bytes_total", 33554432L),
+    ("limits", "ingress_bytes_burst_total", 67108864L),
+    ("limits", "control_packets_per_connection", 1000L),
+    ("limits", "control_packets_burst_per_connection", 2000L),
+    ("limits", "max_ip_buckets", 4096L),
+    ("limits", "idle_ttl_ms", 300000L),
+    ("server", "max_runtime_events_per_connection", 32L),
+  ]
+}
+
+///|
+pub fn Limits::rates_enabled(self : Limits) -> Bool {
+  self.get("rate_limits_enabled") == 1L
+}
+
+///|
+pub fn Limits::per_ip_enabled(self : Limits) -> Bool {
+  self.get("per_ip_limits_enabled") == 1L
 }

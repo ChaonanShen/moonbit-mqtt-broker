@@ -121,3 +121,71 @@ pub fn PasswordDatabase::authenticate(
     }
   }
 }
+
+///|
+fn phc_number(field : String, prefix : String) -> Int64? {
+  if !field.has_prefix(prefix) {
+    return None
+  }
+  let digits = field[prefix.length():]
+  if digits.is_empty() {
+    return None
+  }
+  let mut number = 0L
+  for character in digits {
+    let code = character.to_int() - 48
+    if code < 0 ||
+      code > 9 ||
+      number > (9223372036854775807L - code.to_int64()) / 10L {
+      return None
+    }
+    number = number * 10L + code.to_int64()
+  }
+  Some(number)
+}
+
+///|
+/// Returns request/workspace logical costs only; never exports the selected PHC.
+/// Input hashes were validated at startup. A negative workspace fails admission.
+pub fn PasswordDatabase::verification_cost(
+  self : PasswordDatabase,
+  username : String,
+  password_bytes : Int64,
+) -> (Int64, Int64) {
+  let encoded = match self.hashes.get(username) {
+    Some(h) => h
+    None => self.fallback_hash.unwrap_or("")
+  }
+  let mut memory : Int64? = None
+  let mut parallelism : Int64? = None
+  for section in encoded.split("$") {
+    if section.has_prefix("m=") {
+      for field in section.split(",") {
+        if field.has_prefix("m=") {
+          memory = phc_number(field.to_owned(), "m=")
+        }
+        if field.has_prefix("p=") {
+          parallelism = phc_number(field.to_owned(), "p=")
+        }
+      }
+    }
+  }
+  let request = @budget.utf8_bytes(encoded) * 2L + password_bytes + 128L
+  let workspace = match (memory, parallelism) {
+    (Some(m), Some(p)) =>
+      match (@budget.checked_mul(m, 1024L), @budget.checked_mul(p, 262144L)) {
+        (Ok(arena), Ok(stacks)) =>
+          match @budget.checked_add(arena, stacks) {
+            Ok(cost) =>
+              match @budget.checked_add(cost, 1048576L) {
+                Ok(n) => n
+                Err(_) => -1L
+              }
+            Err(_) => -1L
+          }
+        _ => -1L
+      }
+    _ => -1L
+  }
+  (request, workspace)
+}

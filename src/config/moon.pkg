@@ -1,3 +1,4 @@
 import {
+  "ChaonanShen/moonbit-mqtt-broker/resource_budget" @budget,
   "bobzhang/toml",
 }

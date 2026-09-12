@@ -28,7 +28,7 @@ let child, output = '', serial = 0
 const sockets = new Set(), mqttClients = new Set()
 const start = async () => {
   output = ''
-  child = spawn('stdbuf', ['-oL', binary, '--listen', '127.0.0.1:' + port,
+  child = spawn('stdbuf', ['-oL', binary, '--rate-limits-enabled', 'false', '--per-ip-limits-enabled', 'false', '--listen', '127.0.0.1:' + port,
     '--data-dir', dataDir, '--snapshot-debounce-ms', '30', '--snapshot-max-delay-ms', '100',
     '--snapshot-retry-ms', '20', '--max-inflight-per-session', '4',
     '--max-inflight-total', '128', '--max-pending-per-session', '16',

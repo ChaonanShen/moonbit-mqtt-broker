@@ -24,7 +24,7 @@ start_broker() {
   local port="$1"
   BROKER_LOG="$(mktemp)"
   setsid stdbuf -oL moon run --target native src/cmd/broker -- \
-    --listen "127.0.0.1:${port}" \
+    --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" \
     --max-connections 64 \
     --max-sessions 64 \
     --max-inflight-per-session 8 \

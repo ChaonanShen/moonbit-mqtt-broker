@@ -24,6 +24,7 @@ priv struct ControlSlot {
 
 ///|
 priv struct EventBus {
+  admission : AdmissionState
   config : ServerConfig
   ledger : @budget.Ledger
   data : @async.Queue[DriverEvent]
@@ -61,6 +62,7 @@ fn EventBus::new(
   infrastructure.commit().unwrap()
   Ok({
     config,
+    admission: AdmissionState::new(config, ledger),
     ledger,
     data,
     wake: @async.Queue(kind=Blocking(1)),
@@ -152,6 +154,7 @@ fn EventBus::register(
     terminal: None,
     terminal_delivered: false,
   })
+  self.admission.registered(id)
   self.signal()
   Ok(budget)
 }
@@ -174,7 +177,11 @@ async fn EventBus::post_packet(
       return false
     }
     if slot.pending_packets < self.config.max_runtime_events() &&
-      slot.pending_packets < 32 {
+      slot.pending_packets.to_int64() <
+      self.config
+      .broker_config()
+      .resources()
+      .get("max_runtime_events_per_connection") {
       let accepted = self.data.try_put(
         Accounted(RuntimeEvent::PacketReceived(event), ticket),
       ) catch {
@@ -239,6 +246,7 @@ fn EventBus::take_control(self : EventBus) -> DriverEvent? {
         return Some(Runtime(TransportClosed(terminal)))
       }
       slot.budget.metadata.release().unwrap()
+      self.admission.forget(id)
       slot.ready.close(clear=true)
       self.slots.remove(id)
       return Some(UnregisterTransport(id))
@@ -331,5 +339,6 @@ fn EventBus::close(self : EventBus) -> Unit {
     slot.budget.metadata.release().unwrap()
   }
   self.slots.clear()
+  self.admission.close()
   self.infrastructure.release().unwrap()
 }

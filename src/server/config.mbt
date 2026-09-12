@@ -58,6 +58,23 @@ pub fn ServerConfig::new(
       InvalidConfiguration("system_metrics_interval_ms must be at least 1"),
     )
   }
+  let resources = broker_config.resources()
+  let fixed_control = max_connections.to_int64() * 512L + 256L
+  let fixed_data = max_runtime_events.to_int64() * 64L + 1024L
+  if resources.get("control_reserve_bytes") < fixed_control ||
+    resources.get("max_managed_bytes_total") -
+    resources.get("control_reserve_bytes") <
+    fixed_data {
+    return Err(
+      InvalidConfiguration(
+        "resource budget cannot fit fixed control/data infrastructure",
+      ),
+    )
+  }
+  if resources.get("max_outbound_bytes_per_connection") < 4L ||
+    resources.get("max_outbound_bytes_total") < 4L {
+    return Err(InvalidConfiguration("outbound budget must fit CONNACK"))
+  }
   Ok({
     max_connections,
     max_packet_size,
