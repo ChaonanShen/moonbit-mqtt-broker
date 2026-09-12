@@ -1,5 +1,7 @@
 ///|
 pub struct BrokerState {
+  priv mut action_scope : Bool
+  priv action_leases : Array[@budget.Ticket]
   priv mut promotion_cursor : Int
   priv resources : RouterResources
   config : BrokerConfig
@@ -52,6 +54,8 @@ fn copy_router_bytes(payload : Bytes) -> Bytes {
 pub fn BrokerState::new(config : BrokerConfig) -> BrokerState {
   {
     config,
+    action_scope: false,
+    action_leases: [],
     promotion_cursor: 0,
     resources: RouterResources::new(config.resources),
     sessions: Map([]),
@@ -1224,7 +1228,7 @@ fn BrokerState::install_deliveries(
   }
   self.inflight_total += prepared.inflight_added
   self.pending_qos1_total += prepared.pending_added
-  prepared.scratch.release().unwrap()
+  self.retain_action_lease(prepared.scratch)
   prepared.actions
 }
 

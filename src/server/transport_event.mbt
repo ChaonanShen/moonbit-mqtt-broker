@@ -7,6 +7,7 @@ pub(all) struct RegisterTransportEvent {
 
 ///|
 pub(all) enum DriverEvent {
+  Accounted(RuntimeEvent, @budget.Ticket)
   RegisterTransport(RegisterTransportEvent)
   Runtime(RuntimeEvent)
   UnregisterTransport(ConnectionId)
