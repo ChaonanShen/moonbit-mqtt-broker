@@ -211,7 +211,7 @@ async fn write_transport(
         connection.write(frame) catch {
           _ => return WriteFailure
         }
-        if bus is Some(bus) {
+        if bus is Some(bus) && bus.needs_promotion {
           bus.post_tick(CheckDeadlines(@async.now()))
         }
       }

@@ -17,6 +17,7 @@ priv struct ControlSlot {
   ready : @async.Queue[Unit]
   budget : ConnectionBudget
   mut registered : Bool
+  mut waiters : Int
   mut pending_packets : Int
   mut terminal : TransportClosedEvent?
   mut terminal_delivered : Bool
@@ -35,6 +36,8 @@ priv struct EventBus {
   mut metrics : RuntimeEvent?
   mut deferred_data : DriverEvent?
   mut control_batch : Int
+  mut needs_promotion : Bool
+  mut waiting_writers : Int
   mut closed : Bool
 }
 
@@ -72,6 +75,8 @@ fn EventBus::new(
     metrics: None,
     deferred_data: None,
     control_batch: 0,
+    needs_promotion: false,
+    waiting_writers: 0,
     closed: false,
   })
 }
@@ -158,6 +163,7 @@ fn EventBus::register(
     registration: { connection_id: id, sink, accepted_at_ms: @async.now() },
     budget,
     registered: false,
+    waiters: 0,
     pending_packets: 0,
     terminal: None,
     terminal_delivered: false,
@@ -201,19 +207,38 @@ async fn EventBus::post_packet(
         return true
       }
     }
-    slot.ready.get() catch {
-      _ => return false
+    if !self.wait_space(slot) {
+      return false
     }
   }
 }
 
 ///|
 fn EventBus::signal_space(self : EventBus) -> Unit {
+  if self.waiting_writers == 0 {
+    return
+  }
   for _, slot in self.slots {
-    ignore(slot.ready.try_put(())) catch {
-      _ => ()
+    if slot.waiters > 0 {
+      ignore(slot.ready.try_put(())) catch {
+        _ => ()
+      }
     }
   }
+}
+
+///|
+async fn EventBus::wait_space(self : EventBus, slot : ControlSlot) -> Bool {
+  self.waiting_writers += 1
+  slot.waiters += 1
+  defer {
+    self.waiting_writers -= 1
+    slot.waiters -= 1
+  }
+  slot.ready.get() catch {
+    _ => return false
+  }
+  true
 }
 
 ///|

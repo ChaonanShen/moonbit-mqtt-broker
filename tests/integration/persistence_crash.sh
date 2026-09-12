@@ -88,12 +88,13 @@ rm -f "${DATA_DIR}/broker.snapshot"
 mkfifo "${DATA_DIR}/broker.snapshot"
 BROKER_LOG="$(mktemp)"
 set +e
-timeout 2 moon run --target native src/cmd/broker -- \
+timeout -k 2 2 moon run --target native src/cmd/broker -- \
   --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" --data-dir "${DATA_DIR}" >"${BROKER_LOG}" 2>&1
 status="$?"
 set -e
 test "${status}" -ne 0
 test "${status}" -ne 124
+test "${status}" -ne 137
 grep -q 'snapshot recovery: filesystem' "${BROKER_LOG}"
 ! grep -q 'MQTT broker listening' "${BROKER_LOG}"
 echo 'PERSISTENCE crash-window stale-temp and corrupt-main policy passed'

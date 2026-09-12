@@ -225,6 +225,21 @@ fn Ledger::aggregate(
   if allocations.length() > 65536 {
     return Err(InvalidConfiguration)
   }
+  if allocations.length() == 1 {
+    let allocation = allocations[0]
+    if !physical_equal(allocation.pool.ledger, self) {
+      return Err(ForeignAccount)
+    }
+    if allocation.bytes < 0L {
+      return Err(InvalidAmount)
+    }
+    return Ok(
+      allocation.pool.accounts.map(account => Charge::{
+        account,
+        bytes: allocation.bytes,
+      }),
+    )
+  }
   let charges : Map[Int64, Charge] = Map([])
   for allocation in allocations {
     if !physical_equal(allocation.pool.ledger, self) {
@@ -260,6 +275,34 @@ fn validate_charges(
   charges : Array[Charge],
   old : Array[Charge],
 ) -> Result[Unit, BudgetError] {
+  if old.length() <= 8 {
+    for charge in charges {
+      let mut previous = 0L
+      for prior in old {
+        if physical_equal(prior.account, charge.account) {
+          previous = prior.bytes
+          break
+        }
+      }
+      let account = charge.account
+      let used = account.committed + account.reserved - previous
+      if used < 0L || used > account.limit {
+        return Err(InvalidTicketState)
+      }
+      if charge.bytes > account.limit - used {
+        return Err(
+          Exhausted(
+            account.scope,
+            account.label,
+            used,
+            charge.bytes,
+            account.limit,
+          ),
+        )
+      }
+    }
+    return Ok(())
+  }
   let previous_by_id : Map[Int64, Int64] = Map([])
   for prior in old {
     previous_by_id.set(prior.account.id, prior.bytes)
