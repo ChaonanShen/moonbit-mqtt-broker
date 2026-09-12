@@ -238,13 +238,34 @@ pub fn PasswordDatabase::verification_cost(
 }
 
 ///|
+/// Trusted, secret-free metadata retained while native verification runs.
+pub struct AuthenticationCandidate {
+  username : String
+  known_user : Bool
+  request_cost : Int64
+  workspace_cost : Int64
+}
+
+///|
 /// Opaque, short-lived input for the native authentication executor. It does
 /// not implement Debug so credentials and PHC data cannot be logged by accident.
 pub struct PasswordAuthentication {
   entry : PasswordHash
-  username : String
   password : Bytes
-  known_user : Bool
+  candidate : AuthenticationCandidate
+}
+
+///|
+fn password_request_cost(entry : PasswordHash, password_bytes : Int64) -> Int64 {
+  let encoded_bytes = @budget.utf8_bytes(entry.encoded)
+  match @budget.checked_mul(encoded_bytes, 2L) {
+    Ok(copies) =>
+      match @budget.checked_add(copies, password_bytes) {
+        Ok(input) => @budget.checked_add(input, 128L).unwrap_or(-1L)
+        Err(_) => -1L
+      }
+    Err(_) => -1L
+  }
 }
 
 ///|
@@ -259,35 +280,56 @@ pub fn PasswordDatabase::prepare_password(
   }
   match selected {
     None => None
-    Some((entry, known_user)) => Some({ entry, username, password, known_user })
+    Some((entry, known_user)) => {
+      let candidate : AuthenticationCandidate = {
+        username,
+        known_user,
+        request_cost: password_request_cost(entry, password.length().to_int64()),
+        workspace_cost: entry.workspace_cost,
+      }
+      Some({ entry, password, candidate })
+    }
   }
+}
+
+///|
+pub fn PasswordAuthentication::candidate(
+  self : PasswordAuthentication,
+) -> AuthenticationCandidate {
+  self.candidate
 }
 
 ///|
 pub fn PasswordAuthentication::request_cost(
   self : PasswordAuthentication,
 ) -> Int64 {
-  let encoded_bytes = @budget.utf8_bytes(self.entry.encoded)
-  match @budget.checked_mul(encoded_bytes, 2L) {
-    Ok(copies) =>
-      match @budget.checked_add(copies, self.password.length().to_int64()) {
-        Ok(input) => @budget.checked_add(input, 128L).unwrap_or(-1L)
-        Err(_) => -1L
-      }
-    Err(_) => -1L
-  }
+  self.candidate.request_cost
 }
 
 ///|
 pub fn PasswordAuthentication::workspace_cost(
   self : PasswordAuthentication,
 ) -> Int64 {
-  self.entry.workspace_cost
+  self.candidate.workspace_cost
 }
 
 ///|
-pub fn PasswordAuthentication::complete(
-  self : PasswordAuthentication,
+pub fn AuthenticationCandidate::request_cost(
+  self : AuthenticationCandidate,
+) -> Int64 {
+  self.request_cost
+}
+
+///|
+pub fn AuthenticationCandidate::workspace_cost(
+  self : AuthenticationCandidate,
+) -> Int64 {
+  self.workspace_cost
+}
+
+///|
+pub fn AuthenticationCandidate::complete(
+  self : AuthenticationCandidate,
   matched : Bool,
 ) -> AuthenticationResult {
   if matched && self.known_user {
@@ -295,6 +337,14 @@ pub fn PasswordAuthentication::complete(
   } else {
     BadCredentials
   }
+}
+
+///|
+pub fn PasswordAuthentication::complete(
+  self : PasswordAuthentication,
+  matched : Bool,
+) -> AuthenticationResult {
+  self.candidate.complete(matched)
 }
 
 ///|

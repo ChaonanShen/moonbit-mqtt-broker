@@ -245,15 +245,22 @@ test "password database caches verified workspace cost" {
 test "password preparation resolves trusted identity without hashing" {
   let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
   let database = password_database_fixture("sensor01:" + encoded)
-  let known = database.prepare_password("sensor01", b"not verified").unwrap()
+  let known_request = database
+    .prepare_password("sensor01", b"not verified")
+    .unwrap()
+  let known = known_request.candidate()
   assert_eq(
     known.complete(true),
     AuthenticationResult::Authenticated(Principal::User("sensor01")),
   )
   assert_eq(known.complete(false), AuthenticationResult::BadCredentials)
+  assert_eq(known.request_cost(), known_request.request_cost())
   assert_true(known.request_cost() > 128L)
   assert_eq(known.workspace_cost(), 5505024L)
-  let unknown = database.prepare_password("missing", b"not verified").unwrap()
+  let unknown = database
+    .prepare_password("missing", b"not verified")
+    .unwrap()
+    .candidate()
   assert_eq(unknown.complete(true), AuthenticationResult::BadCredentials)
 }
 

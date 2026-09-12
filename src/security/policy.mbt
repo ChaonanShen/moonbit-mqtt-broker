@@ -63,14 +63,22 @@ pub fn SecurityPolicy::prepare_authentication(
 }
 
 ///|
-pub fn PasswordAuthentication::complete_connect(
-  self : PasswordAuthentication,
+pub fn AuthenticationCandidate::complete_connect(
+  self : AuthenticationCandidate,
   matched : Bool,
 ) -> ConnectAuthentication {
   match self.complete(matched) {
     Authenticated(principal) => Accepted(principal)
     BadCredentials => BadCredentials
   }
+}
+
+///|
+pub fn PasswordAuthentication::complete_connect(
+  self : PasswordAuthentication,
+  matched : Bool,
+) -> ConnectAuthentication {
+  self.candidate().complete_connect(matched)
 }
 
 ///|
