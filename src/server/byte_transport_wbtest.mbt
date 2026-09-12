@@ -246,3 +246,27 @@ async test "handshake decision is buffered once for the reader" {
   assert_false(rejected.wait_handshake())
   rejected.close()
 }
+
+///|
+async test "authentication infrastructure is charged until executor destroy" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
+  let passwords = @security.PasswordDatabase::parse("worker:" + encoded).unwrap()
+  let security = @security.SecurityPolicy::new(passwords~)
+  let baseline = state.managed_bytes()
+  let (executor, infrastructure) = create_auth_executor(
+    config,
+    security,
+    state.resource_ledger(),
+  ).unwrap()
+  assert_true(state.managed_bytes() > baseline)
+  let runtime = BrokerRuntime::new(config, state, security~, async_auth=true)
+  let driver = RouterDriver::new(
+    runtime,
+    auth_executor=executor,
+    auth_infrastructure=infrastructure,
+  )
+  driver.shutdown_authentication()
+  assert_eq(state.managed_bytes(), baseline)
+}
