@@ -14,7 +14,7 @@ trap cleanup EXIT
 
 while IFS= read -r -d '' path; do
   [[ -e "${path}" || -L "${path}" ]] && printf '%s\0' "${path}"
-done < <(git ls-files --cached --others --exclude-standard -z) \
+done < <(git -c safe.directory="${REPO_ROOT}" ls-files --cached --others --exclude-standard -z) \
   | tar --null -T - -cf - \
   | tar -xf - -C "${source_stage}"
 (
