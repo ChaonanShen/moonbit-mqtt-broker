@@ -220,6 +220,43 @@ pub fn BrokerState::from_snapshot(
     if total_pending > config.max_pending_qos1_total() {
       return Err(LimitExceeded("total pending limit exceeded"))
     }
+    let mut saved_inflight_bytes = 0L
+    let mut saved_pending_bytes = 0L
+    let mut saved_subscription_bytes = 0L
+    for item in saved.inflight {
+      let cost = match item.message {
+        None => 64L
+        Some(m) =>
+          @budget.message_cost(m.topic, m.payload.length().to_int64()).unwrap()
+      }
+      saved_inflight_bytes = @budget.checked_add(saved_inflight_bytes, cost).unwrap()
+    }
+    for m in saved.pending {
+      let cost = @budget.message_cost(m.topic, m.payload.length().to_int64()).unwrap()
+      if cost > config.resources.get("max_inflight_bytes_per_session") {
+        return Err(
+          LimitExceeded("pending message cannot fit inflight byte budget"),
+        )
+      }
+      saved_pending_bytes = @budget.checked_add(saved_pending_bytes, cost).unwrap()
+    }
+    for subscription in saved.subscriptions {
+      saved_subscription_bytes = @budget.checked_add(
+        saved_subscription_bytes,
+        @budget.subscription_cost(subscription.filter),
+      ).unwrap()
+    }
+    match
+      state.resources.add_owner(client_id, {
+        inflight: saved_inflight_bytes,
+        pending: saved_pending_bytes,
+        inbound: saved.inbound_qos2.length().to_int64() * 64L,
+        metadata: @budget.identity_cost(saved.client_id, owner.storage_value()),
+        subscriptions: saved_subscription_bytes,
+      }) {
+      Err(_) => return Err(LimitExceeded("snapshot session byte budget"))
+      Ok(_) => ()
+    }
     let restored_inflight : Array[@session.OutboundInflight] = []
     let seen_packet_ids : Map[@session.SessionPacketId, Bool] = Map([])
     for item in saved.inflight {
@@ -346,6 +383,17 @@ pub fn BrokerState::from_snapshot(
     let qos = match qos_from_snapshot(saved.qos) {
       Ok(value) => value
       Err(error) => return Err(error)
+    }
+    let cost = @budget.message_cost(
+      saved.topic,
+      saved.payload.length().to_int64(),
+    ).unwrap()
+    if cost - 96L > config.resources.get("max_retained_message_bytes") {
+      return Err(LimitExceeded("retained message byte budget"))
+    }
+    match state.resources.set_retained(state.resources.retained_bytes + cost) {
+      Err(_) => return Err(LimitExceeded("retained/global byte budget"))
+      Ok(_) => ()
     }
     ignore(
       state.retained.put(

@@ -1,5 +1,6 @@
 ///|
 pub(all) enum SessionError {
+  ByteLimitReached
   EmptyClientId
   EncodedLengthExceeded(Int)
   NullCharacter

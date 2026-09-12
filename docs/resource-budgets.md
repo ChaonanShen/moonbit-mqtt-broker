@@ -1,6 +1,6 @@
 # Resource budget primitives
 
-The `resource_budget` package provides synchronous single-writer accounting and token buckets. This first implementation step does not yet enable byte limits in the server; integration is incremental.
+The `resource_budget` package provides synchronous single-writer accounting and token buckets. Router/session byte admission is integrated, including retained/subscription/session identity, bidirectional QoS state and reconstruction from V1/V2/V3 snapshots. Transport, configuration and rate-policy integration follow in subsequent steps.
 
 ## Ownership and admission
 
@@ -29,3 +29,11 @@ Cost constants define logical quotas, not MoonBit object or allocator sizes. Sim
 Time is a nonnegative monotonic millisecond value supplied by the caller. Regressions mint no tokens, fractional refill is retained, and large elapsed/rate products saturate safely at burst. Idle key reclamation must wait until all associated buckets are full, not just until a TTL expires.
 
 Tests cover exact limits, multidimensional rollback, full-global transfers, control reserve, foreign owners, bounded zero-byte tickets, 10,000 fixed-seed model operations, fractional refill and Int64 boundaries.
+
+## Router admission
+
+Router preparation reserves destination usage and the temporary copies of existing recipient backlogs before constructing replacement sessions. Strict client fanout and retained state roll back together. Inbound QoS 2 metadata is admitted before routing, including self-subscription. PUBREC releases message storage but retains the 64-byte AwaitPubcomp record and packet identifier; PUBCOMP releases the remainder.
+
+ACK completion is independent of pending promotion. A bounded rotating scan revisits other attached sessions after capacity is released. A blocked FIFO head remains queued and does not allow later messages to pass. Restoration recomputes derived bytes rather than trusting snapshot counters, and a snapshot that exceeds configured budgets is rejected without truncating it.
+
+The public standalone router API transfers returned action objects to its caller; their subsequent storage is caller-owned. Server integration must retain its action/encoding leases until dispatch, in addition to the router-owned persistent state.

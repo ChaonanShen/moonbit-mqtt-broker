@@ -177,9 +177,18 @@ pub fn ClientSession::stage(
   if message.qos == QoS0 {
     return Err(SessionInvariantViolation("queued message must use QoS 1 or 2"))
   }
-  if self.attached && self.inflight.length() < limits.max_inflight {
+  let cost = message.cost()
+  if cost > limits.max_inflight_bytes ||
+    cost > limits.max_state_bytes - self.state_bytes() {
+    return Err(ByteLimitReached)
+  }
+  if self.attached &&
+    self.pending.is_empty() &&
+    self.inflight.length() < limits.max_inflight &&
+    cost <= limits.max_inflight_bytes - self.inflight_bytes() {
     self.stage_inflight(message).map(delivery => SendNow(delivery))
-  } else if self.pending.length() < limits.max_pending {
+  } else if self.pending.length() < limits.max_pending &&
+    cost <= limits.max_pending_bytes - self.pending_bytes() {
     self.pending.push(message.copy())
     Ok(Queued)
   } else {
@@ -197,6 +206,9 @@ fn ClientSession::promote_pending(
         self.inflight.length() < limits.max_inflight &&
         self.pending.length() > 0 {
     let message = self.pending[0]
+    if message.cost() > limits.max_inflight_bytes - self.inflight_bytes() {
+      break
+    }
     let remaining : Array[SessionMessage] = []
     for index in 1..<self.pending.length() {
       remaining.push(self.pending[index])
@@ -278,6 +290,11 @@ pub fn ClientSession::check_invariants(
   self : ClientSession,
   limits : SessionLimits,
 ) -> Result[Unit, SessionError] {
+  if self.inflight_bytes() > limits.max_inflight_bytes ||
+    self.pending_bytes() > limits.max_pending_bytes ||
+    self.state_bytes() > limits.max_state_bytes {
+    return Err(ByteLimitReached)
+  }
   if self.inflight.length() > limits.max_inflight {
     return Err(SessionInvariantViolation("inflight limit exceeded"))
   }
@@ -351,6 +368,9 @@ pub fn ClientSession::begin_inbound_qos2(
   }
   if self.inbound_qos2.length() >= limits.max_inbound_qos2 {
     return Err(InboundQoS2LimitReached(limits.max_inbound_qos2))
+  }
+  if @budget.qos2_metadata_cost() > limits.max_state_bytes - self.state_bytes() {
+    return Err(ByteLimitReached)
   }
   self.inbound_qos2.push(id)
   Ok(true)
@@ -426,5 +446,49 @@ pub fn ClientSession::copy(self : ClientSession) -> ClientSession {
     inflight: self.inflight(),
     pending: self.pending(),
     inbound_qos2: self.inbound_qos2.copy(),
+  }
+}
+
+///|
+pub fn ClientSession::inflight_bytes(self : ClientSession) -> Int64 {
+  let mut total = 0L
+  for item in self.inflight {
+    total = @budget.checked_add(total, item.cost()).unwrap()
+  }
+  total
+}
+
+///|
+pub fn ClientSession::pending_bytes(self : ClientSession) -> Int64 {
+  let mut total = 0L
+  for item in self.pending {
+    total = @budget.checked_add(total, item.cost()).unwrap()
+  }
+  total
+}
+
+///|
+pub fn ClientSession::state_bytes(self : ClientSession) -> Int64 {
+  @budget.checked_add(
+    @budget.checked_add(self.inflight_bytes(), self.pending_bytes()).unwrap(),
+    self.inbound_qos2.length().to_int64() * 64L,
+  ).unwrap()
+}
+
+///|
+/// Router schedules promotion after acknowledging, with a separately admitted byte window.
+pub fn ClientSession::promote(
+  self : ClientSession,
+  limits : SessionLimits,
+) -> Result[Array[SessionDelivery], SessionError] {
+  self.promote_pending(limits)
+}
+
+///|
+pub fn ClientSession::pending_head_cost(self : ClientSession) -> Int64? {
+  if self.pending.is_empty() {
+    None
+  } else {
+    Some(self.pending[0].cost())
   }
 }

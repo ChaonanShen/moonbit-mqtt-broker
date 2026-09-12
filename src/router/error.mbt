@@ -1,5 +1,6 @@
 ///|
 pub(all) enum LimitKind {
+  Bytes
   SubscriptionsPerSession
   SubscriptionsTotal
   RetainedMessages
@@ -14,6 +15,7 @@ pub(all) enum LimitKind {
 
 ///|
 pub(all) enum RouterError {
+  ByteResourceLimit(@budget.BudgetError)
   InvalidConfiguration(String)
   InvalidClientId(@session.SessionError)
   InvalidTopic(@topic.TopicError)
