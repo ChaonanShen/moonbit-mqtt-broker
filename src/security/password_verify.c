@@ -1,5 +1,6 @@
 #include <dlfcn.h>
 #include <moonbit.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,23 +12,30 @@ typedef int (*argon2id_verify_fn)(
 );
 
 static argon2id_verify_fn moonbit_mqtt_argon2id_verify = NULL;
-static int moonbit_mqtt_argon2_loaded = 0;
+static void *moonbit_mqtt_argon2_library = NULL;
+static pthread_once_t moonbit_mqtt_argon2_once = PTHREAD_ONCE_INIT;
+
+static void initialize_argon2id_verify(void) {
+  const char *names[] = { "libargon2.so.1", "libargon2.so" };
+  for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); index++) {
+    void *library = dlopen(names[index], RTLD_NOW | RTLD_LOCAL);
+    if (library == NULL) {
+      continue;
+    }
+    argon2id_verify_fn verify =
+      (argon2id_verify_fn)dlsym(library, "argon2id_verify");
+    if (verify != NULL) {
+      moonbit_mqtt_argon2_library = library;
+      moonbit_mqtt_argon2id_verify = verify;
+      return;
+    }
+    dlclose(library);
+  }
+}
 
 static argon2id_verify_fn load_argon2id_verify(void) {
-  if (!moonbit_mqtt_argon2_loaded) {
-    moonbit_mqtt_argon2_loaded = 1;
-    const char *names[] = { "libargon2.so.1", "libargon2.so" };
-    for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); index++) {
-      void *library = dlopen(names[index], RTLD_NOW | RTLD_LOCAL);
-      if (library != NULL) {
-        moonbit_mqtt_argon2id_verify =
-          (argon2id_verify_fn)dlsym(library, "argon2id_verify");
-        if (moonbit_mqtt_argon2id_verify != NULL) {
-          break;
-        }
-        dlclose(library);
-      }
-    }
+  if (pthread_once(&moonbit_mqtt_argon2_once, initialize_argon2id_verify) != 0) {
+    return NULL;
   }
   return moonbit_mqtt_argon2id_verify;
 }
