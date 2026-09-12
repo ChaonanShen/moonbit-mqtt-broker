@@ -991,7 +991,7 @@ pub fn BrokerState::check_invariants(
     }
   }
   if self.resources.owners.length() != self.sessions.length() ||
-    self.resources.retained_bytes != self.retained.total_cost() {
+    self.resources.retained_bytes != self.retained.recomputed_cost() {
     return Err(InvariantViolation("resource owner/retained mismatch"))
   }
   for id, owner in self.resources.owners {
@@ -1260,7 +1260,19 @@ pub fn BrokerState::apply(
   if temporary is Some(ticket) {
     ticket.release().unwrap()
   }
-  match self.settle_resources() {
+  let settlement = if result is Err(_) ||
+    event is RemoveSession(_) ||
+    event is ExpireSessions(_) ||
+    event is Puback(_) ||
+    event is Pubrec(_) ||
+    event is Pubrel(_) ||
+    event is Pubcomp(_) ||
+    event is Unsubscribe(_) {
+    self.settle_resources()
+  } else {
+    Ok(())
+  }
+  match settlement {
     Err(_) =>
       Err(InvariantViolation("resource settlement exceeded prior admission"))
     Ok(_) =>

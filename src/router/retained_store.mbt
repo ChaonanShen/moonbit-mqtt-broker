@@ -1,11 +1,12 @@
 ///|
 pub struct RetainedStore {
+  priv mut bytes : Int64
   priv messages : Map[@topic.TopicName, RetainedMessage]
 }
 
 ///|
 pub fn RetainedStore::new() -> RetainedStore {
-  { messages: Map([]) }
+  { bytes: 0L, messages: Map([]) }
 }
 
 ///|
@@ -25,6 +26,9 @@ pub fn RetainedStore::put(
   if self.messages.get(topic) is None && self.messages.length() >= max_count {
     return false
   }
+  self.bytes = self.bytes -
+    self.cost_at(topic) +
+    @budget.message_cost(topic.value(), payload.length().to_int64()).unwrap()
   self.messages.set(topic, { topic, payload: copy_bytes(payload), qos })
   true
 }
@@ -34,6 +38,7 @@ pub fn RetainedStore::remove(
   self : RetainedStore,
   topic : @topic.TopicName,
 ) -> Unit {
+  self.bytes -= self.cost_at(topic)
   self.messages.remove(topic)
 }
 
@@ -116,6 +121,11 @@ fn RetainedStore::cost_at(
 
 ///|
 fn RetainedStore::total_cost(self : RetainedStore) -> Int64 {
+  self.bytes
+}
+
+///|
+fn RetainedStore::recomputed_cost(self : RetainedStore) -> Int64 {
   let mut total = 0L
   for _, message in self.messages {
     total = @budget.checked_add(

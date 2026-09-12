@@ -1,5 +1,7 @@
 ///|
 pub struct ClientSession {
+  priv mut inflight_cost : Int64
+  priv mut pending_cost : Int64
   client_id : ClientId
   mode : SessionMode
   mut attached : Bool
@@ -19,6 +21,8 @@ pub fn ClientSession::new(
   owner? : @security.Principal = @security.Principal::Anonymous,
 ) -> ClientSession {
   {
+    inflight_cost: 0L,
+    pending_cost: 0L,
     client_id,
     mode,
     attached,
@@ -82,7 +86,17 @@ pub fn ClientSession::restore(
     stored_inflight.push(item.copy())
   }
   let stored_pending = pending.map(message => message.copy())
+  let mut inflight_cost = 0L
+  for item in stored_inflight {
+    inflight_cost = @budget.checked_add(inflight_cost, item.cost()).unwrap()
+  }
+  let mut pending_cost = 0L
+  for item in stored_pending {
+    pending_cost = @budget.checked_add(pending_cost, item.cost()).unwrap()
+  }
   Ok({
+    inflight_cost,
+    pending_cost,
     client_id,
     mode: Persistent,
     attached: false,
@@ -165,6 +179,7 @@ fn ClientSession::stage_inflight(
   }
   let phase = if message.qos == QoS2 { AwaitPubrec } else { AwaitPuback }
   self.inflight.push({ packet_id, message: Some(message.copy()), phase })
+  self.inflight_cost += message.cost()
   Ok({ packet_id, message: Some(message.copy()), dup: false })
 }
 
@@ -190,6 +205,7 @@ pub fn ClientSession::stage(
   } else if self.pending.length() < limits.max_pending &&
     cost <= limits.max_pending_bytes - self.pending_bytes() {
     self.pending.push(message.copy())
+    self.pending_cost += cost
     Ok(Queued)
   } else {
     Err(PendingLimitReached(limits.max_pending))
@@ -216,6 +232,7 @@ fn ClientSession::promote_pending(
     match self.stage_inflight(message) {
       Ok(delivery) => {
         self.pending = remaining
+        self.pending_cost -= message.cost()
         deliveries.push(delivery)
       }
       Err(error) => return Err(error)
@@ -232,6 +249,7 @@ pub fn ClientSession::ack(
   pubcomp? : Bool = false,
 ) -> Result[SessionAck, SessionError] {
   let remaining : Array[OutboundInflight] = []
+  let mut released_cost = 0L
   let mut found = false
   for item in self.inflight {
     if !found && item.packet_id == packet_id {
@@ -240,6 +258,7 @@ pub fn ClientSession::ack(
         return Err(InvalidAcknowledgement)
       }
       found = true
+      released_cost = item.cost()
     } else {
       remaining.push(item)
     }
@@ -248,6 +267,7 @@ pub fn ClientSession::ack(
     return Ok(UnknownPacketId)
   }
   self.inflight = remaining
+  self.inflight_cost -= released_cost
   self.promote_pending(limits).map(promoted => Acknowledged(promoted))
 }
 
@@ -334,6 +354,22 @@ pub fn ClientSession::check_invariants(
       }
     }
   }
+  let mut actual_inflight = 0L
+  for item in self.inflight {
+    actual_inflight += item.cost()
+  }
+  let mut actual_pending = 0L
+  for item in self.pending {
+    actual_pending += item.cost()
+  }
+  if actual_inflight != self.inflight_cost ||
+    actual_pending != self.pending_cost {
+    return Err(
+      SessionInvariantViolation(
+        "cached byte costs disagree with owned messages",
+      ),
+    )
+  }
   Ok(())
 }
 
@@ -405,6 +441,7 @@ pub fn ClientSession::pubrec(
         // Move exactly once: preserve both required replay subsequences.
         self.inflight = self.inflight.filter(value => value.packet_id != id)
         self.inflight.push({ packet_id: id, phase: AwaitPubcomp, message: None })
+        self.inflight_cost -= item.cost() - 64L
         return Ok(true)
       }
     }
@@ -451,20 +488,12 @@ pub fn ClientSession::copy(self : ClientSession) -> ClientSession {
 
 ///|
 pub fn ClientSession::inflight_bytes(self : ClientSession) -> Int64 {
-  let mut total = 0L
-  for item in self.inflight {
-    total = @budget.checked_add(total, item.cost()).unwrap()
-  }
-  total
+  self.inflight_cost
 }
 
 ///|
 pub fn ClientSession::pending_bytes(self : ClientSession) -> Int64 {
-  let mut total = 0L
-  for item in self.pending {
-    total = @budget.checked_add(total, item.cost()).unwrap()
-  }
-  total
+  self.pending_cost
 }
 
 ///|

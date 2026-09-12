@@ -373,6 +373,7 @@ async fn RouterDriver::run_budgeted(
     }
     self.handle(event)
     bus.completed(event)
+    bus.needs_promotion = self.runtime.broker_state().pending_qos1_count() > 0
   }
 }
 

@@ -135,6 +135,19 @@ fn RouterResources::set_usages(
   self : RouterResources,
   updates : Map[@session.ClientId, ResourceUsage],
 ) -> Result[Unit, RouterError] {
+  if updates.is_empty() {
+    return Ok(())
+  }
+  if updates.length() == 1 {
+    for id, usage in updates {
+      let owner = self.owners.get(id).unwrap()
+      match owner.ticket.replace(owner.allocations(usage)) {
+        Err(e) => return Err(ByteResourceLimit(e))
+        Ok(_) => owner.usage = usage
+      }
+    }
+    return Ok(())
+  }
   let requests : Array[(@budget.Ticket, Array[@budget.Allocation])] = []
   for id, usage in updates {
     let owner = self.owners.get(id).unwrap()
@@ -156,6 +169,9 @@ fn RouterResources::set_retained(
   self : RouterResources,
   bytes : Int64,
 ) -> Result[Unit, RouterError] {
+  if bytes == self.retained_bytes {
+    return Ok(())
+  }
   match self.retained_ticket.replace([self.retained_pool.allocation(bytes)]) {
     Err(e) => Err(ByteResourceLimit(e))
     Ok(_) => {
@@ -249,6 +265,9 @@ pub fn BrokerState::pending_bytes(self : BrokerState) -> Int64 {
 /// Bounded fair scan. A persistent cursor advances even when one FIFO head is
 /// blocked; no head is skipped within its own session and no busy retry occurs.
 pub fn BrokerState::resume_pending(self : BrokerState) -> Array[BrokerAction] {
+  if self.pending_qos1_total == 0 {
+    return []
+  }
   let scan_pool = self.resources.ledger
     .pool(ControlWork, self.config.resources.get("control_reserve_bytes"))
     .unwrap()

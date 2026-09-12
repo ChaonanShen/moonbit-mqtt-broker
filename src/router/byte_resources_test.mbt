@@ -252,3 +252,33 @@ test "freeing global inflight bytes wakes another session with no inflight of it
   assert_eq(state.session_pending_count(b), Some(0))
   assert_eq(state.inflight_bytes(), 100L)
 }
+
+///|
+test "Will byte saturation drops only the full target" {
+  let state = bytes_state([("max_pending_bytes_per_session", 100L)], inflight=0)
+  let publisher = bytes_client(state, "publisher")
+  let a = bytes_client(state, "a", attached=false)
+  let z = bytes_client(state, "z", attached=false)
+  ignore(bytes_subscribe(state, a, "t"))
+  ignore(bytes_subscribe(state, z, "t"))
+  ignore(bytes_subscribe(state, z, "z"))
+  ignore(bytes_publish(state, publisher, "z", b"123").unwrap())
+  let actions = state
+    .apply(
+      Publish({
+        origin: Will(publisher),
+        topic: @topic.TopicName::new("t").unwrap(),
+        payload: b"123",
+        qos: QoS2,
+        retain: false,
+      }),
+    )
+    .unwrap()
+  assert_true(
+    actions.any(action => action is DeliveryDroppedResourceLimit(id) && id == z),
+  )
+  assert_eq(state.session_pending_count(a), Some(1))
+  assert_eq(state.session_pending_count(z), Some(1))
+  assert_eq(state.pending_bytes(), 200L)
+  assert_eq(state.check_invariants(), Ok(()))
+}

@@ -174,3 +174,32 @@ test "qos minimum and maximum cover all nine pairs" {
     }
   }
 }
+
+///|
+test "byte-blocked pending head cannot be bypassed by a smaller new message" {
+  let session = ClientSession::new(ClientId::new("bytes-fifo").unwrap())
+  let topic = @topic.TopicName::new("t").unwrap()
+  let limits = SessionLimits::new(2, 4, max_inflight_bytes=197L).unwrap()
+  let first = match
+    session.stage(SessionMessage::new(topic, b"123", false), limits).unwrap() {
+    SendNow(d) => d
+    _ => fail("first must send")
+  }
+  assert_eq(
+    session.stage(SessionMessage::new(topic, b"1234", false), limits),
+    Ok(Queued),
+  )
+  assert_eq(
+    session.stage(SessionMessage::new(topic, b"", false), limits),
+    Ok(Queued),
+  )
+  assert_eq(session.inflight_count(), 1)
+  let next = match session.ack(first.packet_id, limits).unwrap() {
+    Acknowledged(ds) => ds
+    _ => fail("must acknowledge")
+  }
+  assert_eq(next.length(), 1)
+  assert_eq(next[0].message.unwrap().payload, b"1234")
+  assert_eq(session.pending_count(), 1)
+  assert_eq(session.check_invariants(limits), Ok(()))
+}
