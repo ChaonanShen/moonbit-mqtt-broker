@@ -38,11 +38,13 @@ test "system metrics are qos0 read-only and do not feed back into state" {
   let actions = rt.apply(
     EmitSystemMetrics({ now_ms: 3500L, persistence_state: "healthy" }),
   )
-  assert_eq(actions.length(), 30)
+  assert_eq(actions.length(), 37)
   for
     suffix in [
-      "resources/used_bytes", "resources/reserved_bytes", "resources/rejections",
-      "resources/usage", "limits/rejections", "persistence/budget_deferred", "persistence/oldest_dirty_age_ms",
+      "auth/requests", "auth/successes", "auth/bad_credentials", "auth/resource_rejections",
+      "auth/deadline_rejections", "auth/late_results", "auth/pending", "resources/used_bytes",
+      "resources/reserved_bytes", "resources/rejections", "resources/usage", "limits/rejections",
+      "persistence/budget_deferred", "persistence/oldest_dirty_age_ms",
     ] {
     assert_true(
       actions.any(action => {
@@ -70,7 +72,7 @@ test "system metrics are qos0 read-only and do not feed back into state" {
     rt
     .apply(EmitSystemMetrics({ now_ms: 4500L, persistence_state: "degraded" }))
     .length(),
-    30,
+    37,
   )
   assert_eq(metrics.messages_sent(), 0L)
 }
