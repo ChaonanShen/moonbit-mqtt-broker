@@ -47,6 +47,12 @@ handshake_timeout_ms = 10000
 allow_anonymous = false
 password_file = "/run/secrets/passwords"
 acl_file = "/etc/moonbit-mqtt-broker/acl"
+auth_workers = 1
+auth_queue_limit = 16
+auth_timeout_ms = 10000
+auth_poll_interval_ms = 5
+auth_result_batch_limit = 16
+auth_shutdown_grace_ms = 10000
 
 [observability]
 system_metrics_interval_ms = 10000
@@ -85,8 +91,13 @@ SIGTERM/SIGINT 会抑制活动连接的 Will 并写入最新快照。SIGKILL 只
 pending QoS 1/2 共用一套队列，规范键为 max_pending_per_session/total。
 旧 max_pending_qos1_per_session/total 及 CLI flag 保留为别名；同一 TOML 或同次
 CLI 同时使用新旧名称会报冲突，CLI 仍可覆盖 TOML。入站 QoS 2 使用独立上限：
-每会话 0..65535（默认 64），全局非负（默认 4096）。这些是条数上限；统一全局
-字节账本和认证 worker 隔离属于独立后续工作。
+每会话 0..65535（默认 64），全局非负（默认 4096）。这些条数限制与统一全局
+字节账本、有界认证执行器同时生效。
+
+密码校验默认使用 1 个原生 worker 和 16 个等待槽。queued/running 任务直到
+原生完成都持有已验证 PHC 的 workspace 预留；队列或资源满时返回 MQTT 3.1.1
+ServerUnavailable。轮询默认 5 ms、完成批次默认 16；关闭时即使超过 10000 ms
+grace 观测点，也会继续 drain 原生任务，不提前释放其内存。
 
 
 ## 资源预算与限流

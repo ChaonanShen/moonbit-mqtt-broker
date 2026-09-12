@@ -47,6 +47,12 @@ handshake_timeout_ms = 10000
 allow_anonymous = false
 password_file = "/run/secrets/passwords"
 acl_file = "/etc/moonbit-mqtt-broker/acl"
+auth_workers = 1
+auth_queue_limit = 16
+auth_timeout_ms = 10000
+auth_poll_interval_ms = 5
+auth_result_batch_limit = 16
+auth_shutdown_grace_ms = 10000
 
 [observability]
 system_metrics_interval_ms = 10000
@@ -80,8 +86,14 @@ Pending QoS 1/2 share one queue: max_pending_per_session/total are the canonical
 keys. The old max_pending_qos1_per_session/total keys and CLI flags remain aliases.
 Using both names in one TOML file or one CLI invocation is an error; CLI still
 overrides TOML. Inbound QoS 2 has independent per-session (0..65535, default 64)
-and global (nonnegative, default 4096) limits. These are count limits; a unified
-global byte ledger and authentication worker isolation are separate work.
+and global (nonnegative, default 4096) limits. These count limits apply together
+with the global byte ledger and the bounded authentication executor.
+
+Password verification uses one native worker and 16 waiting slots by default.
+Queued and running jobs retain their validated PHC workspace reservation until
+native completion; queue/resource exhaustion returns MQTT 3.1.1 ServerUnavailable.
+The poll interval defaults to 5 ms, completion batches to 16, and shutdown keeps
+draining native work after the 10000 ms grace observation point.
 
 
 ## Byte budgets and rate admission

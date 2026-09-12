@@ -52,7 +52,7 @@ TCP connections acquire global/IP admission before TLS and retain it through tra
 
 `limits.enabled` and `limits.per_ip_enabled` default to true. A false rate switch disables token-bucket policy, not byte accounting; the separate IP switch also disables the per-IP concurrent connection cap. Invalid/unsupported configuration is rejected, CLI overrides TOML, and printed effective configuration round-trips through the parser.
 
-Authentication attempts requiring a verifier consume rate tokens once before memory admission. The current synchronous verifier reserves input and a conservative PHC-derived workspace until return; this is not authentication execution isolation. P0-03 still owns the future bounded executor and its actual completion lifecycle.
+Authentication attempts requiring a verifier consume rate tokens once before memory admission. A fixed native worker pool and W+Q task table isolate Argon2 from the single routing writer. Queued and running tasks hold C-owned input and conservative PHC-derived workspace reservations until actual completion; disconnect and timeout only invalidate activation. Completion polling has a dedicated coalesced control slot, and results are reaped independently of transport registration.
 
 Will storage is charged before copying and retained until orderly release or the completion of its internal publish. New connection activation prepares session state and all fallible allocations before retiring the old transport. Its CONNACK frame and encoding workspace are also reserved first. On takeover, the new connection's CONNACK precedes replay and any old Will delivery to that new connection. Failed preparation leaves the old connection and Will intact.
 

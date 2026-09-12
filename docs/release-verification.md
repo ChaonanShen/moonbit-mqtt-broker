@@ -252,6 +252,8 @@ Protocol, security and large-load functional fixtures explicitly disable rate/IP
 
 `scripts/verify-resource-limits-docker.sh` runs all Native tests plus the resource network matrix. The cumulative `verify-release.sh` calls `verify-resource-limits.sh`, so strict distribution/CI includes the gate. Enabled-policy cases cover retained/fanout rollback, QoS2 duplicates and persistent buckets, real Argon2 attempts, pre-TLS IP admission, single-debit raw ingress, slow consumers, non-mutating low-budget restore and failed final snapshots. Only the dedicated high-volume profile disables rate/IP policy; byte accounting stays enabled.
 
+`scripts/verify-auth-isolation-docker.sh` runs the sanitizer-backed W/Q executor harness and a real Argon2id m=32768 KiB, t=10, p=1 network load. It requires multiple QoS 1 PUBACKs to complete while a password verification is still outstanding, observes bounded ServerUnavailable rejections at W=1/Q=1, then verifies recovery and worker shutdown. The cumulative security gate invokes the same check.
+
 `RESOURCE_RESULTS` records managed-byte assertions, RSS peaks and PING delays. RSS is not the logical byte cap. The FIFO negative test has both a termination and a kill deadline; a timeout is not a passing result.
 
 

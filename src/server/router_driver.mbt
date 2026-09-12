@@ -265,6 +265,8 @@ pub async fn RouterDriver::shutdown_authentication(self : RouterDriver) -> Unit 
   self.dispatch(self.runtime.cancel_authenticating_connections(ServerShutdown))
   self.runtime.broker_state().end_action_scope()
   let mut stop_requested = false
+  let shutdown_started = @async.now()
+  let mut grace_reported = false
   for ;; {
     self.runtime.broker_state().begin_action_scope()
     if !stop_requested {
@@ -288,6 +290,21 @@ pub async fn RouterDriver::shutdown_authentication(self : RouterDriver) -> Unit 
         }
         _ => ()
       }
+    }
+    let now_ms = @async.now()
+    if !grace_reported &&
+      now_ms - shutdown_started >=
+      self.runtime.config.auth_shutdown_grace_ms().to_int64() {
+      grace_reported = true
+      self.runtime.logger.log(
+        @observability.LogRecord::new(
+          now_ms,
+          @observability.Warn,
+          "auth_shutdown_grace_elapsed",
+          reason="native_auth_still_draining",
+          message="authentication workers remain owned and will continue draining",
+        ),
+      )
     }
     @async.sleep(self.runtime.config.auth_poll_interval_ms())
   }
