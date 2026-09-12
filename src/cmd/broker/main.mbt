@@ -36,6 +36,12 @@ fn print_help() -> Unit {
   println("  --connect-timeout-ms N             Default 10000")
   println("  --keep-alive-check-interval-ms N   Default 100")
   println("  --system-metrics-interval-ms N     Default 10000")
+  println("  --auth-workers N                   Default 1")
+  println("  --auth-queue-limit N               Default 16")
+  println("  --auth-timeout-ms N                Default 10000")
+  println("  --auth-poll-interval-ms N           Default 5")
+  println("  --auth-result-batch-limit N         Default 16")
+  println("  --auth-shutdown-grace-ms N          Default 10000")
   println("  --log-format text|json             Default text")
   println("  --log-level error|warn|info|debug  Default info")
   println("  --max-subscriptions-per-session N  Default 128")
@@ -243,6 +249,12 @@ async fn run_main() -> Unit {
   let mut connect_timeout_ms = 10000
   let mut keep_alive_check_interval_ms = 100
   let mut system_metrics_interval_ms = 10000
+  let mut auth_workers = 1
+  let mut auth_queue_limit = 16
+  let mut auth_timeout_ms = 10000
+  let mut auth_poll_interval_ms = 5
+  let mut auth_result_batch_limit = 16
+  let mut auth_shutdown_grace_ms = 10000
   let mut max_subscriptions_per_session = 128
   let mut max_subscriptions_total = 16384
   let mut max_retained_messages = 1024
@@ -332,6 +344,38 @@ async fn run_main() -> Unit {
           args, index, "--system-metrics-interval-ms", 1,
         )
         index = index + 2
+      }
+      "--auth-workers" => {
+        auth_workers = parse_bounded_int(args, index, "--auth-workers", 1)
+        index += 2
+      }
+      "--auth-queue-limit" => {
+        auth_queue_limit = parse_bounded_int(
+          args, index, "--auth-queue-limit", 0,
+        )
+        index += 2
+      }
+      "--auth-timeout-ms" => {
+        auth_timeout_ms = parse_bounded_int(args, index, "--auth-timeout-ms", 1)
+        index += 2
+      }
+      "--auth-poll-interval-ms" => {
+        auth_poll_interval_ms = parse_bounded_int(
+          args, index, "--auth-poll-interval-ms", 1,
+        )
+        index += 2
+      }
+      "--auth-result-batch-limit" => {
+        auth_result_batch_limit = parse_bounded_int(
+          args, index, "--auth-result-batch-limit", 1,
+        )
+        index += 2
+      }
+      "--auth-shutdown-grace-ms" => {
+        auth_shutdown_grace_ms = parse_bounded_int(
+          args, index, "--auth-shutdown-grace-ms", 1,
+        )
+        index += 2
       }
       "--log-format" => {
         if index + 1 >= args.length() {
@@ -605,6 +649,12 @@ async fn run_main() -> Unit {
       keep_alive_check_interval_ms,
       broker_config,
       system_metrics_interval_ms~,
+      auth_workers~,
+      auth_queue_limit~,
+      auth_timeout_ms~,
+      auth_poll_interval_ms~,
+      auth_result_batch_limit~,
+      auth_shutdown_grace_ms~,
     ) {
     Ok(value) => value
     Err(_) => raise CliError("invalid server configuration")
@@ -811,6 +861,12 @@ async fn run_main() -> Unit {
     }
     println("password_file = " + quote(effective_password_file))
     println("acl_file = " + quote(acl_file.unwrap_or("")))
+    println("auth_workers = " + auth_workers.to_string())
+    println("auth_queue_limit = " + auth_queue_limit.to_string())
+    println("auth_timeout_ms = " + auth_timeout_ms.to_string())
+    println("auth_poll_interval_ms = " + auth_poll_interval_ms.to_string())
+    println("auth_result_batch_limit = " + auth_result_batch_limit.to_string())
+    println("auth_shutdown_grace_ms = " + auth_shutdown_grace_ms.to_string())
     println("[observability]")
     println(
       "system_metrics_interval_ms = " + system_metrics_interval_ms.to_string(),

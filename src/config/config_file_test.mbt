@@ -66,3 +66,18 @@ test "qos2 config exposes inbound and shared pending limits with alias conflicts
   }
   assert_true(rejected)
 }
+
+///|
+test "authentication executor TOML maps to CLI bounds" {
+  assert_eq(
+    parse_config_file(
+      "[security]\nauth_workers = 2\nauth_queue_limit = 7\nauth_timeout_ms = 9000\nauth_poll_interval_ms = 4\nauth_result_batch_limit = 6\nauth_shutdown_grace_ms = 8000\n",
+    ),
+    [
+      "--auth-workers", "2", "--auth-queue-limit", "7", "--auth-timeout-ms", "9000",
+      "--auth-poll-interval-ms", "4", "--auth-result-batch-limit", "6", "--auth-shutdown-grace-ms",
+      "8000",
+    ],
+  )
+  assert_true(config_rejected("[security]\nauth_workers = \"two\"\n"))
+}
