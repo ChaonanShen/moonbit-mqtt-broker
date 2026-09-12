@@ -42,6 +42,7 @@ finish() {
 trap finish EXIT
 trap 'printf "DISTRIBUTION_FAILED_AT_LINE=%s\n" "$LINENO" >&2' ERR
 python3 -B tools/runtime_reference_test.py
+scripts/test-dependency-retry.sh
 printf 'source_commit=%s\nstarted_at=%s\nsoak=%s\n' "${SOURCE_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${RELEASE_SOAK:-0}" >"${RESULTS}/evidence.txt"
 readonly RUNTIME_REFERENCE="${DISTRIBUTION_RUNTIME_REFERENCE:-}"
 if [[ -n "${RUNTIME_REFERENCE}" ]]; then

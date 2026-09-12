@@ -7,6 +7,7 @@ cd /workspace
 git init --quiet
 git add --all
 export RELEASE_ARTIFACT_DIR=/results
+scripts/prepare-moon-dependencies.sh /results/dependency-fetch-source
 scripts/verify-release.sh
 tests/integration/shutdown_cycles.sh
 scripts/check-secrets.sh

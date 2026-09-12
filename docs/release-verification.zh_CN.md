@@ -339,3 +339,5 @@ DISTRIBUTION_RUNTIME_REFERENCE=/absolute/repo/test-results/distribution/<success
 源码仍只取当前已提交 HEAD，重新构建/打包/解包测试；四环境工具与库清单、真实收发、缺库失败、最终制品哈希检查全部执行。结果标记 `runtime_image_mode=verified-cache-reference` 并保存参考来源；它不表示重新拉取了最新系统包，也不把此前失败的运行改写成通过。恢复后必须从严格入口完整重跑，不能拼接失败运行与旧结果。
 
 发布主机需要 Python 3（标准库即可）运行缓存参考保护测试和解析器；这不是 Broker 的运行依赖，不要求开发/四环境容器安装 Python。严格入口在启动耗时验证前检查此依赖。资源容器门禁只使用镜像已有的 MoonBit、Node、Argon2 CLI 和 OpenSSL。
+
+干净源码与解包目录在正式门禁前执行正常 registry 的 pinned 依赖准备；明确的下载/网络错误最多尝试 4 次（上限可配置为 1—5），每次日志保存于 `dependency-fetch-source/` 或 `dependency-fetch-package/`。类型/编译错误立即失败。这里不注入主机依赖缓存，成功后全部正式检查仍完整运行；耗尽重试仍是失败。脚本保护测试覆盖瞬时恢复、编译错误不重试及持续错误有界退出。
