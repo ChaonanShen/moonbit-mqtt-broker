@@ -37,6 +37,7 @@ pub(all) enum RuntimeEvent {
   PacketReceived(PacketReceivedEvent)
   TransportClosed(TransportClosedEvent)
   CheckDeadlines(Int64)
+  AuthenticationPollDue(Int64)
   EmitSystemMetrics(EmitSystemMetricsEvent)
   AuthenticationCompleted(AuthenticationCompletedEvent)
   AuthenticationSubmitFailed(Int64)

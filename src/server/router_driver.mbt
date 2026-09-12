@@ -253,6 +253,40 @@ fn RouterDriver::poll_authentication(self : RouterDriver) -> Unit {
 }
 
 ///|
+pub async fn RouterDriver::shutdown_authentication(self : RouterDriver) -> Unit {
+  let executor = match self.auth_executor {
+    Some(value) => value
+    None => return
+  }
+  self.runtime.broker_state().begin_action_scope()
+  self.dispatch(self.runtime.cancel_authenticating_connections(ServerShutdown))
+  self.runtime.broker_state().end_action_scope()
+  let mut stop_requested = false
+  for ;; {
+    self.runtime.broker_state().begin_action_scope()
+    if !stop_requested {
+      match executor.stop() {
+        ControlDone => stop_requested = true
+        ControlRetryLater => ()
+        ControlInvalid | ControlStillRunning => stop_requested = true
+      }
+    }
+    self.poll_authentication()
+    self.runtime.broker_state().end_action_scope()
+    let stopped = executor.is_stopped() == Some(true)
+    if stopped &&
+      self.runtime.auth_task_count() == 0 &&
+      self.auth_reaps.length() == 0 {
+      match executor.destroy() {
+        ControlDone => return
+        _ => ()
+      }
+    }
+    @async.sleep(self.runtime.config.auth_poll_interval_ms())
+  }
+}
+
+///|
 fn RouterDriver::dispatch(
   self : RouterDriver,
   initial : Array[RuntimeAction],
@@ -265,14 +299,32 @@ fn RouterDriver::dispatch(
     match action {
       SendPacket(send) =>
         if self.sinks.get(send.connection_id) is Some(sink) {
-          if self.encode_and_queue(sink, send.packet, None) is Err(reason) {
-            worklist.append(self.transport_failed(send.connection_id, reason))
+          match self.encode_and_queue(sink, send.packet, None) {
+            Err(reason) => {
+              if send.packet is Connack(_) {
+                sink.resolve_handshake(false)
+              }
+              worklist.append(self.transport_failed(send.connection_id, reason))
+            }
+            Ok(_) =>
+              if send.packet is Connack(connack) {
+                sink.resolve_handshake(
+                  connack.return_code == @protocol.ConnectReturnCode::Accepted,
+                )
+              }
           }
         }
       SendPacketThenClose(send) =>
         if self.sinks.get(send.connection_id) is Some(sink) {
-          if self.encode_and_queue(sink, send.packet, Some(send.reason))
-            is Err(reason) {
+          let result = self.encode_and_queue(
+            sink,
+            send.packet,
+            Some(send.reason),
+          )
+          if send.packet is Connack(_) {
+            sink.resolve_handshake(false)
+          }
+          if result is Err(reason) {
             sink.try_close(reason)
             worklist.append(self.transport_failed(send.connection_id, reason))
           }
@@ -280,7 +332,10 @@ fn RouterDriver::dispatch(
       CloseTransport(close) =>
         match self.sinks.get(close.connection_id) {
           None => ()
-          Some(sink) => sink.try_close(close.reason)
+          Some(sink) => {
+            sink.resolve_handshake(false)
+            sink.try_close(close.reason)
+          }
         }
       StartAuthentication(start) => {
         let failed = match

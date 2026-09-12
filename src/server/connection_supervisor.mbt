@@ -31,6 +31,7 @@ async fn read_transport(
   events : @async.Queue[DriverEvent],
   bus? : EventBus,
   budget? : ConnectionBudget,
+  sink? : TransportSink,
 ) -> CloseReason {
   let decoder = @framing.FrameDecoder::new(
     config.max_packet_size(),
@@ -152,6 +153,11 @@ async fn read_transport(
                 _ => return ServerShutdown
               }
           }
+          if packet is Connect(_) &&
+            sink is Some(handshake) &&
+            !handshake.wait_handshake() {
+            return ConnectRejected
+          }
         }
       }
     }
@@ -271,6 +277,7 @@ async fn supervise_transport(
         events,
         bus?,
         budget?,
+        sink~,
       )
       try_report_terminal(terminal, reason)
     }

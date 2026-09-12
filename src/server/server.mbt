@@ -5,14 +5,40 @@ async fn run_ticker(
   persistence : PersistenceRuntime?,
   bus? : EventBus,
 ) -> Unit {
-  let mut next_metrics_at = @async.now() +
+  let keep_alive_interval = config.keep_alive_check_interval_ms()
+  let auth_interval = config.auth_poll_interval_ms()
+  let interval = if keep_alive_interval < auth_interval {
+    keep_alive_interval
+  } else {
+    auth_interval
+  }
+  let started_at = @async.now()
+  let mut next_deadlines_at = started_at + keep_alive_interval.to_int64()
+  let mut next_auth_poll_at = started_at + auth_interval.to_int64()
+  let mut next_metrics_at = started_at +
     config.system_metrics_interval_ms().to_int64()
   for ;; {
-    @async.sleep(config.keep_alive_check_interval_ms())
+    @async.sleep(interval)
     let now_ms = @async.now()
-    match bus {
-      Some(bus) => bus.post_tick(CheckDeadlines(now_ms))
-      None => events.put(Runtime(CheckDeadlines(now_ms))) catch { _ => return }
+    if now_ms >= next_deadlines_at {
+      match bus {
+        Some(bus) => bus.post_tick(CheckDeadlines(now_ms))
+        None =>
+          events.put(Runtime(CheckDeadlines(now_ms))) catch {
+            _ => return
+          }
+      }
+      next_deadlines_at = now_ms + keep_alive_interval.to_int64()
+    }
+    if now_ms >= next_auth_poll_at {
+      match bus {
+        Some(bus) => bus.post_tick(AuthenticationPollDue(now_ms))
+        None =>
+          events.put(Runtime(AuthenticationPollDue(now_ms))) catch {
+            _ => return
+          }
+      }
+      next_auth_poll_at = now_ms + auth_interval.to_int64()
     }
     if now_ms >= next_metrics_at {
       let persistence_state = match persistence {
@@ -46,6 +72,27 @@ async fn wait_for_shutdown(
 }
 
 ///|
+fn create_auth_executor(
+  config : ServerConfig,
+  security : @security.SecurityPolicy,
+) -> @security.AuthExecutor? raise ResourceStartupFailure {
+  if !security.has_passwords() {
+    return None
+  }
+  match
+    @security.AuthExecutor::new(
+      config.auth_workers(),
+      config.auth_queue_limit(),
+    ) {
+    Ok(executor) => Some(executor)
+    Err(_) =>
+      raise ResourceStartupFailure(
+        "password authentication executor failed to initialize",
+      )
+  }
+}
+
+///|
 pub async fn serve(
   listener : @socket.TcpServer,
   config : ServerConfig,
@@ -64,6 +111,7 @@ pub async fn serve(
       raise ResourceStartupFailure("resource budget cannot initialize server")
   }
   defer bus.close()
+  let auth_executor = create_auth_executor(config, security)
   let metrics = BrokerMetrics::new(@async.now())
   let runtime = BrokerRuntime::new(
     config,
@@ -72,10 +120,12 @@ pub async fn serve(
     admission=bus.admission,
     metrics~,
     logger~,
+    async_auth=auth_executor is Some(_),
   )
   let driver = match persistence {
-    Some(value) => RouterDriver::new(runtime, snapshot=value.driver_config())
-    None => RouterDriver::new(runtime)
+    Some(value) =>
+      RouterDriver::new(runtime, snapshot=value.driver_config(), auth_executor?)
+    None => RouterDriver::new(runtime, auth_executor?)
   }
   let allocator = ConnectionIdAllocator::new()
   run_with_snapshot_writer(persistence, driver, () => {
@@ -150,6 +200,7 @@ pub async fn serve(
       }
     }
   })
+  driver.shutdown_authentication()
 }
 
 ///|
@@ -171,6 +222,7 @@ pub async fn serve_once(
       raise ResourceStartupFailure("resource budget cannot initialize server")
   }
   defer bus.close()
+  let auth_executor = create_auth_executor(config, security)
   let metrics = BrokerMetrics::new(@async.now())
   let runtime = BrokerRuntime::new(
     config,
@@ -179,10 +231,12 @@ pub async fn serve_once(
     admission=bus.admission,
     metrics~,
     logger~,
+    async_auth=auth_executor is Some(_),
   )
   let driver = match persistence {
-    Some(value) => RouterDriver::new(runtime, snapshot=value.driver_config())
-    None => RouterDriver::new(runtime)
+    Some(value) =>
+      RouterDriver::new(runtime, snapshot=value.driver_config(), auth_executor?)
+    None => RouterDriver::new(runtime, auth_executor?)
   }
   run_with_snapshot_writer(persistence, driver, () => {
     @async.with_task_group() <| group => {
@@ -244,6 +298,7 @@ pub async fn serve_once(
       )
     }
   })
+  driver.shutdown_authentication()
 }
 
 ///|

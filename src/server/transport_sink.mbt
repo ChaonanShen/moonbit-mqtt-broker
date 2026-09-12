@@ -21,6 +21,8 @@ pub struct TransportSink {
   priv mut handshake : (FrameReservation, @budget.Ticket)?
   priv mut budget : (@budget.Ledger, @budget.Pool, @budget.Pool)?
   priv mut owned : Array[OwnedFrame]
+  priv mut handshake_resolved : Bool
+  priv handshake_gate : @async.Queue[Bool]
   outbound : @async.Queue[OutboundCommand]
   close_signal : @async.Queue[CloseReason]
 }
@@ -31,6 +33,8 @@ pub fn TransportSink::new(max_outbound : Int) -> TransportSink {
     handshake: None,
     budget: None,
     owned: [],
+    handshake_resolved: false,
+    handshake_gate: @async.Queue(kind=Blocking(1)),
     outbound: @async.Queue(kind=Blocking(max_outbound)),
     close_signal: @async.Queue(kind=Blocking(1)),
   }
@@ -41,6 +45,27 @@ pub fn TransportSink::outbound(
   self : TransportSink,
 ) -> @async.Queue[OutboundCommand] {
   self.outbound
+}
+
+///|
+pub async fn TransportSink::wait_handshake(self : TransportSink) -> Bool {
+  self.handshake_gate.get() catch {
+    _ => false
+  }
+}
+
+///|
+fn TransportSink::resolve_handshake(
+  self : TransportSink,
+  accepted : Bool,
+) -> Unit {
+  if self.handshake_resolved {
+    return
+  }
+  self.handshake_resolved = true
+  ignore(self.handshake_gate.try_put(accepted)) catch {
+    _ => ()
+  }
 }
 
 ///|
@@ -61,6 +86,10 @@ pub fn TransportSink::close(self : TransportSink) -> Unit {
     frame.ticket.release().unwrap()
   }
   self.owned = []
+  if !self.handshake_resolved {
+    self.resolve_handshake(false)
+  }
+  self.handshake_gate.close(clear=true)
   self.outbound.close(clear=true)
   self.close_signal.close(clear=true)
 }
