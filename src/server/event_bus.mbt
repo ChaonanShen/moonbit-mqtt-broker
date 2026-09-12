@@ -33,6 +33,7 @@ priv struct EventBus {
   slots : Map[ConnectionId, ControlSlot]
   infrastructure : @budget.Ticket
   mut tick : RuntimeEvent?
+  mut auth_poll : RuntimeEvent?
   mut metrics : RuntimeEvent?
   mut deferred_data : DriverEvent?
   mut control_batch : Int
@@ -71,6 +72,7 @@ fn EventBus::new(
     wake: @async.Queue(kind=Blocking(1)),
     slots: Map([]),
     infrastructure,
+    auth_poll: None,
     tick: None,
     metrics: None,
     deferred_data: None,
@@ -255,6 +257,7 @@ fn EventBus::terminal(self : EventBus, event : TransportClosedEvent) -> Unit {
 fn EventBus::post_tick(self : EventBus, event : RuntimeEvent) -> Unit {
   match event {
     CheckDeadlines(_) => self.tick = Some(event)
+    AuthenticationPollDue(_) => self.auth_poll = Some(event)
     _ => self.metrics = Some(event)
   }
   self.signal()
@@ -265,6 +268,10 @@ fn EventBus::take_control(self : EventBus) -> DriverEvent? {
   if self.tick is Some(tick) {
     self.tick = None
     return Some(Runtime(tick))
+  }
+  if self.auth_poll is Some(auth_poll) {
+    self.auth_poll = None
+    return Some(Runtime(auth_poll))
   }
   for id, slot in self.slots {
     if !slot.registered {

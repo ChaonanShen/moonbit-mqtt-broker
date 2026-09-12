@@ -1242,6 +1242,24 @@ fn BrokerRuntime::emit_system_metrics(
 }
 
 ///|
+fn BrokerRuntime::cancel_authenticating_connections(
+  self : BrokerRuntime,
+  reason : CloseReason,
+) -> Array[RuntimeAction] {
+  let ids : Array[ConnectionId] = []
+  for connection_id, meta in self.connections {
+    if meta.phase is Authenticating(_) {
+      ids.push(connection_id)
+    }
+  }
+  let actions : Array[RuntimeAction] = []
+  for connection_id in ids {
+    actions.append(self.terminate(connection_id, reason))
+  }
+  actions
+}
+
+///|
 pub fn BrokerRuntime::auth_task_count(self : BrokerRuntime) -> Int {
   self.auth_tasks.length()
 }
@@ -1365,6 +1383,7 @@ pub fn BrokerRuntime::apply(
         observed_at_ms=closed.observed_at_ms,
       )
     CheckDeadlines(now_ms) => self.check_deadlines(now_ms)
+    AuthenticationPollDue(_) => []
     EmitSystemMetrics(event) => self.emit_system_metrics(event)
   }
 }

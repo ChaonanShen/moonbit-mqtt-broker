@@ -97,6 +97,7 @@ start_broker() {
 start_broker
 readonly URL="mqtts://localhost:${port}"
 node tests/integration/security.mjs exercise "${URL}" "${WORK_DIR}/server.crt"
+node tests/integration/auth_pipeline.mjs "${port}" "${WORK_DIR}/server.crt" alice alice-secret
 
 mosquitto_output="${WORK_DIR}/mosquitto.out"
 mosquitto_sub -h localhost -p "${port}" --cafile "${WORK_DIR}/server.crt" \

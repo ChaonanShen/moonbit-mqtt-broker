@@ -69,7 +69,9 @@ async test "control terminal waits for admitted packets but tick bypasses full d
   )
   bus.terminal({ connection_id: id, reason: PeerEof, observed_at_ms: 1L })
   bus.post_tick(CheckDeadlines(1L))
+  bus.post_tick(AuthenticationPollDue(2L))
   assert_true(bus.next() is Some(Runtime(CheckDeadlines(1L))))
+  assert_true(bus.next() is Some(Runtime(AuthenticationPollDue(2L))))
   assert_true(bus.next() is Some(RegisterTransport(_)))
   let event = bus.next().unwrap()
   assert_true(event is Accounted(PacketReceived(_), _))
@@ -229,4 +231,18 @@ test "decode preflight bounds cover packet metadata and UTF8 without payload cop
     assert_true(decode_cost_bound(encoded) >= packet_cost(packet))
     assert_true(wire_cost_bound(packet) >= encoded.length().to_int64())
   }
+}
+
+///|
+async test "handshake decision is buffered once for the reader" {
+  let accepted = TransportSink::new(1)
+  accepted.resolve_handshake(true)
+  accepted.resolve_handshake(false)
+  assert_true(accepted.wait_handshake())
+  accepted.close()
+
+  let rejected = TransportSink::new(1)
+  rejected.resolve_handshake(false)
+  assert_false(rejected.wait_handshake())
+  rejected.close()
 }
