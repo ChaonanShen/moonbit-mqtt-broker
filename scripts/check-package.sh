@@ -19,8 +19,7 @@ done < <(git -c safe.directory="${REPO_ROOT}" ls-files --cached --others --exclu
   | tar -xf - -C "${source_stage}"
 (
   cd "${source_stage}"
-  moon update
-  moon check --target native
+  scripts/prepare-moon-dependencies.sh "${source_stage}/.local/dependency-fetch-source"
   moon package --frozen --list >/dev/null 2>&1
   moon package --frozen >/dev/null 2>&1
 )
