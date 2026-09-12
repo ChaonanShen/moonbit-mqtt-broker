@@ -83,4 +83,4 @@ Disk V1 会话迁移为 `legacy-anonymous`，且只能由匿名连接恢复；�
 
 ## 认证资源准入
 
-完整且需要密码校验的请求先消费一次全局/IP 认证 token，再预留输入和已验证 PHC 对应的保守工作费用。密码错误、未知用户名和后续资源不足不会退还已消费的 token。匿名路径不占 hash 任务额度，但仍受连接/传输限制。当前校验仍同步执行，P0-03 的 worker 隔离、取消运行中原生任务和策略 generation 生命周期尚未实现。详见[资源契约](resource-budgets.md)。
+完整且需要密码校验的请求先消费一次全局/IP 认证 token，再预留输入和已验证 PHC 对应的保守工作费用。密码错误、未知用户名和后续资源不足不会退还已消费的 token。匿名路径不占 hash 任务额度，但仍受连接/传输限制。有界原生 pthread 执行器在 worker 运行时持有密码与 PHC 的 C 副本；路由主循环只保留无秘密身份元数据并消费固定大小结果。断开和超时只会取消激活资格，不会提前释放仍运行的任务。CONNECT 流水线通过一次性 reader gate 等到 CONNACK 入队后再恢复。支持的 PHC 上限为内存 65536 KiB、迭代 10、并行度 4。使用 `scripts/verify-auth-isolation-docker.sh` 验证隔离和饱和行为。详见[资源契约](resource-budgets.md)。

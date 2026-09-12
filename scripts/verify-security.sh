@@ -6,4 +6,5 @@ cd "${REPO_ROOT}"
 
 scripts/verify-tls.sh
 tests/integration/security.sh
+scripts/verify-auth-isolation.sh
 echo 'SECURITY verification passed'

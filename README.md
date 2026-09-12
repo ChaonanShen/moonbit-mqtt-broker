@@ -55,8 +55,8 @@ contract and limitations.
 
 The broker enforces [logical byte budgets and admission policies](docs/resource-budgets.md).
 Global and per-IP limits apply before TLS; already accepted QoS 2 handshakes do not
-consume new-publication tokens. Logical bytes are not an RSS cap. Slow authentication
-still uses the synchronous verifier; executor isolation is separate work.
+consume new-publication tokens. Logical bytes are not an RSS cap. Password
+verification runs on a bounded native worker executor so routing stays responsive.
 
 Start with explicit resource bounds:
 

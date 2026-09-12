@@ -322,6 +322,8 @@ Protocol, security and large-load functional fixtures explicitly disable rate/IP
 
 独立入口 `scripts/verify-resource-limits-docker.sh` 包含 Native 全量测试和资源网络矩阵。累计 `verify-release.sh` 已调用 `verify-resource-limits.sh`，严格 distribution/CI 因而覆盖该门禁。矩阵保持限流开启，覆盖原子 retained/fanout、QoS2 重复与持久桶、真实 Argon2 尝试、TLS 前 IP 门禁、raw 字节单次计费、慢消费者、低预算恢复不改文件及最后快照失败退出。负载用例只对其专用高流量 profile 显式关闭 rate/IP 策略，字节预算持续有效。
 
+`scripts/verify-auth-isolation-docker.sh` 会运行带 sanitizer 的 W/Q 执行器 harness，并以真实 Argon2id m=32768 KiB、t=10、p=1 进行网络负载。在一次密码校验仍未完成的窗口内，测试要求稳定连接完成多次 QoS 1 PUBACK；W=1/Q=1 饱和后必须出现有界的 ServerUnavailable 拒绝，随后还要验证恢复和 worker 关闭。累计 security 门禁调用同一检查。
+
 日志输出 `RESOURCE_RESULTS` 保存逻辑占用断言、RSS 峰值和 PING 延迟；RSS 不与逻辑预算直接等同。快照 FIFO 负向测试同时设置终止和强制结束超时，超时退出不是通过。
 
 
