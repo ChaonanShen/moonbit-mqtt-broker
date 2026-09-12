@@ -199,7 +199,7 @@ async fn SnapshotWriter::wait_retry_latest(self : SnapshotWriter) -> Unit {
       remaining.to_int()
     }
     let next = @async.with_timeout_opt(timeout, () => self.sink.queue.get()) catch {
-      _ => None
+      error => if self.sink.closed { None } else { raise error }
     }
     match next {
       Some(value) => self.install_latest(value)

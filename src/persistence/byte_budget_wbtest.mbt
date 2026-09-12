@@ -105,3 +105,48 @@ async test "closed failing writer terminates degraded and releases active snapsh
     store.close()
   })
 }
+
+///|
+async test "cancellation during failed snapshot retry releases active and queued leases" {
+  with_store_dir("budget-cancel-retry", path => {
+    let store = SnapshotStore::open(store_config(path)).unwrap()
+    store.fault = Some(TempOpen)
+    let ledger = @budget.Ledger::new(1000L, 0L).unwrap()
+    let pool = ledger.pool(Snapshot, 1000L).unwrap()
+    let first = pool.reserve(400L).unwrap()
+    first.commit().unwrap()
+    let sink = SnapshotSink::new()
+    assert_true(
+      sink.submit_accounted({ revision: 1L, snapshot: empty_snapshot() }, first),
+    )
+    let writer = SnapshotWriter::new(store, sink, 1000L).unwrap()
+    @async.with_task_group() <| group => {
+      let task = group.spawn(allow_failure=true, () => writer.run())
+      for _ in 0..<1000 {
+        if writer.is_degraded() {
+          break
+        }
+        @async.sleep(1)
+      }
+      assert_true(writer.is_degraded())
+      let second = pool.reserve(200L).unwrap()
+      second.commit().unwrap()
+      assert_true(
+        sink.submit_accounted(
+          { revision: 2L, snapshot: empty_snapshot() },
+          second,
+        ),
+      )
+      task.cancel()
+      let finished = @async.with_timeout_opt(1000, () => {
+        task.wait() catch {
+          _ => ()
+        }
+        true
+      })
+      assert_eq(finished, Some(true))
+      assert_eq(ledger.occupied(), 0L)
+    }
+    store.close()
+  })
+}
