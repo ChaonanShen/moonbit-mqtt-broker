@@ -74,6 +74,7 @@ pub struct Ticket {
   ledger : Ledger
   priv mut charges : Array[Charge]
   priv mut state : TicketState
+  priv mut busy : Bool
 }
 
 ///|
@@ -283,12 +284,12 @@ pub fn Ledger::reserve(
     charge.account.reserved += charge.bytes
   }
   self.live_tickets += 1
-  Ok({ ledger: self, charges, state: Reserved })
+  Ok({ ledger: self, charges, state: Reserved, busy: false })
 }
 
 ///|
 pub fn Ticket::commit(self : Ticket) -> Result[Unit, BudgetError] {
-  if self.state != Reserved {
+  if self.state != Reserved || self.busy {
     return Err(InvalidTicketState)
   }
   for charge in self.charges {
@@ -305,7 +306,7 @@ pub fn Ticket::replace(
   self : Ticket,
   allocations : Array[Allocation],
 ) -> Result[Unit, BudgetError] {
-  if self.state == Released {
+  if self.state == Released || self.busy {
     return Err(InvalidTicketState)
   }
   let charges = match self.ledger.aggregate(allocations) {
@@ -337,7 +338,7 @@ pub fn Ticket::replace(
 ///|
 /// Rollback and committed release share a single terminal operation; double release is an error.
 pub fn Ticket::release(self : Ticket) -> Result[Unit, BudgetError] {
-  if self.state == Released {
+  if self.state == Released || self.busy {
     return Err(InvalidTicketState)
   }
   for charge in self.charges {
@@ -386,4 +387,9 @@ pub fn Pool::occupied(self : Pool) -> Int64 {
 ///|
 pub fn Pool::limit(self : Pool) -> Int64 {
   self.accounts[2].limit
+}
+
+///|
+pub fn Ledger::ordinary_available(self : Ledger) -> Int64 {
+  self.ordinary.limit - self.ordinary.occupied()
 }
