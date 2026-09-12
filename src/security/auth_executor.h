@@ -63,6 +63,12 @@ int moonbit_mqtt_auth_executor_poll(
   int *result,
   int64_t *verify_ns
 );
+int moonbit_mqtt_auth_executor_completion(
+  moonbit_mqtt_auth_executor *executor,
+  int64_t task_id,
+  int *result,
+  int64_t *verify_ns
+);
 int moonbit_mqtt_auth_executor_reap(
   moonbit_mqtt_auth_executor *executor,
   int64_t task_id
