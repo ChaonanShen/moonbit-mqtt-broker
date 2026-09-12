@@ -8,6 +8,12 @@ pub struct ServerConfig {
   connect_timeout_ms : Int
   keep_alive_check_interval_ms : Int
   system_metrics_interval_ms : Int
+  auth_workers : Int
+  auth_queue_limit : Int
+  auth_timeout_ms : Int
+  auth_poll_interval_ms : Int
+  auth_result_batch_limit : Int
+  auth_shutdown_grace_ms : Int
   broker_config : @router.BrokerConfig
 } derive(Eq, Debug)
 
@@ -22,6 +28,12 @@ pub fn ServerConfig::new(
   keep_alive_check_interval_ms : Int,
   broker_config : @router.BrokerConfig,
   system_metrics_interval_ms? : Int = 10000,
+  auth_workers? : Int = 1,
+  auth_queue_limit? : Int = 16,
+  auth_timeout_ms? : Int = 10000,
+  auth_poll_interval_ms? : Int = 1,
+  auth_result_batch_limit? : Int = 16,
+  auth_shutdown_grace_ms? : Int = 10000,
 ) -> Result[ServerConfig, ServerError] {
   if max_connections < 1 {
     return Err(InvalidConfiguration("max_connections must be at least 1"))
@@ -58,6 +70,35 @@ pub fn ServerConfig::new(
       InvalidConfiguration("system_metrics_interval_ms must be at least 1"),
     )
   }
+  if auth_workers < 1 || auth_workers > 64 {
+    return Err(InvalidConfiguration("auth_workers must be in 1..64"))
+  }
+  if auth_queue_limit < 0 || auth_queue_limit > 4096 - auth_workers {
+    return Err(
+      InvalidConfiguration("auth_queue_limit exceeds executor capacity"),
+    )
+  }
+  if auth_timeout_ms < 1 {
+    return Err(InvalidConfiguration("auth_timeout_ms must be at least 1"))
+  }
+  if auth_poll_interval_ms < 1 || auth_poll_interval_ms > connect_timeout_ms {
+    return Err(
+      InvalidConfiguration(
+        "auth_poll_interval_ms must be in 1..connect_timeout_ms",
+      ),
+    )
+  }
+  if auth_result_batch_limit < 1 ||
+    auth_result_batch_limit > auth_workers + auth_queue_limit {
+    return Err(
+      InvalidConfiguration("auth_result_batch_limit exceeds executor capacity"),
+    )
+  }
+  if auth_shutdown_grace_ms < 1 {
+    return Err(
+      InvalidConfiguration("auth_shutdown_grace_ms must be at least 1"),
+    )
+  }
   let resources = broker_config.resources()
   let fixed_control = max_connections.to_int64() * 512L + 256L
   let fixed_data = max_runtime_events.to_int64() * 64L + 17408L
@@ -84,6 +125,12 @@ pub fn ServerConfig::new(
     connect_timeout_ms,
     keep_alive_check_interval_ms,
     system_metrics_interval_ms,
+    auth_workers,
+    auth_queue_limit,
+    auth_timeout_ms,
+    auth_poll_interval_ms,
+    auth_result_batch_limit,
+    auth_shutdown_grace_ms,
     broker_config,
   })
 }
@@ -91,7 +138,17 @@ pub fn ServerConfig::new(
 ///|
 pub fn ServerConfig::default() -> ServerConfig {
   let broker_config = @router.BrokerConfig::new(128, 16384, 1024).unwrap()
-  ServerConfig::new(128, 1048576, 1048576, 64, 512, 10000, 100, broker_config).unwrap()
+  ServerConfig::new(
+    128,
+    1048576,
+    1048576,
+    64,
+    512,
+    10000,
+    100,
+    broker_config,
+    auth_poll_interval_ms=5,
+  ).unwrap()
 }
 
 ///|
@@ -132,6 +189,36 @@ pub fn ServerConfig::keep_alive_check_interval_ms(self : ServerConfig) -> Int {
 ///|
 pub fn ServerConfig::system_metrics_interval_ms(self : ServerConfig) -> Int {
   self.system_metrics_interval_ms
+}
+
+///|
+pub fn ServerConfig::auth_workers(self : ServerConfig) -> Int {
+  self.auth_workers
+}
+
+///|
+pub fn ServerConfig::auth_queue_limit(self : ServerConfig) -> Int {
+  self.auth_queue_limit
+}
+
+///|
+pub fn ServerConfig::auth_timeout_ms(self : ServerConfig) -> Int {
+  self.auth_timeout_ms
+}
+
+///|
+pub fn ServerConfig::auth_poll_interval_ms(self : ServerConfig) -> Int {
+  self.auth_poll_interval_ms
+}
+
+///|
+pub fn ServerConfig::auth_result_batch_limit(self : ServerConfig) -> Int {
+  self.auth_result_batch_limit
+}
+
+///|
+pub fn ServerConfig::auth_shutdown_grace_ms(self : ServerConfig) -> Int {
+  self.auth_shutdown_grace_ms
 }
 
 ///|
