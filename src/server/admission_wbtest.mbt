@@ -152,3 +152,35 @@ test "ingress bills actual bytes once and publish buckets survive persistent rec
   admission.close()
   assert_eq(state.managed_bytes(), 0L)
 }
+
+///|
+test "IP cleanup needs no new budget reservation and keeps its rotation bounded" {
+  let now = Ref(0L)
+  let (admission, state) = admission_fixture(
+    [("rate_limits_enabled", 0L), ("idle_ttl_ms", 1L)],
+    () => now.val,
+  )
+  for i in 0..<80 {
+    let id = ConnectionId::new(i.to_int64() + 1L)
+    assert_true(admission.accept(id, "ip-" + i.to_string()))
+    admission.release(id)
+  }
+  assert_eq(admission.ips.length(), 80)
+  assert_eq(admission.ip_order.length(), 80)
+  let ledger = state.resource_ledger()
+  let control = ledger
+    .pool(ControlWork, 2097152L)
+    .unwrap()
+    .reserve(2097152L)
+    .unwrap()
+  now.val = 2L
+  admission.cleanup_ips(now.val)
+  assert_eq(admission.ips.length(), 48)
+  admission.cleanup_ips(now.val)
+  admission.cleanup_ips(now.val)
+  assert_eq(admission.ips.length(), 0)
+  assert_eq(admission.ip_order.length(), 0)
+  control.release().unwrap()
+  admission.close()
+  assert_eq(state.managed_bytes(), 0L)
+}
