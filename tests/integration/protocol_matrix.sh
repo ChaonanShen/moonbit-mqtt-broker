@@ -18,7 +18,7 @@ trap cleanup EXIT
 
 port="$(node -e 'const n=require("net");const s=n.createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')"
 setsid stdbuf -oL moon run --target native src/cmd/broker -- \
-  --listen "127.0.0.1:${port}" --keep-alive-check-interval-ms 20 \
+  --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" --keep-alive-check-interval-ms 20 \
   --max-connections 64 --max-sessions 32 --max-inflight-total 128 \
   --max-pending-qos1-total 128 >"${BROKER_LOG}" 2>&1 &
 BROKER_PID="$!"

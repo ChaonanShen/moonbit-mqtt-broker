@@ -61,6 +61,10 @@ async fn read_transport(
       None => return PeerEof
       Some(value) => value
     }
+    if bus is Some(bus) &&
+      !bus.admission.admit_ingress(connection_id, bytes.length().to_int64()) {
+      return RateLimited
+    }
     if resize_optional(read_ticket, receive, bytes.length().to_int64())
       is Err(e) {
       return e
@@ -124,6 +128,11 @@ async fn read_transport(
           if resize_optional(packet_ticket, event_pool, packet_cost(packet))
             is Err(e) {
             return e
+          }
+          if bus is Some(bus) &&
+            control_packet(packet) &&
+            !bus.admission.admit_control(connection_id) {
+            return RateLimited
           }
           let event = PacketReceivedEvent::{
             connection_id,

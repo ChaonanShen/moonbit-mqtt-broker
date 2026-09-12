@@ -244,3 +244,5 @@ verification of a committed candidate HEAD in four runtime environments.
 The worktree Docker wrapper trusts only /workspace through process-local Git
 configuration. This accommodates the host UID/container root mismatch without
 changing the host Git configuration or trusting arbitrary directories.
+
+Protocol, security and large-load functional fixtures explicitly disable rate/IP policy where their workload would exceed the new defaults. Byte accounting remains enabled. Dedicated resource tests cover enabled policy; disabling limits in a functional fixture is not evidence that rate admission passed.

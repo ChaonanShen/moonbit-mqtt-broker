@@ -72,6 +72,10 @@ fn map_section(
   for key, entry in table {
     let full_key = section_name + "." + key
     match full_key {
+      "limits.enabled" =>
+        add_boolean(args, "--rate-limits-enabled", entry, full_key)
+      "limits.per_ip_enabled" =>
+        add_boolean(args, "--per-ip-limits-enabled", entry, full_key)
       "server.listen" => add_string(args, "--listen", entry, full_key)
       "server.max_connections" =>
         add_integer(args, "--max-connections", entry, full_key)
@@ -139,7 +143,27 @@ fn map_section(
         add_string(args, "--log-format", entry, full_key)
       "observability.log_level" =>
         add_string(args, "--log-level", entry, full_key)
-      _ => raise ConfigFileError("unknown configuration key: " + full_key)
+      _ => {
+        let specs = @budget.byte_limit_specs()
+        specs.append(@budget.rate_limit_specs())
+        let mut found = false
+        for spec in specs {
+          let (section, name, _) = spec
+          if section == section_name && name == key {
+            add_integer(
+              args,
+              "--" + key.replace_all(old="_", new="-"),
+              entry,
+              full_key,
+            )
+            found = true
+            break
+          }
+        }
+        if !found {
+          raise ConfigFileError("unknown configuration key: " + full_key)
+        }
+      }
     }
   }
 }
@@ -162,7 +186,8 @@ pub fn parse_config_file(
   }
   let args : Array[String] = []
   let sections = [
-    "server", "broker", "persistence", "tls", "security", "observability",
+    "server", "broker", "persistence", "tls", "security", "observability", "resources",
+    "limits",
   ]
   for section in sections {
     match root.get(section) {

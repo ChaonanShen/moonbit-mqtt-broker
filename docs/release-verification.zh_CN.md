@@ -314,3 +314,5 @@ QoS 2 日常入口：scripts/verify-qos2-docker.sh。累计 verify-release.sh（
 
 工作树 Docker 包装器通过进程级 Git 配置仅信任 /workspace，兼容宿主机 UID 与
 容器 root 的差异；不修改宿主机 Git 配置，也不放宽任意目录信任。
+
+Protocol, security and large-load functional fixtures explicitly disable rate/IP policy where their workload would exceed the new defaults. Byte accounting remains enabled. Dedicated resource tests cover enabled policy; disabling limits in a functional fixture is not evidence that rate admission passed.

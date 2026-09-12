@@ -11,7 +11,7 @@ fn print_help() -> Unit {
   println("moonbit-mqtt-broker " + RELEASE_VERSION)
   println("Usage: broker [OPTIONS]")
   println("")
-  println("MQTT 3.1.1 QoS 0/1 Broker for Linux x86_64 Native.")
+  println("MQTT 3.1.1 QoS 0/1/2 Broker for Linux x86_64 Native.")
   println("The supported environment is the pinned Ubuntu 24.04 Docker image.")
   println("")
   println("Options:")
@@ -63,6 +63,23 @@ fn print_help() -> Unit {
   println("  --acl-file PATH                    Static allow-only topic ACL")
   println("  --persistent-session-expiry VALUE  never or duration: ms/s/m/h/d")
   println("  --max-session-expirations-per-tick N  Default 128")
+  let resource_specs = @budget.byte_limit_specs()
+  resource_specs.append(@budget.rate_limit_specs())
+  for spec in resource_specs {
+    let (_, key, value) = spec
+    println(
+      "  --" +
+      key.replace_all(old="_", new="-") +
+      " N  Default " +
+      value.to_string(),
+    )
+  }
+  println(
+    "  --rate-limits-enabled true|false   Default true; zero rates do not refill",
+  )
+  println(
+    "  --per-ip-limits-enabled true|false Default true; NAT clients share an IP",
+  )
 }
 
 ///|
@@ -213,6 +230,10 @@ async fn run_main() -> Unit {
   let args : Array[String] = [raw_args[0]]
   args.append(file_args)
   args.append(cli_args)
+  let explicit_resources : Map[String, Bool] = Map([])
+  let mut resources = @budget.Limits::default()
+  let resource_specs = @budget.byte_limit_specs()
+  resource_specs.append(@budget.rate_limit_specs())
   let mut listen = "127.0.0.1:1883"
   let mut max_connections = 128
   let mut max_packet_size = 1048576
@@ -493,8 +514,56 @@ async fn run_main() -> Unit {
         once = true
         index = index + 1
       }
-      value => raise CliError("unknown argument: " + value)
+      value => {
+        if value == "--rate-limits-enabled" ||
+          value == "--per-ip-limits-enabled" {
+          if index + 1 >= args.length() {
+            raise CliError(value + " requires true or false")
+          }
+          let enabled = match args[index + 1] {
+            "true" => 1L
+            "false" => 0L
+            _ => raise CliError(value + " requires true or false")
+          }
+          resources = resources
+            .with_value(
+              if value == "--rate-limits-enabled" {
+                "rate_limits_enabled"
+              } else {
+                "per_ip_limits_enabled"
+              },
+              enabled,
+            )
+            .unwrap()
+        } else {
+          let mut found = false
+          for spec in resource_specs {
+            let (_, key, _) = spec
+            if value == "--" + key.replace_all(old="_", new="-") {
+              let parsed = parse_bounded_int64(args, index, value, 0L)
+              resources = resources.with_value(key, parsed).unwrap()
+              explicit_resources.set(key, true)
+              found = true
+              break
+            }
+          }
+          if !found {
+            raise CliError("unknown argument: " + value)
+          }
+        }
+        index += 2
+      }
     }
+  }
+  if !explicit_resources.contains("max_retained_message_bytes") {
+    resources = resources
+      .with_value("max_retained_message_bytes", max_packet_size.to_int64())
+      .unwrap()
+  }
+  if !explicit_resources.contains("max_will_bytes_per_connection") {
+    resources = resources
+      .with_value("max_will_bytes_per_connection", max_packet_size.to_int64())
+      .unwrap()
   }
   let broker_config = match
     @router.BrokerConfig::new(
@@ -502,6 +571,7 @@ async fn run_main() -> Unit {
       max_subscriptions_total,
       max_retained_messages,
       max_sessions~,
+      resources~,
       max_inflight_per_session~,
       max_inflight_total~,
       max_pending_qos1_per_session~,
@@ -682,6 +752,7 @@ async fn run_main() -> Unit {
       "keep_alive_check_interval_ms = " +
       keep_alive_check_interval_ms.to_string(),
     )
+    print_resource_section_values(resources, "server")
     println("[broker]")
     println(
       "max_subscriptions_per_session = " +
@@ -717,6 +788,7 @@ async fn run_main() -> Unit {
       "max_session_expirations_per_tick = " +
       max_session_expirations_per_tick.to_string(),
     )
+    print_resource_section_values(resources, "broker")
     println("[persistence]")
     println("data_dir = " + quote(data_dir.unwrap_or("")))
     println("max_snapshot_bytes = " + max_snapshot_bytes.to_string())
@@ -755,6 +827,12 @@ async fn run_main() -> Unit {
     }
     println("log_format = " + quote(effective_log_format))
     println("log_level = " + quote(effective_log_level))
+    println("[resources]")
+    print_resource_section_values(resources, "resources")
+    println("[limits]")
+    println("enabled = " + resources.rates_enabled().to_string())
+    println("per_ip_enabled = " + resources.per_ip_enabled().to_string())
+    print_resource_section_values(resources, "limits")
     return
   }
   if check_config {
@@ -853,5 +931,20 @@ async fn main {
       raise error
     }
     error => raise error
+  }
+}
+
+///|
+fn print_resource_section_values(
+  limits : @budget.Limits,
+  section : String,
+) -> Unit {
+  let specs = @budget.byte_limit_specs()
+  specs.append(@budget.rate_limit_specs())
+  for spec in specs {
+    let (owner, key, _) = spec
+    if owner == section {
+      println(key + " = " + limits.get(key).to_string())
+    }
   }
 }

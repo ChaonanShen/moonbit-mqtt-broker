@@ -26,6 +26,7 @@ pub(all) enum CloseReason {
   SlowConsumer
   EncodeFailure
   ResourceExhausted
+  RateLimited
   ServerShutdown
 } derive(Eq, Debug)
 

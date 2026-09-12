@@ -69,6 +69,7 @@ pub async fn serve(
     config,
     initial_state,
     security~,
+    admission=bus.admission,
     metrics~,
     logger~,
   )
@@ -108,6 +109,11 @@ pub async fn serve(
           match allocator.allocate() {
             Err(_) => connection.close()
             Ok(connection_id) => {
+              if !bus.admission.accept(connection_id, canonical_ip(peer)) {
+                connection.close()
+                return
+              }
+              defer bus.admission.release(connection_id)
               let transport = match tls {
                 None => ConnectionTransport::plain(connection)
                 Some(tls_config) =>
@@ -170,6 +176,7 @@ pub async fn serve_once(
     config,
     initial_state,
     security~,
+    admission=bus.admission,
     metrics~,
     logger~,
   )
@@ -202,6 +209,11 @@ pub async fn serve_once(
         group.return_immediately(())
       }
       let (connection, peer) = listener.accept()
+      if !bus.admission.accept(ConnectionId::new(1L), canonical_ip(peer)) {
+        connection.close()
+        return
+      }
+      defer bus.admission.release(ConnectionId::new(1L))
       let transport = match tls {
         None => ConnectionTransport::plain(connection)
         Some(tls_config) =>

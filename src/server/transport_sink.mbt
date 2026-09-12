@@ -18,6 +18,7 @@ priv struct OwnedFrame {
 
 ///|
 pub struct TransportSink {
+  priv mut handshake : (FrameReservation, @budget.Ticket)?
   priv mut budget : (@budget.Ledger, @budget.Pool, @budget.Pool)?
   priv mut owned : Array[OwnedFrame]
   outbound : @async.Queue[OutboundCommand]
@@ -27,6 +28,7 @@ pub struct TransportSink {
 ///|
 pub fn TransportSink::new(max_outbound : Int) -> TransportSink {
   {
+    handshake: None,
     budget: None,
     owned: [],
     outbound: @async.Queue(kind=Blocking(max_outbound)),
@@ -50,6 +52,11 @@ pub fn TransportSink::close_signal(
 
 ///|
 pub fn TransportSink::close(self : TransportSink) -> Unit {
+  if self.handshake is Some((frame, scratch)) {
+    frame.ticket.release().unwrap()
+    scratch.release().unwrap()
+    self.handshake = None
+  }
   for frame in self.owned {
     frame.ticket.release().unwrap()
   }
@@ -135,4 +142,34 @@ fn TransportSink::take_frame_ticket(
     }
   }
   None
+}
+
+///|
+/// Reserve both the first response and encoding scratch before session takeover.
+fn TransportSink::prepare_handshake(
+  self : TransportSink,
+  control_limit : Int64,
+) -> Bool {
+  if self.handshake is Some(_) {
+    return false
+  }
+  match self.budget {
+    None => true
+    Some((ledger, _, control)) => {
+      let scratch_pool = ledger.pool(ControlWork, control_limit).unwrap()
+      let frame = match control.reserve(4L) {
+        Ok(t) => t
+        Err(_) => return false
+      }
+      let scratch = match scratch_pool.reserve(8L) {
+        Ok(t) => t
+        Err(_) => {
+          frame.release().unwrap()
+          return false
+        }
+      }
+      self.handshake = Some(({ ticket: frame, pool: control }, scratch))
+      true
+    }
+  }
 }

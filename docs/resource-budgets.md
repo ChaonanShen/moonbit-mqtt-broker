@@ -1,6 +1,6 @@
 # Resource budget primitives
 
-The `resource_budget` package provides synchronous single-writer accounting and token buckets. Router/session byte admission is integrated, including retained/subscription/session identity, bidirectional QoS state and reconstruction from V1/V2/V3 snapshots. Transport, configuration and rate-policy integration follow in subsequent steps.
+The `resource_budget` package provides synchronous single-writer accounting and token buckets. Router/session byte admission is integrated, including retained/subscription/session identity, bidirectional QoS state and reconstruction from V1/V2/V3 snapshots. Transport, CLI/TOML, native monotonic time and connection/traffic admission are integrated. Snapshot workspace lifetime integration is the next step.
 
 ## Ownership and admission
 
@@ -45,3 +45,13 @@ The server shares its router ledger with readers, runtime packets and sinks. Rea
 Registration, terminal notification and unregister have bounded per-connection control slots; ticks coalesce. A terminal waits for that connection's admitted packets, while registrations cannot be bypassed when scheduling alternates between control and data. Protocol packets remain in FIFO order. Control packet work/frames use a protected partition while sharing the same per-connection and aggregate event/frame caps.
 
 A dequeued outbound frame keeps its ticket through the actual write. Queue close releases queued frames, not the frame a writer still holds. Encoding reserves before creating the frame. Server dispatch retains routing/action leases until it finishes mapping and sending actions, including any generated Will chain. Writer completion and periodic control ticks revisit pending sessions in bounded batches.
+
+## Connection activation and rate policy
+
+TCP connections acquire global/IP admission before TLS and retain it through transport shutdown. Peer keys omit ports and normalize IPv4-mapped IPv6. IP records are bounded, and idle eviction requires no live/reference owners and fully refilled buckets. Publish buckets follow persistent sessions across reconnects. Raw ingress is billed once per actual read, while already accepted QoS 2 exchanges bypass new-business debits. QoS 1 DUP does not bypass admission.
+
+`limits.enabled` and `limits.per_ip_enabled` default to true. A false rate switch disables token-bucket policy, not byte accounting; the separate IP switch also disables the per-IP concurrent connection cap. Invalid/unsupported configuration is rejected, CLI overrides TOML, and printed effective configuration round-trips through the parser.
+
+Authentication attempts requiring a verifier consume rate tokens once before memory admission. The current synchronous verifier reserves input and a conservative PHC-derived workspace until return; this is not authentication execution isolation. P0-03 still owns the future bounded executor and its actual completion lifecycle.
+
+Will storage is charged before copying and retained until orderly release or the completion of its internal publish. New connection activation prepares session state and all fallible allocations before retiring the old transport. Its CONNACK frame and encoding workspace are also reserved first. On takeover, the new connection's CONNACK precedes replay and any old Will delivery to that new connection. Failed preparation leaves the old connection and Will intact.

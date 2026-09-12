@@ -41,7 +41,7 @@ moon_port="$(free_port)"
 moon_log="$(mktemp)"
 moon_result="$(mktemp)"
 FILES+=("${moon_log}" "${moon_result}")
-setsid stdbuf -oL moon run --target native src/cmd/broker -- --listen "127.0.0.1:${moon_port}" >"${moon_log}" 2>&1 &
+setsid stdbuf -oL moon run --target native src/cmd/broker -- --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${moon_port}" >"${moon_log}" 2>&1 &
 moon_pid="$!"
 PIDS+=("${moon_pid}")
 wait_ready "${moon_pid}" "${moon_log}" 'MQTT broker listening'

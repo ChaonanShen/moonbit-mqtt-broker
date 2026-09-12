@@ -206,6 +206,22 @@ fn RouterDriver::handle_runtime_event(
   event : RuntimeEvent,
 ) -> Unit {
   if event is PacketReceived(packet) {
+    if packet.packet is Connect(_) &&
+      self.runtime.connections.get(packet.connection_id)
+      is Some({ phase: AwaitConnect, .. }) {
+      if self.sinks.get(packet.connection_id) is Some(sink) &&
+        !sink.prepare_handshake(
+          self.runtime.config
+          .broker_config()
+          .resources()
+          .get("control_reserve_bytes"),
+        ) {
+        self.dispatch(
+          self.transport_failed(packet.connection_id, ResourceExhausted),
+        )
+        return
+      }
+    }
     if self.runtime
       .broker_state()
       .admit_action_input(
@@ -221,6 +237,8 @@ fn RouterDriver::handle_runtime_event(
   }
   self.dispatch(self.runtime.apply(event))
   if event is CheckDeadlines(_) {
+    self.runtime.admission.cleanup_ips((self.runtime.admission.clock)())
+    self.runtime.admission.prune_publishers(self.runtime.broker_state())
     self.dispatch(
       self.runtime.map_broker_actions(
         self.runtime.broker_state().resume_pending(),
@@ -237,39 +255,52 @@ fn RouterDriver::encode_and_queue(
   close : CloseReason?,
 ) -> Result[Unit, CloseReason] {
   let bound = wire_cost_bound(packet)
-  let ticket = match sink.reserve_frame(bound, control_packet(packet)) {
-    Ok(t) => t
-    Err(_) => return Err(SlowConsumer)
+  let prepared = if packet is Connack(_) {
+    let value = sink.handshake
+    sink.handshake = None
+    value
+  } else {
+    None
   }
-  let temporary = match sink.budget {
-    None => None
-    Some((ledger, _, _)) => {
-      let pool = ledger
-        .pool(
-          if control_packet(packet) {
-            ControlWork
-          } else {
-            Routing
-          },
-          self.runtime.config
-          .broker_config()
-          .resources()
-          .get(
-            if control_packet(packet) {
-              "control_reserve_bytes"
-            } else {
-              "max_routing_scratch_bytes"
-            },
-          ),
-        )
-        .unwrap()
-      match pool.reserve(bound * 2L) {
-        Ok(t) => Some(t)
-        Err(_) => {
-          release_frame_reservation(ticket)
-          return Err(SlowConsumer)
+  let (ticket, temporary) = match prepared {
+    Some((frame, scratch)) => (Some(frame), Some(scratch))
+    None => {
+      let ticket = match sink.reserve_frame(bound, control_packet(packet)) {
+        Ok(t) => t
+        Err(_) => return Err(SlowConsumer)
+      }
+      let temporary = match sink.budget {
+        None => None
+        Some((ledger, _, _)) => {
+          let pool = ledger
+            .pool(
+              if control_packet(packet) {
+                ControlWork
+              } else {
+                Routing
+              },
+              self.runtime.config
+              .broker_config()
+              .resources()
+              .get(
+                if control_packet(packet) {
+                  "control_reserve_bytes"
+                } else {
+                  "max_routing_scratch_bytes"
+                },
+              ),
+            )
+            .unwrap()
+          match pool.reserve(bound * 2L) {
+            Ok(t) => Some(t)
+            Err(_) => {
+              release_frame_reservation(ticket)
+              return Err(SlowConsumer)
+            }
+          }
         }
       }
+      (ticket, temporary)
     }
   }
   defer release_optional(temporary)

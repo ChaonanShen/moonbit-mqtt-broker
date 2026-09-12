@@ -72,7 +72,7 @@ data_dir="${WORK_DIR}/data"
 start_broker() {
   : >"${broker_log}"
   setsid stdbuf -oL "${BROKER_EXECUTABLE}" \
-    --listen "127.0.0.1:${port}" \
+    --rate-limits-enabled false --per-ip-limits-enabled false --listen "127.0.0.1:${port}" \
     --data-dir "${data_dir}" \
     --snapshot-debounce-ms 60000 \
     --snapshot-max-delay-ms 60000 \

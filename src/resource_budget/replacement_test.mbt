@@ -75,3 +75,26 @@ test "limits are immutable and unknown negative or invalid partitions are reject
     is Err(_),
   )
 }
+
+///|
+test "default registry includes every byte and rate key before validation" {
+  let limits = Limits::default()
+  assert_eq(limits.validate(), Ok(()))
+  for spec in byte_limit_specs() {
+    let (_, key, value) = spec
+    assert_eq(limits.get(key), value)
+  }
+  for spec in rate_limit_specs() {
+    let (_, key, value) = spec
+    assert_eq(limits.get(key), value)
+  }
+  assert_true(limits.rates_enabled())
+  assert_true(limits.per_ip_enabled())
+}
+
+///|
+test "native budget clock is nonnegative and monotonic" {
+  let before = monotonic_ms()
+  let after = monotonic_ms()
+  assert_true(before >= 0L && after >= before)
+}

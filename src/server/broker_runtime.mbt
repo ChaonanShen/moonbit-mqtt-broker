@@ -1,5 +1,7 @@
 ///|
 pub struct BrokerRuntime {
+  priv will_tickets : Map[ConnectionId, @budget.Ticket]
+  priv admission : AdmissionState
   config : ServerConfig
   broker_state : @router.BrokerState
   connections : Map[ConnectionId, ConnectionMeta]
@@ -16,9 +18,14 @@ pub fn BrokerRuntime::new(
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
   metrics? : BrokerMetrics = BrokerMetrics::new(0L),
   logger? : @observability.Logger = @observability.Logger::silent(),
+  admission? : AdmissionState,
 ) -> BrokerRuntime {
   {
     config,
+    will_tickets: Map([]),
+    admission: admission.unwrap_or_else(() => {
+      AdmissionState::new(config, initial_state.resource_ledger())
+    }),
     broker_state: initial_state,
     connections: Map([]),
     active_by_client: Map([]),
@@ -99,6 +106,7 @@ fn close_reason_name(reason : CloseReason) -> String {
     ClientTakeover => "client_takeover"
     SlowConsumer => "slow_consumer"
     EncodeFailure => "encode_failure"
+    RateLimited => "rate_limited"
     ResourceExhausted => "resource_exhausted"
     ServerShutdown => "server_shutdown"
   }
@@ -131,6 +139,9 @@ fn BrokerRuntime::reject_connect(
       reason=connect_return_code_name(code),
     ),
   )
+  let will_ticket = self.will_tickets.get(connection_id)
+  self.will_tickets.remove(connection_id)
+  defer release_optional(will_ticket)
   self.connections.remove(connection_id)
   [
     SendPacketThenClose({
@@ -263,11 +274,16 @@ fn BrokerRuntime::terminate(
   connection_id : ConnectionId,
   reason : CloseReason,
   observed_at_ms? : Int64 = -1L,
+  preserve_session? : Bool = false,
+  suppress_will? : Bool = false,
 ) -> Array[RuntimeAction] {
   let meta = match self.connections.get(connection_id) {
     None => return []
     Some(meta) => meta
   }
+  let will_ticket = self.will_tickets.get(connection_id)
+  self.will_tickets.remove(connection_id)
+  defer release_optional(will_ticket)
   self.connections.remove(connection_id)
   let log_client_id = match meta.phase {
     Active(value) => value.value()
@@ -299,59 +315,41 @@ fn BrokerRuntime::terminate(
     Active(client_id) => {
       if self.active_by_client.get(client_id) == Some(connection_id) {
         self.active_by_client.remove(client_id)
-        match self.broker_state.session_mode(client_id) {
-          Some(Persistent) =>
-            ignore(
-              self.broker_state.apply(
-                @router.BrokerEvent::DetachSessionAt({
-                  client_id,
-                  detached_at_ms: if observed_at_ms >= 0L {
-                    observed_at_ms
-                  } else {
-                    meta.last_control_at_ms
-                  },
-                }),
-              ),
-            )
-          Some(Clean) =>
-            ignore(
-              self.broker_state.apply(
-                @router.BrokerEvent::RemoveSession(client_id),
-              ),
-            )
-          None => ()
-        }
-      }
-      let publish_will = reason != NormalDisconnect &&
-        reason != ConnectRejected &&
-        reason != ServerShutdown
-      if publish_will {
-        match meta.will {
-          None => ()
-          Some(will) => {
-            let input : @router.PublishInput = {
-              origin: Will(client_id),
-              topic: will.topic,
-              payload: copy_runtime_bytes(will.payload),
-              qos: will.qos,
-              retain: will.retain,
-            }
-            match self.publish(input) {
-              Ok(will_actions) => actions.append(will_actions)
-              Err(@router.RouterError::RetainedLimitReached(_)) => {
-                let degraded = { ..input, retain: false }
-                match self.publish(degraded) {
-                  Ok(will_actions) => actions.append(will_actions)
-                  Err(_) => ()
-                }
-              }
-              Err(_) => ()
-            }
+        if !preserve_session {
+          match self.broker_state.session_mode(client_id) {
+            Some(Persistent) =>
+              ignore(
+                self.broker_state.apply(
+                  @router.BrokerEvent::DetachSessionAt({
+                    client_id,
+                    detached_at_ms: if observed_at_ms >= 0L {
+                      observed_at_ms
+                    } else {
+                      meta.last_control_at_ms
+                    },
+                  }),
+                ),
+              )
+            Some(Clean) =>
+              ignore(
+                self.broker_state.apply(
+                  @router.BrokerEvent::RemoveSession(client_id),
+                ),
+              )
+            None => ()
           }
         }
       }
+      let publish_will = !suppress_will &&
+        reason != NormalDisconnect &&
+        reason != ConnectRejected &&
+        reason != ServerShutdown
+      if publish_will && meta.will is Some(will) {
+        actions.append(self.publish_stored_will(client_id, will))
+      }
     }
   }
+  self.admission.prune_publishers(self.broker_state)
   actions.push(CloseTransport({ connection_id, reason }))
   actions
 }
@@ -367,10 +365,19 @@ fn BrokerRuntime::handle_connect(
     Some(meta) => meta.accepted_at_ms
     None => received_at_ms
   }
-  let principal = match
-    self.security.authenticate(packet.username, packet.password) {
-    Accepted(value) => value
-    BadCredentials => {
+  if !packet.clean_session && packet.client_id == "" {
+    return self.reject_connect(connection_id, IdentifierRejected)
+  }
+  if packet.username is Some(_) &&
+    packet.password is Some(_) &&
+    self.security.has_passwords() &&
+    !self.admission.admit_auth(connection_id) {
+    return self.reject_connect(connection_id, ServerUnavailable)
+  }
+  let principal = match self.authenticate_bounded(packet, connection_id) {
+    Err(_) => return self.reject_connect(connection_id, ServerUnavailable)
+    Ok(Accepted(value)) => value
+    Ok(BadCredentials) => {
       self.metrics.record_authentication_failure()
       self.logger.log(
         @observability.LogRecord::new(
@@ -383,7 +390,7 @@ fn BrokerRuntime::handle_connect(
       )
       return self.reject_connect(connection_id, BadUsernameOrPassword)
     }
-    NotAuthorized => {
+    Ok(NotAuthorized) => {
       self.metrics.record_authentication_failure()
       self.logger.log(
         @observability.LogRecord::new(
@@ -431,6 +438,9 @@ fn BrokerRuntime::handle_connect(
     }
     None => ()
   }
+  let mut will_ticket : @budget.Ticket? = None
+  let mut will_installed = false
+  defer (if !will_installed { release_optional(will_ticket) })
   let stored_will = match packet.will {
     None => None
     Some(will) => {
@@ -453,6 +463,28 @@ fn BrokerRuntime::handle_connect(
         )
         return self.reject_connect(connection_id, NotAuthorized)
       }
+      let limits = self.config.broker_config().resources()
+      let ledger = self.broker_state.resource_ledger()
+      let pool = ledger
+        .pool(Will, limits.get("max_will_bytes_total"))
+        .unwrap()
+        .with_account(
+          ledger
+          .account(Connection, limits.get("max_will_bytes_per_connection"))
+          .unwrap(),
+        )
+        .unwrap()
+      let cost = @budget.message_cost(
+        will.topic,
+        will.payload.length().to_int64(),
+      ).unwrap()
+      will_ticket = match pool.reserve(cost) {
+        Ok(t) => {
+          t.commit().unwrap()
+          Some(t)
+        }
+        Err(_) => return self.reject_connect(connection_id, ServerUnavailable)
+      }
       Some({
         topic,
         payload: copy_runtime_bytes(will.payload),
@@ -461,92 +493,46 @@ fn BrokerRuntime::handle_connect(
       })
     }
   }
-  let actions : Array[RuntimeAction] = []
-  match self.active_by_client.get(client_id) {
-    Some(old_connection_id) if old_connection_id != connection_id =>
-      actions.append(self.terminate(old_connection_id, ClientTakeover))
-    _ => ()
-  }
-  let mut session_present = false
-  let session_actions : Array[@router.BrokerAction] = []
-  if packet.clean_session {
-    if self.broker_state.has_session(client_id) {
-      ignore(
-        self.broker_state.apply(@router.BrokerEvent::RemoveSession(client_id)),
-      )
-    }
-    match
-      self.broker_state.apply(
-        @router.BrokerEvent::CreateOwnedSessionWith({
-          client_id,
-          mode: @session.SessionMode::Clean,
-          attached: true,
-          owner: principal,
-        }),
-      ) {
-      Err(_) => {
-        actions.append(self.reject_connect(connection_id, ServerUnavailable))
-        return actions
-      }
-      Ok(value) => session_actions.append(value)
-    }
+  let mode = if packet.clean_session {
+    @session.SessionMode::Clean
   } else {
-    match self.broker_state.session_mode(client_id) {
-      Some(Persistent) => {
-        session_present = true
-        match
-          self.broker_state.apply(@router.BrokerEvent::AttachSession(client_id)) {
-          Err(_) => {
-            actions.append(
-              self.reject_connect(connection_id, ServerUnavailable),
-            )
-            return actions
-          }
-          Ok(value) => session_actions.append(value)
-        }
-      }
-      Some(Clean) => {
-        ignore(
-          self.broker_state.apply(@router.BrokerEvent::RemoveSession(client_id)),
-        )
-        match
-          self.broker_state.apply(
-            @router.BrokerEvent::CreateOwnedSessionWith({
-              client_id,
-              mode: @session.SessionMode::Persistent,
-              attached: true,
-              owner: principal,
-            }),
-          ) {
-          Err(_) => {
-            actions.append(
-              self.reject_connect(connection_id, ServerUnavailable),
-            )
-            return actions
-          }
-          Ok(value) => session_actions.append(value)
-        }
-      }
-      None =>
-        match
-          self.broker_state.apply(
-            @router.BrokerEvent::CreateOwnedSessionWith({
-              client_id,
-              mode: @session.SessionMode::Persistent,
-              attached: true,
-              owner: principal,
-            }),
-          ) {
-          Err(_) => {
-            actions.append(
-              self.reject_connect(connection_id, ServerUnavailable),
-            )
-            return actions
-          }
-          Ok(value) => session_actions.append(value)
-        }
-    }
+    @session.SessionMode::Persistent
   }
+  let activation = match
+    self.broker_state.prepare_activation(client_id, mode, principal) {
+    Err(_) => return self.reject_connect(connection_id, ServerUnavailable)
+    Ok(activation) => activation
+  }
+  let session_present = activation.session_present()
+  let actions : Array[RuntimeAction] = []
+  let mut old_will : StoredWill? = None
+  let mut old_will_ticket : @budget.Ticket? = None
+  defer release_optional(old_will_ticket)
+  if self.active_by_client.get(client_id) is Some(old_id) &&
+    old_id != connection_id {
+    old_will = match self.connections.get(old_id) {
+      Some(meta) => meta.will
+      None => None
+    }
+    old_will_ticket = self.will_tickets.get(old_id)
+    self.will_tickets.remove(old_id)
+    actions.append(
+      self.terminate(
+        old_id,
+        ClientTakeover,
+        preserve_session=true,
+        suppress_will=true,
+      ),
+    )
+  }
+  let session_actions = self.broker_state.commit_activation(activation).unwrap()
+  if !session_present {
+    self.admission.reset_publisher(client_id)
+  }
+  if will_ticket is Some(ticket) {
+    self.will_tickets.set(connection_id, ticket)
+  }
+  will_installed = true
   self.active_by_client.set(client_id, connection_id)
   self.connections.set(connection_id, {
     id: connection_id,
@@ -575,6 +561,10 @@ fn BrokerRuntime::handle_connect(
     }),
   )
   actions.append(self.map_broker_actions(session_actions))
+  if old_will is Some(will) {
+    actions.append(self.publish_stored_will(client_id, will))
+  }
+  actions.append(self.map_broker_actions(self.broker_state.resume_pending()))
   actions
 }
 
@@ -764,6 +754,15 @@ fn BrokerRuntime::handle_active_packet(
           self.metrics.record_acl_denial()
           self.metrics.record_dropped()
         }
+        if !duplicate &&
+          allowed &&
+          !self.admission.admit_publish(
+            client_id,
+            @budget.utf8_bytes(publish_packet.topic) +
+            publish_packet.payload.length().to_int64(),
+          ) {
+          return self.terminate(connection_id, RateLimited)
+        }
         let input = if duplicate || !allowed {
           None
         } else {
@@ -824,6 +823,13 @@ fn BrokerRuntime::handle_active_packet(
             [SendPacket({ connection_id, packet: Puback(packet_id) })]
           None => []
         }
+      }
+      if !self.admission.admit_publish(
+          client_id,
+          @budget.utf8_bytes(publish_packet.topic) +
+          publish_packet.payload.length().to_int64(),
+        ) {
+        return self.terminate(connection_id, RateLimited)
       }
       let result = self.publish({
         origin: Client(client_id),
@@ -1142,4 +1148,66 @@ pub fn BrokerRuntime::check_invariants(
     }
   }
   Ok(())
+}
+
+///|
+fn BrokerRuntime::authenticate_bounded(
+  self : BrokerRuntime,
+  packet : @protocol.ConnectPacket,
+  _id : ConnectionId,
+) -> Result[@security.ConnectAuthentication, @budget.BudgetError] {
+  let ticket = match
+    self.security.authentication_cost(packet.username, packet.password) {
+    None => None
+    Some((request, workspace)) => {
+      if workspace < 0L {
+        return Err(@budget.BudgetError::InvalidAmount)
+      }
+      let ledger = self.broker_state.resource_ledger()
+      let limits = self.config.broker_config().resources()
+      let input = ledger
+        .pool(AuthRequest, limits.get("max_auth_request_bytes_total"))
+        .unwrap()
+      let work = ledger
+        .pool(AuthWorkspace, limits.get("max_auth_workspace_bytes_total"))
+        .unwrap()
+      match
+        ledger.reserve([input.allocation(request), work.allocation(workspace)]) {
+        Err(e) => return Err(e)
+        Ok(t) => Some(t)
+      }
+    }
+  }
+  defer release_optional(ticket)
+  Ok(self.security.authenticate(packet.username, packet.password))
+}
+
+///|
+fn BrokerRuntime::publish_stored_will(
+  self : BrokerRuntime,
+  client_id : @session.ClientId,
+  will : StoredWill,
+) -> Array[RuntimeAction] {
+  let input : @router.PublishInput = {
+    origin: Will(client_id),
+    topic: will.topic,
+    payload: will.payload,
+    qos: will.qos,
+    retain: will.retain,
+  }
+  match self.publish(input) {
+    Ok(actions) => actions
+    Err(@router.RetainedLimitReached(_)) | Err(@router.ByteResourceLimit(_)) if will.retain =>
+      match self.publish({ ..input, retain: false }) {
+        Ok(actions) => actions
+        Err(_) => {
+          self.metrics.record_dropped()
+          []
+        }
+      }
+    Err(_) => {
+      self.metrics.record_dropped()
+      []
+    }
+  }
 }
