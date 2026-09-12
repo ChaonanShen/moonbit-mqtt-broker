@@ -62,24 +62,26 @@ test "native authentication executor returns bounded hash outcomes" {
   let database = executor_test_database()
 
   let correct = database.prepare_password("sensor01", b"correct horse").unwrap()
+  let correct_candidate = correct.candidate()
   assert_eq(submit_until_decided(executor, 1L, correct), Submitted)
   let matched = wait_for_completion(executor)
   assert_eq(matched.task_id, 1L)
   assert_eq(matched.outcome, AuthCompletionOutcome::HashMatched)
   assert_true(matched.verify_ns > 0L)
   assert_eq(
-    correct.complete_connect(true),
+    correct_candidate.complete_connect(true),
     ConnectAuthentication::Accepted(Principal::User("sensor01")),
   )
   assert_eq(reap_until_decided(executor, 1L), ControlDone)
 
   let unknown = database.prepare_password("unknown", b"correct horse").unwrap()
+  let unknown_candidate = unknown.candidate()
   assert_eq(submit_until_decided(executor, 2L, unknown), Submitted)
   let fallback_match = wait_for_completion(executor)
   assert_eq(fallback_match.task_id, 2L)
   assert_eq(fallback_match.outcome, AuthCompletionOutcome::HashMatched)
   assert_eq(
-    unknown.complete_connect(true),
+    unknown_candidate.complete_connect(true),
     ConnectAuthentication::BadCredentials,
   )
   assert_eq(reap_until_decided(executor, 2L), ControlDone)
