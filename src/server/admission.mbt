@@ -32,6 +32,7 @@ pub struct AdmissionState {
   priv ledger : @budget.Ledger
   priv clock : () -> Int64
   priv ips : Map[String, IpAdmission]
+  priv ip_order : @deque.Deque[String]
   priv transports : Map[ConnectionId, AcceptedTransport]
   priv publishers : Map[@session.ClientId, PublishAdmission]
   priv connect : @budget.Bucket
@@ -41,7 +42,6 @@ pub struct AdmissionState {
   priv publish_bytes : @budget.Bucket
   priv rejections : Map[String, Int64]
   priv mut live : Int
-  priv mut cleanup_cursor : Int
 }
 
 ///|
@@ -76,11 +76,11 @@ fn AdmissionState::new(
     ledger,
     clock,
     ips: Map([]),
+    ip_order: @deque.Deque([]),
     transports: Map([]),
     publishers: Map([]),
     rejections: Map([]),
     live: 0,
-    cleanup_cursor: 0,
     connect: rate_bucket(
       limits, "connect_rate_total", "connect_burst_total", now,
     ),
@@ -185,6 +185,7 @@ fn AdmissionState::accept(
         last_ms: now,
       }
       self.ips.set(ip, entry)
+      self.ip_order.push_back(ip)
       entry
     }
   }
@@ -400,35 +401,33 @@ fn AdmissionState::prune_publishers(
 
 ///|
 fn AdmissionState::cleanup_ips(self : AdmissionState, now : Int64) -> Unit {
-  if now < 0L || self.ips.is_empty() {
+  if now < 0L {
     return
   }
-  let pool = self.ledger
-    .pool(ControlWork, self.limits.get("control_reserve_bytes"))
-    .unwrap()
-  let scratch = match pool.reserve(self.ips.length().to_int64() * 16L) {
-    Ok(t) => t
-    Err(_) => return
+  let count = if self.ip_order.length() < 32 {
+    self.ip_order.length()
+  } else {
+    32
   }
-  defer scratch.release().unwrap()
-  let keys = self.ips.keys().collect()
-  let start = self.cleanup_cursor % keys.length()
-  let count = if keys.length() < 32 { keys.length() } else { 32 }
-  for step in 0..<count {
-    let key = keys[(start + step) % keys.length()]
-    let entry = self.ips.get(key).unwrap()
-    if entry.refs == 0 &&
-      entry.live == 0 &&
-      now >= entry.last_ms &&
-      now - entry.last_ms >= self.limits.get("idle_ttl_ms") &&
-      entry.connect.full_at(now) &&
-      entry.auth.full_at(now) &&
-      entry.ingress.full_at(now) {
-      entry.metadata.release().unwrap()
-      self.ips.remove(key)
+  for _ in 0..<count {
+    let key = self.ip_order.pop_front().unwrap()
+    match self.ips.get(key) {
+      None => ()
+      Some(entry) =>
+        if entry.refs == 0 &&
+          entry.live == 0 &&
+          now >= entry.last_ms &&
+          now - entry.last_ms >= self.limits.get("idle_ttl_ms") &&
+          entry.connect.full_at(now) &&
+          entry.auth.full_at(now) &&
+          entry.ingress.full_at(now) {
+          entry.metadata.release().unwrap()
+          self.ips.remove(key)
+        } else {
+          self.ip_order.push_back(key)
+        }
     }
   }
-  self.cleanup_cursor = (start + count) % keys.length()
 }
 
 ///|
@@ -444,6 +443,7 @@ fn AdmissionState::close(self : AdmissionState) -> Unit {
     entry.metadata.release().unwrap()
   }
   self.ips.clear()
+  self.ip_order.clear()
   for _, entry in self.publishers {
     entry.metadata.release().unwrap()
   }
