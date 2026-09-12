@@ -5,6 +5,6 @@ import {
 }
 
 options(
-  "native-stub": [ "password_verify.c" ],
+  "native-stub": [ "argon2_backend.c", "password_verify.c" ],
   targets: { "password.mbt": [ "native" ] },
 )
