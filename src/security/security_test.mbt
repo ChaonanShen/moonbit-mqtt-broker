@@ -215,9 +215,9 @@ test "password hash cost limits are checked before native verification" {
   let salt = "MDEyMzQ1Njc4OWFiY2RlZg"
   let digest = "L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
   for parameters in ["m=65537,t=2,p=1", "m=4096,t=11,p=1", "m=4096,t=2,p=5"] {
-    let encoded = "$argon2id$v=19$" + parameters + "$" + salt + "$" + digest
+    let oversized = "$argon2id$v=19$" + parameters + "$" + salt + "$" + digest
     assert_true(
-      PasswordDatabase::parse("user:" + encoded)
+      PasswordDatabase::parse("user:" + oversized)
       is Err(PasswordFileError::HashCostExceeded(1)),
     )
   }
