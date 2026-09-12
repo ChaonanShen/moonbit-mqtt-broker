@@ -18,8 +18,20 @@ pub(all) struct CloseTransportAction {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct StartAuthenticationAction {
+  request_id : Int64
+} derive(Eq, Debug)
+
+///|
+pub(all) struct CancelAuthenticationAction {
+  request_id : Int64
+} derive(Eq, Debug)
+
+///|
 pub(all) enum RuntimeAction {
   SendPacket(SendPacketAction)
   SendPacketThenClose(SendPacketThenCloseAction)
   CloseTransport(CloseTransportAction)
+  StartAuthentication(StartAuthenticationAction)
+  CancelAuthentication(CancelAuthenticationAction)
 } derive(Eq, Debug)

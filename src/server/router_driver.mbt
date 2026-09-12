@@ -3,6 +3,9 @@ pub struct RouterDriver {
   runtime : BrokerRuntime
   sinks : Map[ConnectionId, TransportSink]
   priv snapshot : SnapshotDriverState?
+  priv auth_executor : @security.AuthExecutor?
+  priv auth_cancels : Map[Int64, Bool]
+  priv auth_reaps : Map[Int64, Bool]
 }
 
 ///|
@@ -37,6 +40,7 @@ pub fn SnapshotDriverConfig::new(
 pub fn RouterDriver::new(
   runtime : BrokerRuntime,
   snapshot? : SnapshotDriverConfig,
+  auth_executor? : @security.AuthExecutor,
 ) -> RouterDriver {
   let snapshot = snapshot.map(config => SnapshotDriverState::{
     oldest_uncommitted_ms: None,
@@ -49,7 +53,14 @@ pub fn RouterDriver::new(
       config.max_delay_ms,
     ).unwrap(),
   })
-  { runtime, sinks: Map([]), snapshot }
+  {
+    runtime,
+    sinks: Map([]),
+    snapshot,
+    auth_executor,
+    auth_cancels: Map([]),
+    auth_reaps: Map([]),
+  }
 }
 
 ///|
@@ -170,6 +181,78 @@ fn RouterDriver::transport_failed(
 }
 
 ///|
+fn RouterDriver::retry_auth_control(self : RouterDriver) -> Unit {
+  let executor = match self.auth_executor {
+    Some(value) => value
+    None => return
+  }
+  let cancel_ids : Array[Int64] = []
+  for request_id, _ in self.auth_cancels {
+    cancel_ids.push(request_id)
+  }
+  for request_id in cancel_ids {
+    match executor.cancel(request_id) {
+      CancelRetryLater => ()
+      CancelUnknown => {
+        self.auth_cancels.remove(request_id)
+        self.dispatch(
+          self.runtime.apply(
+            AuthenticationCompleted({
+              request_id,
+              outcome: @security.AuthCompletionOutcome::AuthInternalFailure,
+              completed_at_ms: @async.now(),
+            }),
+          ),
+        )
+      }
+      _ => self.auth_cancels.remove(request_id)
+    }
+  }
+  let reap_ids : Array[Int64] = []
+  for request_id, _ in self.auth_reaps {
+    reap_ids.push(request_id)
+  }
+  for request_id in reap_ids {
+    match executor.reap(request_id) {
+      ControlRetryLater => ()
+      _ => self.auth_reaps.remove(request_id)
+    }
+  }
+}
+
+///|
+fn RouterDriver::poll_authentication(self : RouterDriver) -> Unit {
+  let executor = match self.auth_executor {
+    Some(value) => value
+    None => return
+  }
+  self.retry_auth_control()
+  for _ in 0..<self.runtime.config.auth_result_batch_limit() {
+    match executor.poll() {
+      NoCompletion | PollRetryLater | PollInvalid => return
+      Completion(completed) => {
+        self.dispatch(
+          self.runtime.apply(
+            AuthenticationCompleted({
+              request_id: completed.task_id,
+              outcome: completed.outcome,
+              completed_at_ms: @async.now(),
+            }),
+          ),
+        )
+        match executor.reap(completed.task_id) {
+          ControlDone | ControlInvalid => ()
+          ControlRetryLater | ControlStillRunning => {
+            self.auth_reaps.set(completed.task_id, true)
+            return
+          }
+        }
+      }
+    }
+  }
+}
+
+///|
 fn RouterDriver::dispatch(
   self : RouterDriver,
   initial : Array[RuntimeAction],
@@ -198,6 +281,51 @@ fn RouterDriver::dispatch(
         match self.sinks.get(close.connection_id) {
           None => ()
           Some(sink) => sink.try_close(close.reason)
+        }
+      StartAuthentication(start) => {
+        let failed = match
+          (
+            self.auth_executor,
+            self.runtime.take_auth_submission(start.request_id),
+          ) {
+          (Some(executor), Some(request)) =>
+            executor.submit(start.request_id, request) !=
+            @security.AuthSubmitResult::Submitted
+          _ => true
+        }
+        if failed {
+          worklist.append(
+            self.runtime.apply(AuthenticationSubmitFailed(start.request_id)),
+          )
+        }
+      }
+      CancelAuthentication(cancel) =>
+        match self.auth_executor {
+          None =>
+            worklist.append(
+              self.runtime.apply(
+                AuthenticationCompleted({
+                  request_id: cancel.request_id,
+                  outcome: @security.AuthCompletionOutcome::AuthInternalFailure,
+                  completed_at_ms: @async.now(),
+                }),
+              ),
+            )
+          Some(executor) =>
+            match executor.cancel(cancel.request_id) {
+              CancelRetryLater => self.auth_cancels.set(cancel.request_id, true)
+              CancelUnknown =>
+                worklist.append(
+                  self.runtime.apply(
+                    AuthenticationCompleted({
+                      request_id: cancel.request_id,
+                      outcome: @security.AuthCompletionOutcome::AuthInternalFailure,
+                      completed_at_ms: @async.now(),
+                    }),
+                  ),
+                )
+              _ => ()
+            }
         }
     }
   }
@@ -229,6 +357,7 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
     Runtime(event) => self.handle_runtime_event(event)
     UnregisterTransport(connection_id) => self.sinks.remove(connection_id)
   }
+  self.poll_authentication()
   ignore(self.poll_snapshot(@async.now()))
 }
 

@@ -1,7 +1,20 @@
 ///|
+priv struct PendingAuthentication {
+  connection_id : ConnectionId
+  packet : @protocol.ConnectPacket
+  candidate : @security.AuthenticationCandidate
+  ticket : @budget.Ticket
+  deadline_ms : Int64
+}
+
+///|
 pub struct BrokerRuntime {
   priv will_tickets : Map[ConnectionId, @budget.Ticket]
   priv admission : AdmissionState
+  priv auth_tasks : Map[Int64, PendingAuthentication]
+  priv auth_submissions : Map[Int64, @security.PasswordAuthentication]
+  priv mut next_auth_request_id : Int64
+  priv async_auth : Bool
   config : ServerConfig
   broker_state : @router.BrokerState
   connections : Map[ConnectionId, ConnectionMeta]
@@ -19,10 +32,15 @@ pub fn BrokerRuntime::new(
   metrics? : BrokerMetrics = BrokerMetrics::new(0L),
   logger? : @observability.Logger = @observability.Logger::silent(),
   admission? : AdmissionState,
+  async_auth? : Bool = false,
 ) -> BrokerRuntime {
   {
     config,
     will_tickets: Map([]),
+    auth_tasks: Map([]),
+    auth_submissions: Map([]),
+    next_auth_request_id: 1L,
+    async_auth,
     admission: admission.unwrap_or_else(() => {
       AdmissionState::new(config, initial_state.resource_ledger())
     }),
@@ -288,6 +306,7 @@ fn BrokerRuntime::terminate(
   let log_client_id = match meta.phase {
     Active(value) => value.value()
     AwaitConnect => ""
+    Authenticating(_) => ""
   }
   let log_principal = match meta.principal {
     Some(value) => value.storage_value()
@@ -311,6 +330,8 @@ fn BrokerRuntime::terminate(
   )
   let actions : Array[RuntimeAction] = []
   match meta.phase {
+    Authenticating(request_id) =>
+      actions.push(CancelAuthentication({ request_id, }))
     AwaitConnect => ()
     Active(client_id) => {
       if self.active_by_client.get(client_id) == Some(connection_id) {
@@ -355,29 +376,17 @@ fn BrokerRuntime::terminate(
 }
 
 ///|
-fn BrokerRuntime::handle_connect(
+fn BrokerRuntime::finish_connect_authentication(
   self : BrokerRuntime,
   connection_id : ConnectionId,
   packet : @protocol.ConnectPacket,
   received_at_ms : Int64,
+  result : @security.ConnectAuthentication,
 ) -> Array[RuntimeAction] {
-  let accepted_at_ms = match self.connections.get(connection_id) {
-    Some(meta) => meta.accepted_at_ms
-    None => received_at_ms
-  }
-  if !packet.clean_session && packet.client_id == "" {
-    return self.reject_connect(connection_id, IdentifierRejected)
-  }
-  if packet.username is Some(_) &&
-    packet.password is Some(_) &&
-    self.security.has_passwords() &&
-    !self.admission.admit_auth(connection_id) {
-    return self.reject_connect(connection_id, ServerUnavailable)
-  }
-  let principal = match self.authenticate_bounded(packet, connection_id) {
-    Err(_) => return self.reject_connect(connection_id, ServerUnavailable)
-    Ok(Accepted(value)) => value
-    Ok(BadCredentials) => {
+  match result {
+    Accepted(principal) =>
+      self.finalize_connect(connection_id, packet, received_at_ms, principal)
+    BadCredentials => {
       self.metrics.record_authentication_failure()
       self.logger.log(
         @observability.LogRecord::new(
@@ -388,9 +397,9 @@ fn BrokerRuntime::handle_connect(
           reason="bad_credentials",
         ),
       )
-      return self.reject_connect(connection_id, BadUsernameOrPassword)
+      self.reject_connect(connection_id, BadUsernameOrPassword)
     }
-    Ok(NotAuthorized) => {
+    NotAuthorized => {
       self.metrics.record_authentication_failure()
       self.logger.log(
         @observability.LogRecord::new(
@@ -401,8 +410,163 @@ fn BrokerRuntime::handle_connect(
           reason="not_authorized",
         ),
       )
-      return self.reject_connect(connection_id, NotAuthorized)
+      self.reject_connect(connection_id, NotAuthorized)
     }
+  }
+}
+
+///|
+fn BrokerRuntime::reserve_authentication(
+  self : BrokerRuntime,
+  request : @security.PasswordAuthentication,
+) -> Result[@budget.Ticket, @budget.BudgetError] {
+  if request.request_cost() < 0L || request.workspace_cost() < 0L {
+    return Err(@budget.BudgetError::InvalidAmount)
+  }
+  let ledger = self.broker_state.resource_ledger()
+  let limits = self.config.broker_config().resources()
+  let input = ledger
+    .pool(AuthRequest, limits.get("max_auth_request_bytes_total"))
+    .unwrap()
+  let work = ledger
+    .pool(AuthWorkspace, limits.get("max_auth_workspace_bytes_total"))
+    .unwrap()
+  let ticket = match
+    ledger.reserve([
+      input.allocation(request.request_cost()),
+      work.allocation(request.workspace_cost()),
+    ]) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  ticket.commit().unwrap()
+  Ok(ticket)
+}
+
+///|
+fn BrokerRuntime::begin_async_authentication(
+  self : BrokerRuntime,
+  connection_id : ConnectionId,
+  packet : @protocol.ConnectPacket,
+  received_at_ms : Int64,
+  request : @security.PasswordAuthentication,
+) -> Array[RuntimeAction] {
+  let meta = match self.connections.get(connection_id) {
+    Some(value) => value
+    None => return []
+  }
+  if self.next_auth_request_id <= 0L ||
+    self.next_auth_request_id == 9223372036854775807L {
+    return self.reject_connect(connection_id, ServerUnavailable)
+  }
+  let request_id = self.next_auth_request_id
+  self.next_auth_request_id += 1L
+  let ticket = match self.reserve_authentication(request) {
+    Ok(value) => value
+    Err(_) => return self.reject_connect(connection_id, ServerUnavailable)
+  }
+  let connect_deadline = match
+    @budget.checked_add(
+      meta.accepted_at_ms,
+      self.config.connect_timeout_ms().to_int64(),
+    ) {
+    Ok(value) => value
+    Err(_) => {
+      ticket.release().unwrap()
+      return self.reject_connect(connection_id, ServerUnavailable)
+    }
+  }
+  let auth_deadline = match
+    @budget.checked_add(
+      meta.accepted_at_ms,
+      self.config.auth_timeout_ms().to_int64(),
+    ) {
+    Ok(value) => value
+    Err(_) => {
+      ticket.release().unwrap()
+      return self.reject_connect(connection_id, ServerUnavailable)
+    }
+  }
+  let deadline_ms = if connect_deadline < auth_deadline {
+    connect_deadline
+  } else {
+    auth_deadline
+  }
+  let deferred : @protocol.ConnectPacket = {
+    client_id: packet.client_id,
+    username: None,
+    password: None,
+    keep_alive: packet.keep_alive,
+    clean_session: packet.clean_session,
+    will: packet.will,
+  }
+  self.auth_tasks.set(request_id, {
+    connection_id,
+    packet: deferred,
+    candidate: request.candidate(),
+    ticket,
+    deadline_ms,
+  })
+  self.auth_submissions.set(request_id, request)
+  self.connections.set(connection_id, {
+    ..meta,
+    phase: Authenticating(request_id),
+    last_control_at_ms: received_at_ms,
+    keep_alive_seconds: 0,
+    will: None,
+    principal: None,
+  })
+  [StartAuthentication({ request_id, })]
+}
+
+///|
+fn BrokerRuntime::handle_connect(
+  self : BrokerRuntime,
+  connection_id : ConnectionId,
+  packet : @protocol.ConnectPacket,
+  received_at_ms : Int64,
+) -> Array[RuntimeAction] {
+  if !packet.clean_session && packet.client_id == "" {
+    return self.reject_connect(connection_id, IdentifierRejected)
+  }
+  if packet.username is Some(_) &&
+    packet.password is Some(_) &&
+    self.security.has_passwords() &&
+    !self.admission.admit_auth(connection_id) {
+    return self.reject_connect(connection_id, ServerUnavailable)
+  }
+  if !self.async_auth {
+    return match self.authenticate_bounded(packet, connection_id) {
+      Err(_) => self.reject_connect(connection_id, ServerUnavailable)
+      Ok(result) =>
+        self.finish_connect_authentication(
+          connection_id, packet, received_at_ms, result,
+        )
+    }
+  }
+  match self.security.prepare_authentication(packet.username, packet.password) {
+    Immediate(result) =>
+      self.finish_connect_authentication(
+        connection_id, packet, received_at_ms, result,
+      )
+    HashRequired(request) =>
+      self.begin_async_authentication(
+        connection_id, packet, received_at_ms, request,
+      )
+  }
+}
+
+///|
+fn BrokerRuntime::finalize_connect(
+  self : BrokerRuntime,
+  connection_id : ConnectionId,
+  packet : @protocol.ConnectPacket,
+  received_at_ms : Int64,
+  principal : @security.Principal,
+) -> Array[RuntimeAction] {
+  let accepted_at_ms = match self.connections.get(connection_id) {
+    Some(meta) => meta.accepted_at_ms
+    None => received_at_ms
   }
   if !packet.clean_session && packet.client_id == "" {
     return self.reject_connect(connection_id, IdentifierRejected)
@@ -902,6 +1066,7 @@ fn BrokerRuntime::handle_packet(
           self.handle_connect(event.connection_id, packet, event.received_at_ms)
         _ => self.close_protocol_error(event.connection_id)
       }
+    Authenticating(_) => self.close_protocol_error(event.connection_id)
     Active(client_id) => {
       if self.active_by_client.get(client_id) != Some(event.connection_id) {
         return []
@@ -934,6 +1099,15 @@ fn BrokerRuntime::check_deadlines(
           meta.accepted_at_ms + self.config.connect_timeout_ms().to_int64() {
           expired.push((connection_id, ConnectTimeout))
         }
+      Authenticating(request_id) => {
+        let deadline = match self.auth_tasks.get(request_id) {
+          Some(task) => task.deadline_ms
+          None => meta.accepted_at_ms
+        }
+        if now_ms >= deadline {
+          expired.push((connection_id, ConnectTimeout))
+        }
+      }
       Active(_) =>
         if meta.keep_alive_seconds > 0 &&
           now_ms >=
@@ -1068,6 +1242,89 @@ fn BrokerRuntime::emit_system_metrics(
 }
 
 ///|
+pub fn BrokerRuntime::auth_task_count(self : BrokerRuntime) -> Int {
+  self.auth_tasks.length()
+}
+
+///|
+fn BrokerRuntime::take_auth_submission(
+  self : BrokerRuntime,
+  request_id : Int64,
+) -> @security.PasswordAuthentication? {
+  let request = self.auth_submissions.get(request_id)
+  self.auth_submissions.remove(request_id)
+  request
+}
+
+///|
+fn BrokerRuntime::authentication_submit_failed(
+  self : BrokerRuntime,
+  request_id : Int64,
+) -> Array[RuntimeAction] {
+  self.auth_submissions.remove(request_id)
+  let task = match self.auth_tasks.get(request_id) {
+    Some(value) => value
+    None => return []
+  }
+  self.auth_tasks.remove(request_id)
+  task.ticket.release().unwrap()
+  match self.connections.get(task.connection_id) {
+    Some({ phase: Authenticating(active), .. }) if active == request_id =>
+      self.reject_connect(task.connection_id, ServerUnavailable)
+    _ => []
+  }
+}
+
+///|
+fn BrokerRuntime::authentication_completed(
+  self : BrokerRuntime,
+  event : AuthenticationCompletedEvent,
+) -> Array[RuntimeAction] {
+  self.auth_submissions.remove(event.request_id)
+  let task = match self.auth_tasks.get(event.request_id) {
+    Some(value) => value
+    None => return []
+  }
+  self.auth_tasks.remove(event.request_id)
+  // The native worker has released its Argon2/input buffers before publishing
+  // completion, so release dynamic workspace before activation preflight.
+  task.ticket.release().unwrap()
+  match self.connections.get(task.connection_id) {
+    Some({ phase: Authenticating(active), .. }) if active == event.request_id =>
+      ()
+    _ => return []
+  }
+  if event.completed_at_ms >= task.deadline_ms {
+    return self.terminate(
+      task.connection_id,
+      ConnectTimeout,
+      observed_at_ms=event.completed_at_ms,
+    )
+  }
+  match event.outcome {
+    HashMatched =>
+      self.finish_connect_authentication(
+        task.connection_id,
+        task.packet,
+        event.completed_at_ms,
+        task.candidate.complete_connect(true),
+      )
+    HashMismatched =>
+      self.finish_connect_authentication(
+        task.connection_id,
+        task.packet,
+        event.completed_at_ms,
+        task.candidate.complete_connect(false),
+      )
+    AuthBackendUnavailable
+    | AuthInternalFailure
+    | AuthCancelledBeforeRun
+    | AuthFinishedAfterCancel =>
+      self.reject_connect(task.connection_id, ServerUnavailable)
+  }
+}
+
+///|
 pub fn BrokerRuntime::apply(
   self : BrokerRuntime,
   event : RuntimeEvent,
@@ -1096,6 +1353,10 @@ pub fn BrokerRuntime::apply(
       })
       []
     }
+    AuthenticationCompleted(completed) =>
+      self.authentication_completed(completed)
+    AuthenticationSubmitFailed(request_id) =>
+      self.authentication_submit_failed(request_id)
     PacketReceived(packet) => self.handle_packet(packet)
     TransportClosed(closed) =>
       self.terminate(
@@ -1155,6 +1416,24 @@ pub fn BrokerRuntime::check_invariants(
             RuntimeInvariantViolation("await-connect metadata is active"),
           )
         }
+      Authenticating(request_id) => {
+        if meta.keep_alive_seconds != 0 ||
+          meta.will is Some(_) ||
+          meta.principal is Some(_) {
+          return Err(
+            RuntimeInvariantViolation("authenticating metadata is active"),
+          )
+        }
+        match self.auth_tasks.get(request_id) {
+          Some(task) if task.connection_id == connection_id => ()
+          _ =>
+            return Err(
+              RuntimeInvariantViolation(
+                "authenticating task index is inconsistent",
+              ),
+            )
+        }
+      }
       Active(client_id) => {
         if self.active_by_client.get(client_id) != Some(connection_id) {
           return Err(
@@ -1167,6 +1446,27 @@ pub fn BrokerRuntime::check_invariants(
           )
         }
       }
+    }
+  }
+  if self.auth_submissions.length() > self.auth_tasks.length() {
+    return Err(RuntimeInvariantViolation("auth submission index exceeds tasks"))
+  }
+  for request_id, _ in self.auth_submissions {
+    if !self.auth_tasks.contains(request_id) {
+      return Err(RuntimeInvariantViolation("auth submission has no task"))
+    }
+  }
+  for request_id, task in self.auth_tasks {
+    if request_id <= 0L {
+      return Err(RuntimeInvariantViolation("invalid auth request id"))
+    }
+    match self.connections.get(task.connection_id) {
+      Some({ phase: Authenticating(active), .. }) if active == request_id => ()
+      Some(_) =>
+        return Err(
+          RuntimeInvariantViolation("live auth task connection phase mismatch"),
+        )
+      None => ()
     }
   }
   Ok(())

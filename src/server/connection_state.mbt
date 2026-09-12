@@ -1,6 +1,7 @@
 ///|
 pub(all) enum ConnectionPhase {
   AwaitConnect
+  Authenticating(Int64)
   Active(@session.ClientId)
 } derive(Eq, Debug)
 
