@@ -63,8 +63,7 @@ if find "${clean_room}" -type d \( -name _build -o -name .mooncakes -o -name nod
 fi
 (
   cd "${clean_room}"
-  moon update
-  moon check --target native --deny-warn
+  scripts/prepare-moon-dependencies.sh "${RELEASE_ARTIFACT_DIR:-${clean_room}/.local}/dependency-fetch-package"
   moon check --target native --frozen --deny-warn
   moon test --target native --frozen --deny-warn
   moon build --target native --frozen
