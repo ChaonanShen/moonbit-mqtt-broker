@@ -5,6 +5,7 @@ pub(all) enum PasswordFileError {
   DuplicateUsername(String)
   UnsupportedHash(Int)
   InvalidHash(Int)
+  HashCostExceeded(Int)
   Argon2Unavailable
 } derive(Eq, Debug)
 
@@ -15,10 +16,32 @@ pub(all) enum AuthenticationResult {
 } derive(Eq, Debug)
 
 ///|
-pub struct PasswordDatabase {
-  hashes : Map[String, String]
-  fallback_hash : String?
+struct PasswordHash {
+  encoded : String
+  workspace_cost : Int64
 }
+
+///|
+pub struct PasswordDatabase {
+  hashes : Map[String, PasswordHash]
+  fallback_hash : PasswordHash?
+}
+
+///|
+priv enum PasswordHashCost {
+  Valid(Int64)
+  Invalid
+  Exceeded
+}
+
+///|
+const MAX_ARGON2_MEMORY_KIB : Int64 = 65536L
+
+///|
+const MAX_ARGON2_ITERATIONS : Int64 = 10L
+
+///|
+const MAX_ARGON2_PARALLELISM : Int64 = 4L
 
 ///|
 #borrow(encoded, password)
@@ -44,8 +67,8 @@ fn verify_argon2id(encoded : String, password : Bytes) -> Int {
 pub fn PasswordDatabase::parse(
   contents : String,
 ) -> Result[PasswordDatabase, PasswordFileError] {
-  let hashes : Map[String, String] = Map([])
-  let mut fallback_hash : String? = None
+  let hashes : Map[String, PasswordHash] = Map([])
+  let mut fallback_hash : PasswordHash? = None
   let lines = contents.replace_all(old="\r\n", new="\n").split("\n").to_array()
   for index in 0..<lines.length() {
     let line = lines[index]
@@ -78,6 +101,11 @@ pub fn PasswordDatabase::parse(
         return Err(InvalidHash(index + 1))
       }
     }
+    let workspace_cost = match password_hash_cost(encoded) {
+      Valid(value) => value
+      Invalid => return Err(InvalidHash(index + 1))
+      Exceeded => return Err(HashCostExceeded(index + 1))
+    }
     let status = verify_argon2id(encoded, b"")
     if status == -1000 {
       return Err(Argon2Unavailable)
@@ -86,9 +114,10 @@ pub fn PasswordDatabase::parse(
     if status != 0 && status != -35 {
       return Err(InvalidHash(index + 1))
     }
-    hashes.set(username, encoded)
+    let entry : PasswordHash = { encoded, workspace_cost }
+    hashes.set(username, entry)
     if fallback_hash is None {
-      fallback_hash = Some(encoded)
+      fallback_hash = Some(entry)
     }
   }
   Ok({ hashes, fallback_hash })
@@ -106,13 +135,13 @@ pub fn PasswordDatabase::authenticate(
   password : Bytes,
 ) -> AuthenticationResult {
   let selected = match self.hashes.get(username) {
-    Some(encoded) => Some((encoded, true))
-    None => self.fallback_hash.map(encoded => (encoded, false))
+    Some(entry) => Some((entry, true))
+    None => self.fallback_hash.map(entry => (entry, false))
   }
   match selected {
     None => BadCredentials
-    Some((encoded, known_user)) => {
-      let verified = verify_argon2id(encoded, password) == 0
+    Some((entry, known_user)) => {
+      let verified = verify_argon2id(entry.encoded, password) == 0
       if verified && known_user {
         Authenticated(User(username))
       } else {
@@ -145,18 +174,9 @@ fn phc_number(field : String, prefix : String) -> Int64? {
 }
 
 ///|
-/// Returns request/workspace logical costs only; never exports the selected PHC.
-/// Input hashes were validated at startup. A negative workspace fails admission.
-pub fn PasswordDatabase::verification_cost(
-  self : PasswordDatabase,
-  username : String,
-  password_bytes : Int64,
-) -> (Int64, Int64) {
-  let encoded = match self.hashes.get(username) {
-    Some(h) => h
-    None => self.fallback_hash.unwrap_or("")
-  }
+fn password_hash_cost(encoded : String) -> PasswordHashCost {
   let mut memory : Int64? = None
+  let mut iterations : Int64? = None
   let mut parallelism : Int64? = None
   for section in encoded.split("$") {
     if section.has_prefix("m=") {
@@ -164,28 +184,66 @@ pub fn PasswordDatabase::verification_cost(
         if field.has_prefix("m=") {
           memory = phc_number(field.to_owned(), "m=")
         }
+        if field.has_prefix("t=") {
+          iterations = phc_number(field.to_owned(), "t=")
+        }
         if field.has_prefix("p=") {
           parallelism = phc_number(field.to_owned(), "p=")
         }
       }
     }
   }
-  let request = @budget.utf8_bytes(encoded) * 2L + password_bytes + 128L
-  let workspace = match (memory, parallelism) {
-    (Some(m), Some(p)) =>
+  match (memory, iterations, parallelism) {
+    (Some(m), Some(t), Some(p)) => {
+      if m < 1L || t < 1L || p < 1L {
+        return Invalid
+      }
+      if m > MAX_ARGON2_MEMORY_KIB ||
+        t > MAX_ARGON2_ITERATIONS ||
+        p > MAX_ARGON2_PARALLELISM {
+        return Exceeded
+      }
       match (@budget.checked_mul(m, 1024L), @budget.checked_mul(p, 262144L)) {
         (Ok(arena), Ok(stacks)) =>
           match @budget.checked_add(arena, stacks) {
             Ok(cost) =>
               match @budget.checked_add(cost, 1048576L) {
-                Ok(n) => n
-                Err(_) => -1L
+                Ok(value) => Valid(value)
+                Err(_) => Exceeded
               }
-            Err(_) => -1L
+            Err(_) => Exceeded
           }
-        _ => -1L
+        _ => Exceeded
       }
-    _ => -1L
+    }
+    _ => Invalid
   }
-  (request, workspace)
+}
+
+///|
+/// Returns request/workspace logical costs only; never exports the selected PHC.
+/// Input hashes were validated at startup. A negative workspace fails admission.
+pub fn PasswordDatabase::verification_cost(
+  self : PasswordDatabase,
+  username : String,
+  password_bytes : Int64,
+) -> (Int64, Int64) {
+  let entry = match self.hashes.get(username) {
+    Some(value) => Some(value)
+    None => self.fallback_hash
+  }
+  if entry is None {
+    return (128L + password_bytes, 0L)
+  }
+  let value = entry.unwrap()
+  let encoded_bytes = @budget.utf8_bytes(value.encoded)
+  let request = match @budget.checked_mul(encoded_bytes, 2L) {
+    Ok(copies) =>
+      match @budget.checked_add(copies, password_bytes) {
+        Ok(input) => @budget.checked_add(input, 128L).unwrap_or(-1L)
+        Err(_) => -1L
+      }
+    Err(_) => -1L
+  }
+  (request, value.workspace_cost)
 }
