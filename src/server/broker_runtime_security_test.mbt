@@ -45,6 +45,30 @@ fn secure_runtime(allow_anonymous? : Bool = false) -> BrokerRuntime raise {
 }
 
 ///|
+fn secure_async_runtime() -> BrokerRuntime raise {
+  let config = runtime_config()
+  BrokerRuntime::new(
+    config,
+    @router.BrokerState::new(config.broker_config()),
+    security=security_fixture(),
+    async_auth=true,
+  )
+}
+
+///|
+fn authentication_budget(rt : BrokerRuntime) -> Int64 {
+  let mut total = 0L
+  for entry in rt.broker_state().resource_ledger().usage() {
+    let (kind, committed, reserved, _) = entry
+    if kind == @budget.ResourceKind::AuthRequest ||
+      kind == @budget.ResourceKind::AuthWorkspace {
+      total += committed + reserved
+    }
+  }
+  total
+}
+
+///|
 fn authenticated_connect(
   client_id : String,
   password : Bytes,
@@ -282,4 +306,162 @@ test "runtime returns partial SUBACK and acknowledges denied QoS1 without routin
     [SendPacket({ connection_id: id, packet: Puback(publish_id) })],
   )
   assert_eq(rt.broker_state().retained_count(), 0)
+}
+
+///|
+test "async authentication commits only after a matching completion" {
+  let rt = secure_async_runtime()
+  let id = cid(820L)
+  open(rt, id, 0L)
+  let baseline = rt.broker_state().resource_ledger().committed()
+  assert_eq(
+    receive(rt, id, authenticated_connect("deferred", b"correct horse"), 1L),
+    [StartAuthentication({ request_id: 1L })],
+  )
+  assert_eq(rt.auth_task_count(), 1)
+  assert_eq(rt.broker_state().session_count(), 0)
+  assert_true(rt.broker_state().resource_ledger().committed() > baseline)
+  assert_true(rt.connections.get(id) is Some({ phase: Authenticating(1L), .. }))
+  assert_eq(
+    rt.apply(
+      AuthenticationCompleted({
+        request_id: 1L,
+        outcome: @security.AuthCompletionOutcome::HashMatched,
+        completed_at_ms: 2L,
+      }),
+    ),
+    [SendPacket({ connection_id: id, packet: test_connack(Accepted) })],
+  )
+  assert_eq(rt.auth_task_count(), 0)
+  assert_eq(authentication_budget(rt), 0L)
+  assert_true(rt.connections.get(id) is Some({ phase: Active(_), .. }))
+  assert_eq(
+    rt.apply(
+      AuthenticationCompleted({
+        request_id: 1L,
+        outcome: @security.AuthCompletionOutcome::HashMatched,
+        completed_at_ms: 3L,
+      }),
+    ),
+    [],
+  )
+  rt.check_invariants().unwrap()
+}
+
+///|
+test "async authentication failure and submit failure never create sessions" {
+  let mismatch = secure_async_runtime()
+  let mismatch_id = cid(821L)
+  open(mismatch, mismatch_id, 0L)
+  ignore(
+    receive(
+      mismatch,
+      mismatch_id,
+      authenticated_connect("mismatch", b"wrong"),
+      1L,
+    ),
+  )
+  assert_true(
+    mismatch.apply(
+      AuthenticationCompleted({
+        request_id: 1L,
+        outcome: @security.AuthCompletionOutcome::HashMismatched,
+        completed_at_ms: 2L,
+      }),
+    )[0]
+    is SendPacketThenClose(_),
+  )
+  assert_eq(mismatch.broker_state().session_count(), 0)
+
+  let failed = secure_async_runtime()
+  let failed_id = cid(822L)
+  open(failed, failed_id, 0L)
+  ignore(
+    receive(
+      failed,
+      failed_id,
+      authenticated_connect("submit-failed", b"correct horse"),
+      1L,
+    ),
+  )
+  assert_true(
+    failed.apply(AuthenticationSubmitFailed(1L))[0] is SendPacketThenClose(_),
+  )
+  assert_eq(failed.auth_task_count(), 0)
+  assert_eq(failed.broker_state().session_count(), 0)
+}
+
+///|
+test "async authentication disconnect keeps budget until native completion" {
+  let rt = secure_async_runtime()
+  let id = cid(823L)
+  open(rt, id, 0L)
+  let baseline = rt.broker_state().resource_ledger().committed()
+  ignore(receive(rt, id, authenticated_connect("cancel", b"correct horse"), 1L))
+  let reserved = rt.broker_state().resource_ledger().committed()
+  assert_true(reserved > baseline)
+  assert_eq(
+    rt.apply(
+      TransportClosed({ connection_id: id, reason: PeerEof, observed_at_ms: 2L }),
+    ),
+    [
+      CancelAuthentication({ request_id: 1L }),
+      CloseTransport({ connection_id: id, reason: PeerEof }),
+    ],
+  )
+  assert_eq(rt.auth_task_count(), 1)
+  assert_eq(rt.broker_state().resource_ledger().committed(), reserved)
+  assert_eq(
+    rt.apply(
+      AuthenticationCompleted({
+        request_id: 1L,
+        outcome: @security.AuthCompletionOutcome::AuthFinishedAfterCancel,
+        completed_at_ms: 3L,
+      }),
+    ),
+    [],
+  )
+  assert_eq(rt.auth_task_count(), 0)
+  assert_eq(rt.broker_state().resource_ledger().committed(), baseline)
+  assert_eq(rt.broker_state().session_count(), 0)
+}
+
+///|
+test "async authentication timeout cancels without activating or publishing Will" {
+  let rt = secure_async_runtime()
+  let id = cid(824L)
+  open(rt, id, 0L)
+  let will : @protocol.WillMessage = {
+    topic: "allowed/will",
+    payload: b"must-not-publish",
+    qos: QoS1,
+    retain: true,
+  }
+  ignore(
+    receive(
+      rt,
+      id,
+      authenticated_connect("timeout", b"correct horse", will=Some(will)),
+      1L,
+    ),
+  )
+  assert_eq(rt.apply(CheckDeadlines(999L)), [])
+  assert_eq(rt.apply(CheckDeadlines(1000L)), [
+    CancelAuthentication({ request_id: 1L }),
+    CloseTransport({ connection_id: id, reason: ConnectTimeout }),
+  ])
+  assert_eq(rt.broker_state().session_count(), 0)
+  assert_eq(rt.broker_state().retained_count(), 0)
+  rt.check_invariants().unwrap()
+  ignore(
+    rt.apply(
+      AuthenticationCompleted({
+        request_id: 1L,
+        outcome: @security.AuthCompletionOutcome::AuthFinishedAfterCancel,
+        completed_at_ms: 1001L,
+      }),
+    ),
+  )
+  assert_eq(rt.auth_task_count(), 0)
+  assert_eq(authentication_budget(rt), 0L)
 }

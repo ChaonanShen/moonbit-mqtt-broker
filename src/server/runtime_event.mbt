@@ -25,10 +25,19 @@ pub(all) struct EmitSystemMetricsEvent {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct AuthenticationCompletedEvent {
+  request_id : Int64
+  outcome : @security.AuthCompletionOutcome
+  completed_at_ms : Int64
+} derive(Eq, Debug)
+
+///|
 pub(all) enum RuntimeEvent {
   TransportOpened(TransportOpenedEvent)
   PacketReceived(PacketReceivedEvent)
   TransportClosed(TransportClosedEvent)
   CheckDeadlines(Int64)
   EmitSystemMetrics(EmitSystemMetricsEvent)
+  AuthenticationCompleted(AuthenticationCompletedEvent)
+  AuthenticationSubmitFailed(Int64)
 } derive(Eq, Debug)
