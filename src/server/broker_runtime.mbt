@@ -388,6 +388,7 @@ fn BrokerRuntime::finish_connect_authentication(
       self.finalize_connect(connection_id, packet, received_at_ms, principal)
     BadCredentials => {
       self.metrics.record_authentication_failure()
+      self.metrics.record_auth_bad_credentials()
       self.logger.log(
         @observability.LogRecord::new(
           received_at_ms,
@@ -457,13 +458,17 @@ fn BrokerRuntime::begin_async_authentication(
   }
   if self.next_auth_request_id <= 0L ||
     self.next_auth_request_id == 9223372036854775807L {
+    self.metrics.record_auth_resource_rejection()
     return self.reject_connect(connection_id, ServerUnavailable)
   }
   let request_id = self.next_auth_request_id
   self.next_auth_request_id += 1L
   let ticket = match self.reserve_authentication(request) {
     Ok(value) => value
-    Err(_) => return self.reject_connect(connection_id, ServerUnavailable)
+    Err(_) => {
+      self.metrics.record_auth_resource_rejection()
+      return self.reject_connect(connection_id, ServerUnavailable)
+    }
   }
   let connect_deadline = match
     @budget.checked_add(
@@ -472,6 +477,7 @@ fn BrokerRuntime::begin_async_authentication(
     ) {
     Ok(value) => value
     Err(_) => {
+      self.metrics.record_auth_resource_rejection()
       ticket.release().unwrap()
       return self.reject_connect(connection_id, ServerUnavailable)
     }
@@ -483,6 +489,7 @@ fn BrokerRuntime::begin_async_authentication(
     ) {
     Ok(value) => value
     Err(_) => {
+      self.metrics.record_auth_resource_rejection()
       ticket.release().unwrap()
       return self.reject_connect(connection_id, ServerUnavailable)
     }
@@ -531,13 +538,19 @@ fn BrokerRuntime::handle_connect(
   }
   if packet.username is Some(_) &&
     packet.password is Some(_) &&
-    self.security.has_passwords() &&
-    !self.admission.admit_auth(connection_id) {
-    return self.reject_connect(connection_id, ServerUnavailable)
+    self.security.has_passwords() {
+    self.metrics.record_auth_request()
+    if !self.admission.admit_auth(connection_id) {
+      self.metrics.record_auth_resource_rejection()
+      return self.reject_connect(connection_id, ServerUnavailable)
+    }
   }
   if !self.async_auth {
     return match self.authenticate_bounded(packet, connection_id) {
-      Err(_) => self.reject_connect(connection_id, ServerUnavailable)
+      Err(_) => {
+        self.metrics.record_auth_resource_rejection()
+        self.reject_connect(connection_id, ServerUnavailable)
+      }
       Ok(result) =>
         self.finish_connect_authentication(
           connection_id, packet, received_at_ms, result,
@@ -1105,6 +1118,7 @@ fn BrokerRuntime::check_deadlines(
           None => meta.accepted_at_ms
         }
         if now_ms >= deadline {
+          self.metrics.record_auth_deadline_rejection()
           expired.push((connection_id, ConnectTimeout))
         }
       }
@@ -1210,6 +1224,19 @@ fn BrokerRuntime::emit_system_metrics(
     ("messages/sent", self.metrics.messages_sent().to_string()),
     ("messages/dropped", self.metrics.messages_dropped().to_string()),
     ("auth/failures", self.metrics.authentication_failures().to_string()),
+    ("auth/requests", self.metrics.auth_requests().to_string()),
+    ("auth/successes", self.metrics.auth_successes().to_string()),
+    ("auth/bad_credentials", self.metrics.auth_bad_credentials().to_string()),
+    (
+      "auth/resource_rejections",
+      self.metrics.auth_resource_rejections().to_string(),
+    ),
+    (
+      "auth/deadline_rejections",
+      self.metrics.auth_deadline_rejections().to_string(),
+    ),
+    ("auth/late_results", self.metrics.auth_late_results().to_string()),
+    ("auth/pending", self.auth_tasks.length().to_string()),
     ("acl/denials", self.metrics.acl_denials().to_string()),
     (
       "tls/handshake_failures",
@@ -1284,6 +1311,7 @@ fn BrokerRuntime::authentication_submit_failed(
     Some(value) => value
     None => return []
   }
+  self.metrics.record_auth_resource_rejection()
   self.auth_tasks.remove(request_id)
   task.ticket.release().unwrap()
   match self.connections.get(task.connection_id) {
@@ -1301,7 +1329,10 @@ fn BrokerRuntime::authentication_completed(
   self.auth_submissions.remove(event.request_id)
   let task = match self.auth_tasks.get(event.request_id) {
     Some(value) => value
-    None => return []
+    None => {
+      self.metrics.record_auth_late_result()
+      return []
+    }
   }
   self.auth_tasks.remove(event.request_id)
   // The native worker has released its Argon2/input buffers before publishing
@@ -1310,9 +1341,13 @@ fn BrokerRuntime::authentication_completed(
   match self.connections.get(task.connection_id) {
     Some({ phase: Authenticating(active), .. }) if active == event.request_id =>
       ()
-    _ => return []
+    _ => {
+      self.metrics.record_auth_late_result()
+      return []
+    }
   }
   if event.completed_at_ms >= task.deadline_ms {
+    self.metrics.record_auth_deadline_rejection()
     return self.terminate(
       task.connection_id,
       ConnectTimeout,
@@ -1320,13 +1355,18 @@ fn BrokerRuntime::authentication_completed(
     )
   }
   match event.outcome {
-    HashMatched =>
+    HashMatched => {
+      let decision = task.candidate.complete_connect(true)
+      if decision is Accepted(_) {
+        self.metrics.record_auth_success()
+      }
       self.finish_connect_authentication(
         task.connection_id,
         task.packet,
         event.completed_at_ms,
-        task.candidate.complete_connect(true),
+        decision,
       )
+    }
     HashMismatched =>
       self.finish_connect_authentication(
         task.connection_id,
@@ -1337,8 +1377,10 @@ fn BrokerRuntime::authentication_completed(
     AuthBackendUnavailable
     | AuthInternalFailure
     | AuthCancelledBeforeRun
-    | AuthFinishedAfterCancel =>
+    | AuthFinishedAfterCancel => {
+      self.metrics.record_auth_resource_rejection()
       self.reject_connect(task.connection_id, ServerUnavailable)
+    }
   }
 }
 

@@ -346,6 +346,10 @@ test "async authentication commits only after a matching completion" {
     [],
   )
   rt.check_invariants().unwrap()
+  assert_eq(rt.metrics.auth_requests(), 1L)
+  assert_eq(rt.metrics.auth_successes(), 1L)
+  assert_eq(rt.metrics.auth_bad_credentials(), 0L)
+  assert_eq(rt.metrics.auth_late_results(), 1L)
 }
 
 ///|
@@ -372,6 +376,8 @@ test "async authentication failure and submit failure never create sessions" {
     is SendPacketThenClose(_),
   )
   assert_eq(mismatch.broker_state().session_count(), 0)
+  assert_eq(mismatch.metrics.auth_requests(), 1L)
+  assert_eq(mismatch.metrics.auth_bad_credentials(), 1L)
 
   let failed = secure_async_runtime()
   let failed_id = cid(822L)
@@ -389,6 +395,7 @@ test "async authentication failure and submit failure never create sessions" {
   )
   assert_eq(failed.auth_task_count(), 0)
   assert_eq(failed.broker_state().session_count(), 0)
+  assert_eq(failed.metrics.auth_resource_rejections(), 1L)
 }
 
 ///|
@@ -424,6 +431,7 @@ test "async authentication disconnect keeps budget until native completion" {
   assert_eq(rt.auth_task_count(), 0)
   assert_eq(rt.broker_state().resource_ledger().committed(), baseline)
   assert_eq(rt.broker_state().session_count(), 0)
+  assert_eq(rt.metrics.auth_late_results(), 1L)
 }
 
 ///|
@@ -464,4 +472,6 @@ test "async authentication timeout cancels without activating or publishing Will
   )
   assert_eq(rt.auth_task_count(), 0)
   assert_eq(authentication_budget(rt), 0L)
+  assert_eq(rt.metrics.auth_deadline_rejections(), 1L)
+  assert_eq(rt.metrics.auth_late_results(), 1L)
 }
