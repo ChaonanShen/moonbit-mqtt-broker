@@ -238,6 +238,14 @@ pub fn BrokerState::pending_bytes(self : BrokerState) -> Int64 {
 /// Bounded fair scan. A persistent cursor advances even when one FIFO head is
 /// blocked; no head is skipped within its own session and no busy retry occurs.
 pub fn BrokerState::resume_pending(self : BrokerState) -> Array[BrokerAction] {
+  let scan_pool = self.resources.ledger
+    .pool(ControlWork, self.config.resources.get("control_reserve_bytes"))
+    .unwrap()
+  let scan = match scan_pool.reserve(self.sessions.length().to_int64() * 32L) {
+    Ok(t) => t
+    Err(_) => return []
+  }
+  defer scan.release().unwrap()
   let ids : Array[@session.ClientId] = []
   for id, session in self.sessions {
     if session.is_attached() && session.pending_count() > 0 {
@@ -314,7 +322,7 @@ pub fn BrokerState::resume_pending(self : BrokerState) -> Array[BrokerAction] {
           }
         }
       }
-      scratch.release().unwrap()
+      self.retain_action_lease(scratch)
       batch += 1
     }
   }
@@ -324,4 +332,55 @@ pub fn BrokerState::resume_pending(self : BrokerState) -> Array[BrokerAction] {
     (start + count) % ids.length()
   }
   actions
+}
+
+///|
+fn BrokerState::retain_action_lease(
+  self : BrokerState,
+  ticket : @budget.Ticket,
+) -> Unit {
+  if self.action_scope {
+    self.action_leases.push(ticket)
+  } else {
+    ticket.release().unwrap()
+  }
+}
+
+///|
+pub fn BrokerState::begin_action_scope(self : BrokerState) -> Unit {
+  guard !self.action_scope else { abort("nested router action scope") }
+  self.action_scope = true
+}
+
+///|
+pub fn BrokerState::end_action_scope(self : BrokerState) -> Unit {
+  for ticket in self.action_leases {
+    ticket.release().unwrap()
+  }
+  self.action_leases.clear()
+  self.action_scope = false
+}
+
+///|
+pub fn BrokerState::admit_action_input(
+  self : BrokerState,
+  bytes : Int64,
+  control? : Bool = false,
+) -> Result[Unit, RouterError] {
+  let result = if control {
+    self.resources.ledger
+    .pool(ControlWork, self.config.resources.get("control_reserve_bytes"))
+    .unwrap()
+    .reserve(bytes)
+    .map_err(e => ByteResourceLimit(e))
+  } else {
+    self.reserve_scratch(bytes)
+  }
+  match result {
+    Err(e) => Err(e)
+    Ok(t) => {
+      self.retain_action_lease(t)
+      Ok(())
+    }
+  }
 }

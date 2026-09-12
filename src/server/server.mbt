@@ -3,22 +3,29 @@ async fn run_ticker(
   config : ServerConfig,
   events : @async.Queue[DriverEvent],
   persistence : PersistenceRuntime?,
+  bus? : EventBus,
 ) -> Unit {
   let mut next_metrics_at = @async.now() +
     config.system_metrics_interval_ms().to_int64()
   for ;; {
     @async.sleep(config.keep_alive_check_interval_ms())
     let now_ms = @async.now()
-    events.put(Runtime(CheckDeadlines(now_ms))) catch {
-      _ => return
+    match bus {
+      Some(bus) => bus.post_tick(CheckDeadlines(now_ms))
+      None => events.put(Runtime(CheckDeadlines(now_ms))) catch { _ => return }
     }
     if now_ms >= next_metrics_at {
       let persistence_state = match persistence {
         Some(runtime) => runtime.state()
         None => "disabled"
       }
-      events.put(Runtime(EmitSystemMetrics({ now_ms, persistence_state }))) catch {
-        _ => return
+      match bus {
+        Some(bus) =>
+          bus.post_tick(EmitSystemMetrics({ now_ms, persistence_state }))
+        None =>
+          events.put(Runtime(EmitSystemMetrics({ now_ms, persistence_state }))) catch {
+            _ => return
+          }
       }
       next_metrics_at = now_ms + config.system_metrics_interval_ms().to_int64()
     }
@@ -50,6 +57,13 @@ pub async fn serve(
   logger? : @observability.Logger = @observability.Logger::silent(),
 ) -> Unit {
   let events = @async.Queue(kind=Blocking(config.max_runtime_events()))
+  let bus = match
+    EventBus::new(config, initial_state.resource_ledger(), events) {
+    Ok(bus) => bus
+    Err(_) =>
+      raise ResourceStartupFailure("resource budget cannot initialize server")
+  }
+  defer bus.close()
   let metrics = BrokerMetrics::new(@async.now())
   let runtime = BrokerRuntime::new(
     config,
@@ -63,14 +77,13 @@ pub async fn serve(
     None => RouterDriver::new(runtime)
   }
   let allocator = ConnectionIdAllocator::new()
-  defer events.close(clear=true)
   run_with_snapshot_writer(persistence, driver, () => {
     @async.with_task_group() <| group => {
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
-        driver.run(events)
+        driver.run_budgeted(bus)
       }
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
-        run_ticker(config, events, persistence)
+        run_ticker(config, events, persistence, bus~)
       }
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         wait_for_shutdown(
@@ -116,7 +129,13 @@ pub async fn serve(
                     }
                   }
               }
-              supervise_transport(transport, connection_id, config, events)
+              supervise_transport(
+                transport,
+                connection_id,
+                config,
+                events,
+                bus~,
+              )
             }
           }
         },
@@ -139,6 +158,13 @@ pub async fn serve_once(
   logger? : @observability.Logger = @observability.Logger::silent(),
 ) -> Unit {
   let events = @async.Queue(kind=Blocking(config.max_runtime_events()))
+  let bus = match
+    EventBus::new(config, initial_state.resource_ledger(), events) {
+    Ok(bus) => bus
+    Err(_) =>
+      raise ResourceStartupFailure("resource budget cannot initialize server")
+  }
+  defer bus.close()
   let metrics = BrokerMetrics::new(@async.now())
   let runtime = BrokerRuntime::new(
     config,
@@ -151,14 +177,13 @@ pub async fn serve_once(
     Some(value) => RouterDriver::new(runtime, snapshot=value.driver_config())
     None => RouterDriver::new(runtime)
   }
-  defer events.close(clear=true)
   run_with_snapshot_writer(persistence, driver, () => {
     @async.with_task_group() <| group => {
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
-        driver.run(events)
+        driver.run_budgeted(bus)
       }
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
-        run_ticker(config, events, persistence)
+        run_ticker(config, events, persistence, bus~)
       }
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         wait_for_shutdown(
@@ -198,7 +223,13 @@ pub async fn serve_once(
             }
           }
       }
-      supervise_transport(transport, ConnectionId::new(1L), config, events)
+      supervise_transport(
+        transport,
+        ConnectionId::new(1L),
+        config,
+        events,
+        bus~,
+      )
     }
   })
 }

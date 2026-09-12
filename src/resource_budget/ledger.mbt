@@ -19,6 +19,9 @@ pub(all) enum ResourceKind {
   LimiterMetadata
   Infrastructure
   ControlEvent
+  ControlRuntime
+  ControlFrame
+  ControlWork
 } derive(Eq, Hash, Debug)
 
 ///|
@@ -167,7 +170,10 @@ pub fn Ledger::pool(
       account
     }
   }
-  let partition = if kind == ControlEvent {
+  let partition = if kind == ControlEvent ||
+    kind == ControlRuntime ||
+    kind == ControlFrame ||
+    kind == ControlWork {
     self.control
   } else {
     self.ordinary
@@ -392,4 +398,15 @@ pub fn Pool::limit(self : Pool) -> Int64 {
 ///|
 pub fn Ledger::ordinary_available(self : Ledger) -> Int64 {
   self.ordinary.limit - self.ordinary.occupied()
+}
+
+///|
+pub fn Pool::reserve(self : Pool, bytes : Int64) -> Result[Ticket, BudgetError] {
+  self.ledger.reserve([self.allocation(bytes)])
+}
+
+///|
+/// Share a category constraint across ordinary and protected control pools.
+pub fn Pool::category_account(self : Pool) -> Account {
+  self.accounts[2]
 }

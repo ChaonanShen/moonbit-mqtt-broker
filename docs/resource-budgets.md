@@ -37,3 +37,11 @@ Router preparation reserves destination usage and the temporary copies of existi
 ACK completion is independent of pending promotion. A bounded rotating scan revisits other attached sessions after capacity is released. A blocked FIFO head remains queued and does not allow later messages to pass. Restoration recomputes derived bytes rather than trusting snapshot counters, and a snapshot that exceeds configured budgets is rejected without truncating it.
 
 The public standalone router API transfers returned action objects to its caller; their subsequent storage is caller-owned. Server integration must retain its action/encoding leases until dispatch, in addition to the router-owned persistent state.
+
+## Transport and control progress
+
+The server shares its router ledger with readers, runtime packets and sinks. Read buffers, decoder extraction and packet decoding are reserved before allocation. A producer waiting for runtime capacity holds its own packet ticket and waits on a readiness-only channel, so cancellation cannot leave payload references in a cancelled dependency queue writer.
+
+Registration, terminal notification and unregister have bounded per-connection control slots; ticks coalesce. A terminal waits for that connection's admitted packets, while registrations cannot be bypassed when scheduling alternates between control and data. Protocol packets remain in FIFO order. Control packet work/frames use a protected partition while sharing the same per-connection and aggregate event/frame caps.
+
+A dequeued outbound frame keeps its ticket through the actual write. Queue close releases queued frames, not the frame a writer still holds. Encoding reserves before creating the frame. Server dispatch retains routing/action leases until it finishes mapping and sending actions, including any generated Will chain. Writer completion and periodic control ticks revisit pending sessions in bounded batches.
