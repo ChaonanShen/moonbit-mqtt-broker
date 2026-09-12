@@ -323,3 +323,17 @@ Protocol, security and large-load functional fixtures explicitly disable rate/IP
 独立入口 `scripts/verify-resource-limits-docker.sh` 包含 Native 全量测试和资源网络矩阵。累计 `verify-release.sh` 已调用 `verify-resource-limits.sh`，严格 distribution/CI 因而覆盖该门禁。矩阵保持限流开启，覆盖原子 retained/fanout、QoS2 重复与持久桶、真实 Argon2 尝试、TLS 前 IP 门禁、raw 字节单次计费、慢消费者、低预算恢复不改文件及最后快照失败退出。负载用例只对其专用高流量 profile 显式关闭 rate/IP 策略，字节预算持续有效。
 
 日志输出 `RESOURCE_RESULTS` 保存逻辑占用断言、RSS 峰值和 PING 延迟；RSS 不与逻辑预算直接等同。快照 FIFO 负向测试同时设置终止和强制结束超时，超时退出不是通过。
+
+
+## 使用已验证的运行环境缓存
+
+当 Docker registry/代理暂不可用且已有本机成功的四环境记录时，可为单次运行显式设置 `DISTRIBUTION_RUNTIME_REFERENCE`，值为本仓库 `test-results/distribution/` 内的成功结果目录。默认不设置此变量，仍构建运行镜像。
+
+```bash
+DISTRIBUTION_RUNTIME_REFERENCE=/absolute/repo/test-results/distribution/<successful-run> \
+  RELEASE_SOAK=1 scripts/verify-distribution-docker.sh
+```
+
+该模式首先校验参考记录的完成/退出码、四项 PASS、完整提交号、镜像 SHA-256 与 Linux/amd64 平台，并要求参考提交与候选的整个 `tests/runtime` Git tree 完全相同。任一条件不符即拒绝，不能用旧镜像掩盖运行环境配方变化。镜像按不可变摘要选取，映射写入 `runtime-reference.json`，结束时再次验证其哈希。
+
+源码仍只取当前已提交 HEAD，重新构建/打包/解包测试；四环境工具与库清单、真实收发、缺库失败、最终制品哈希检查全部执行。结果标记 `runtime_image_mode=verified-cache-reference` 并保存参考来源；它不表示重新拉取了最新系统包，也不把此前失败的运行改写成通过。恢复后必须从严格入口完整重跑，不能拼接失败运行与旧结果。

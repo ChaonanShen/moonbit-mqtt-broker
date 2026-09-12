@@ -41,6 +41,15 @@ finish() {
 trap finish EXIT
 trap 'printf "DISTRIBUTION_FAILED_AT_LINE=%s\n" "$LINENO" >&2' ERR
 printf 'source_commit=%s\nstarted_at=%s\nsoak=%s\n' "${SOURCE_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${RELEASE_SOAK:-0}" >"${RESULTS}/evidence.txt"
+readonly RUNTIME_REFERENCE="${DISTRIBUTION_RUNTIME_REFERENCE:-}"
+if [[ -n "${RUNTIME_REFERENCE}" ]]; then
+  python3 -B tools/runtime_reference.py --repo "${REPO_ROOT}" --reference "${RUNTIME_REFERENCE}" --head "${SOURCE_SHA}" >"${RESULTS}/runtime-reference.json"
+  readonly RUNTIME_REFERENCE_SHA="$(sha256sum "${RESULTS}/runtime-reference.json" | awk '{print $1}')"
+  echo 'runtime_image_mode=verified-cache-reference' >>"${RESULTS}/evidence.txt"
+  sha256sum "${RESULTS}/runtime-reference.json" >>"${RESULTS}/evidence.txt"
+else
+  echo 'runtime_image_mode=build' >>"${RESULTS}/evidence.txt"
+fi
 docker image inspect "${DEV_IMAGE}" --format 'toolchain_image={{.Id}}' >>"${RESULTS}/evidence.txt"
 git archive --format=tar "${SOURCE_SHA}" >"${RESULTS}/source.tar"
 sha256sum "${RESULTS}/source.tar" >>"${RESULTS}/evidence.txt"
@@ -60,10 +69,15 @@ runtime_options=(--platform linux/amd64 --network none --read-only \
   --security-opt no-new-privileges --pids-limit 64 --memory 256m \
   --volume "${RESULTS}/runtime:/artifact:ro")
 for profile in base argon2 tls full; do
-  runtime_image="moonbit-mqtt-runtime-${profile}:${SOURCE_SHA:0:12}"
-  # The build context contains only committed runtime image definitions.
-  git archive "${SOURCE_SHA}" tests/runtime | docker build --platform linux/amd64 \
-    --file tests/runtime/Dockerfile --target "${profile}" --tag "${runtime_image}" -
+  if [[ -n "${RUNTIME_REFERENCE}" ]]; then
+    runtime_image="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["images"][sys.argv[2]])' "${RESULTS}/runtime-reference.json" "${profile}")"
+    echo "Using verified unchanged runtime context for ${profile}: ${runtime_image}"
+  else
+    runtime_image="moonbit-mqtt-runtime-${profile}:${SOURCE_SHA:0:12}"
+    # The build context contains only committed runtime image definitions.
+    git archive "${SOURCE_SHA}" tests/runtime | docker build --platform linux/amd64 \
+      --file tests/runtime/Dockerfile --target "${profile}" --tag "${runtime_image}" -
+  fi
   docker image inspect "${runtime_image}" --format "runtime_${profile}_image={{.Id}}" >>"${RESULTS}/evidence.txt"
   docker run --rm "${runtime_options[@]}" --entrypoint sh "${runtime_image}" -c \
     'for cmd in moon moonc cc gcc node npm git argon2; do if command -v "$cmd" >/dev/null; then echo "unexpected development tool: $cmd" >&2; exit 1; fi; done; ldd /artifact/broker; /sbin/ldconfig -p' \
@@ -124,4 +138,7 @@ done
 [[ "$(git rev-parse HEAD)" = "${SOURCE_SHA}" ]]
 [[ -z "$(git status --porcelain --untracked-files=no)" ]]
 (cd "${RESULTS}" && sha256sum --check artifacts.sha256 && sha256sum package.zip runtime/broker) >>"${RESULTS}/evidence.txt"
+if [[ -n "${RUNTIME_REFERENCE}" ]]; then
+  [[ "$(sha256sum "${RESULTS}/runtime-reference.json" | awk '{print $1}')" = "${RUNTIME_REFERENCE_SHA}" ]]
+fi
 echo 'DISTRIBUTION verification passed: committed source, clean package, four isolated runtime profiles'

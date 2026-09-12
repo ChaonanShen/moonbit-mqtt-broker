@@ -253,3 +253,17 @@ Protocol, security and large-load functional fixtures explicitly disable rate/IP
 `scripts/verify-resource-limits-docker.sh` runs all Native tests plus the resource network matrix. The cumulative `verify-release.sh` calls `verify-resource-limits.sh`, so strict distribution/CI includes the gate. Enabled-policy cases cover retained/fanout rollback, QoS2 duplicates and persistent buckets, real Argon2 attempts, pre-TLS IP admission, single-debit raw ingress, slow consumers, non-mutating low-budget restore and failed final snapshots. Only the dedicated high-volume profile disables rate/IP policy; byte accounting stays enabled.
 
 `RESOURCE_RESULTS` records managed-byte assertions, RSS peaks and PING delays. RSS is not the logical byte cap. The FIFO negative test has both a termination and a kill deadline; a timeout is not a passing result.
+
+
+## Explicit verified runtime cache references
+
+When registry/proxy access is unavailable and a successful local four-profile result exists, one run may explicitly set `DISTRIBUTION_RUNTIME_REFERENCE` to that result directory under this repository's `test-results/distribution/`. Without it, runtime images are built as usual.
+
+```bash
+DISTRIBUTION_RUNTIME_REFERENCE=/absolute/repo/test-results/distribution/<successful-run> \
+  RELEASE_SOAK=1 scripts/verify-distribution-docker.sh
+```
+
+The resolver requires successful completion, all four PASS fields, a full source commit, immutable SHA-256 image identities and Linux/amd64. The entire `tests/runtime` Git tree must match between reference and candidate. Any mismatch fails closed. The selected digest mapping is saved in `runtime-reference.json` and its hash is rechecked at completion.
+
+Current committed source is still rebuilt, packaged and retested after extraction. All four tool/library inventories, positive traffic, missing-library failures and final artifact hashes still run. Evidence records `runtime_image_mode=verified-cache-reference` and provenance; this does not claim a fresh OS package download or convert an earlier failed attempt into success. Rerun the complete strict entry point, never combine partial runs.

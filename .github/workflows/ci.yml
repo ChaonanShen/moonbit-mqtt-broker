@@ -33,6 +33,7 @@ jobs:
           path: |
             test-results/distribution/**/*.log
             test-results/distribution/**/*.txt
+            test-results/distribution/**/runtime-reference.json
             test-results/distribution/**/artifacts.sha256
             test-results/distribution/**/package.zip
           if-no-files-found: warn
