@@ -246,3 +246,10 @@ configuration. This accommodates the host UID/container root mismatch without
 changing the host Git configuration or trusting arbitrary directories.
 
 Protocol, security and large-load functional fixtures explicitly disable rate/IP policy where their workload would exceed the new defaults. Byte accounting remains enabled. Dedicated resource tests cover enabled policy; disabling limits in a functional fixture is not evidence that rate admission passed.
+
+
+## P0-02 resource gate
+
+`scripts/verify-resource-limits-docker.sh` runs all Native tests plus the resource network matrix. The cumulative `verify-release.sh` calls `verify-resource-limits.sh`, so strict distribution/CI includes the gate. Enabled-policy cases cover retained/fanout rollback, QoS2 duplicates and persistent buckets, real Argon2 attempts, pre-TLS IP admission, single-debit raw ingress, slow consumers, non-mutating low-budget restore and failed final snapshots. Only the dedicated high-volume profile disables rate/IP policy; byte accounting stays enabled.
+
+`RESOURCE_RESULTS` records managed-byte assertions, RSS peaks and PING delays. RSS is not the logical byte cap. The FIFO negative test has both a termination and a kill deadline; a timeout is not a passing result.

@@ -82,5 +82,10 @@ explicit matching subscription and read grant.
 Sessions belong to `anonymous` or `user:<name>`. A different Principal cannot
 take over, clean, or resume the same Client ID, including after restart. Disk
 V1 Sessions migrate as `legacy-anonymous` and are resumable only anonymously;
-the next commit writes V2. Protect the data directory because snapshots include
+the next commit writes V3. Protect the data directory because snapshots include
 Client IDs, filters, and application payloads.
+
+
+## Authentication resource admission
+
+A complete request requiring password verification consumes global/IP attempt tokens once before reserving input and conservative workspace costs for its validated PHC. Bad passwords, unknown users and later resource failure do not refund consumed tokens. Anonymous connections bypass hash admission but retain connection/transport caps. Verification remains synchronous; worker isolation, running-job cancellation and policy generations are separate P0-03 work. See the [resource contract](resource-budgets.md).

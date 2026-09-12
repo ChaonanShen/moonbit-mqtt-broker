@@ -112,3 +112,8 @@ are fatal. There is no automatic corrupt-main repair, backup fallback, or temp
 promotion. Before manual recovery, stop the Broker and copy the entire data
 directory. Diagnose and preserve the original files before replacing or
 removing main; never edit files while a Broker holds the lock.
+
+
+## Snapshot byte budgets
+
+Export, queuing, encoding and actual writes share snapshot-work admission. Replacing a queued request releases its lease; an active write keeps its lease until save completes. Import validates category/session/global bytes before record and payload allocation without changing V1/V2/V3. Budget shortage preserves dirty state with bounded diagnostics; an uncommitted final snapshot fails shutdown rather than truncating state or silently starting empty. File type is checked before size inspection, so FIFOs, directories and symlinks are not read as snapshots. See the [resource contract and observations](resource-budgets.md).

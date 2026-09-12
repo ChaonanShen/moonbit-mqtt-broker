@@ -316,3 +316,10 @@ QoS 2 日常入口：scripts/verify-qos2-docker.sh。累计 verify-release.sh（
 容器 root 的差异；不修改宿主机 Git 配置，也不放宽任意目录信任。
 
 Protocol, security and large-load functional fixtures explicitly disable rate/IP policy where their workload would exceed the new defaults. Byte accounting remains enabled. Dedicated resource tests cover enabled policy; disabling limits in a functional fixture is not evidence that rate admission passed.
+
+
+## P0-02 资源门禁
+
+独立入口 `scripts/verify-resource-limits-docker.sh` 包含 Native 全量测试和资源网络矩阵。累计 `verify-release.sh` 已调用 `verify-resource-limits.sh`，严格 distribution/CI 因而覆盖该门禁。矩阵保持限流开启，覆盖原子 retained/fanout、QoS2 重复与持久桶、真实 Argon2 尝试、TLS 前 IP 门禁、raw 字节单次计费、慢消费者、低预算恢复不改文件及最后快照失败退出。负载用例只对其专用高流量 profile 显式关闭 rate/IP 策略，字节预算持续有效。
+
+日志输出 `RESOURCE_RESULTS` 保存逻辑占用断言、RSS 峰值和 PING 延迟；RSS 不与逻辑预算直接等同。快照 FIFO 负向测试同时设置终止和强制结束超时，超时退出不是通过。

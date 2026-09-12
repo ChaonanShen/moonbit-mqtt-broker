@@ -77,5 +77,10 @@ topic read $SYS/broker/#
 相同 Client ID，即使 Broker 已经重启也不允许。
 
 Disk V1 会话迁移为 `legacy-anonymous`，且只能由匿名连接恢复；下一次提交会
-写为 V2。快照中包含 Client ID、过滤器和应用消息负载，因此必须保护数据目录。
+写为 V3。快照中包含 Client ID、过滤器和应用消息负载，因此必须保护数据目录。
 
+
+
+## 认证资源准入
+
+完整且需要密码校验的请求先消费一次全局/IP 认证 token，再预留输入和已验证 PHC 对应的保守工作费用。密码错误、未知用户名和后续资源不足不会退还已消费的 token。匿名路径不占 hash 任务额度，但仍受连接/传输限制。当前校验仍同步执行，P0-03 的 worker 隔离、取消运行中原生任务和策略 generation 生命周期尚未实现。详见[资源契约](resource-budgets.md)。

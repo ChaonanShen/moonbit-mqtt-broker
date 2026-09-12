@@ -43,7 +43,7 @@ security example, read the [getting-started guide](docs/getting-started.md).
 | Lifecycle | PING, Keep Alive, QoS 0/1/2 Wills, graceful SIGTERM/SIGINT shutdown |
 | Persistence | Optional local checksummed snapshots with strict startup recovery |
 | Security | Optional Argon2id passwords, allow-only ACLs, Principal-owned Sessions |
-| Operations | TOML configuration, resource limits, `$SYS/broker/#` metrics, text/JSON logs |
+| Operations | TOML configuration, byte budgets and connection/auth/publish rate limits, `$SYS/broker/#` metrics, text/JSON logs |
 
 MQTT 5, WebSocket, shared subscriptions, bridges, plugins, clustering,
 external databases, WAL, and zero-loss durability are intentionally out of
@@ -52,6 +52,11 @@ not synchronous message durability. See the [compatibility matrix](docs/compatib
 contract and limitations.
 
 ## Configuration
+
+The broker enforces [logical byte budgets and admission policies](docs/resource-budgets.md).
+Global and per-IP limits apply before TLS; already accepted QoS 2 handshakes do not
+consume new-publication tokens. Logical bytes are not an RSS cap. Slow authentication
+still uses the synchronous verifier; executor isolation is separate work.
 
 Start with explicit resource bounds:
 

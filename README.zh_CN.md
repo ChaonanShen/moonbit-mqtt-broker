@@ -42,7 +42,7 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 | 生命周期 | PING、Keep Alive、QoS 0/1/2 Will、SIGTERM/SIGINT 优雅退出 |
 | 持久化 | 可选本地校验快照和严格启动恢复 |
 | 安全 | 可选 Argon2id 密码、仅允许式 ACL、Principal 所有权会话 |
-| 运维 | TOML 配置、资源限制、`$SYS/broker/#` 指标、文本/JSON 日志 |
+| 运维 | TOML 配置、字节预算与连接/认证/发布限流、`$SYS/broker/#` 指标、文本/JSON 日志 |
 
 MQTT 5、WebSocket、共享订阅、Bridge、插件、集群、外部数据库、
 WAL 和零丢失持久化明确不在本版本范围内。可选持久化只保证恢复到最近一次
@@ -50,6 +50,10 @@ WAL 和零丢失持久化明确不在本版本范围内。可选持久化只保�
 [兼容性矩阵](docs/compatibility.zh_CN.md)。
 
 ## 配置
+
+Broker 已接入[逻辑字节预算与准入策略](docs/resource-budgets.md)。全局/IP 连接
+准入在 TLS 前生效，已接纳的 QoS 2 握手不重复扣新发布额度。逻辑字节不是 RSS
+上限；当前耗时认证仍使用同步校验器，执行隔离属于后续独立工作。
 
 建议显式设置资源上限：
 
