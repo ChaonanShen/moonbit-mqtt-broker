@@ -5,6 +5,15 @@ import {
 }
 
 options(
-  "native-stub": [ "argon2_backend.c", "auth_executor.c", "password_verify.c" ],
-  targets: { "password.mbt": [ "native" ] },
+  "native-stub": [
+    "argon2_backend.c",
+    "auth_executor.c",
+    "auth_executor_ffi.c",
+    "password_verify.c",
+  ],
+  targets: {
+    "password.mbt": [ "native" ],
+    "auth_executor.mbt": [ "native" ],
+    "auth_executor_test.mbt": [ "native" ],
+  },
 )

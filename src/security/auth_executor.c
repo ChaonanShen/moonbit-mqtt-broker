@@ -407,6 +407,30 @@ int moonbit_mqtt_auth_executor_poll(
   return 1;
 }
 
+int moonbit_mqtt_auth_executor_completion(
+  moonbit_mqtt_auth_executor *executor,
+  int64_t task_id,
+  int *result,
+  int64_t *verify_ns
+) {
+  if (executor == NULL || task_id <= 0 || result == NULL || verify_ns == NULL) {
+    return MOONBIT_MQTT_AUTH_INVALID;
+  }
+  if (pthread_mutex_trylock(&executor->lock) != 0) {
+    return MOONBIT_MQTT_AUTH_RETRY_LATER;
+  }
+  auth_task *task = find_task(executor, task_id);
+  if (task == NULL ||
+      atomic_load_explicit(&task->state, memory_order_acquire) != AUTH_TASK_COMPLETED) {
+    pthread_mutex_unlock(&executor->lock);
+    return MOONBIT_MQTT_AUTH_INVALID;
+  }
+  *result = task->result;
+  *verify_ns = task->verify_ns;
+  pthread_mutex_unlock(&executor->lock);
+  return MOONBIT_MQTT_AUTH_SUBMITTED;
+}
+
 int moonbit_mqtt_auth_executor_reap(
   moonbit_mqtt_auth_executor *executor,
   int64_t task_id
