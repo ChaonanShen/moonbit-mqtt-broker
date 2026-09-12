@@ -14,6 +14,7 @@ while IFS= read -r -d '' file; do
     *) echo "Untracked candidate file must be committed or ignored first: ${file}" >&2; exit 1 ;;
   esac
 done < <(git ls-files --others --exclude-standard -z)
+command -v python3 >/dev/null || { echo 'Python 3 is required on the Docker host for release reference validation tests' >&2; exit 1; }
 readonly SOURCE_SHA="$(git rev-parse HEAD)"
 readonly RUN_ID="${SOURCE_SHA:0:12}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 readonly DEV_IMAGE="${MOONBIT_MQTT_IMAGE:-moonbit-mqtt-broker-dev}"
@@ -40,6 +41,7 @@ finish() {
 }
 trap finish EXIT
 trap 'printf "DISTRIBUTION_FAILED_AT_LINE=%s\n" "$LINENO" >&2' ERR
+python3 -B tools/runtime_reference_test.py
 printf 'source_commit=%s\nstarted_at=%s\nsoak=%s\n' "${SOURCE_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${RELEASE_SOAK:-0}" >"${RESULTS}/evidence.txt"
 readonly RUNTIME_REFERENCE="${DISTRIBUTION_RUNTIME_REFERENCE:-}"
 if [[ -n "${RUNTIME_REFERENCE}" ]]; then
