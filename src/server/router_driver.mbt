@@ -4,6 +4,7 @@ pub struct RouterDriver {
   sinks : Map[ConnectionId, TransportSink]
   priv snapshot : SnapshotDriverState?
   priv auth_executor : @security.AuthExecutor?
+  priv mut auth_infrastructure : @budget.Ticket?
   priv auth_cancels : Map[Int64, Bool]
   priv auth_reaps : Map[Int64, Bool]
 }
@@ -41,6 +42,7 @@ pub fn RouterDriver::new(
   runtime : BrokerRuntime,
   snapshot? : SnapshotDriverConfig,
   auth_executor? : @security.AuthExecutor,
+  auth_infrastructure? : @budget.Ticket,
 ) -> RouterDriver {
   let snapshot = snapshot.map(config => SnapshotDriverState::{
     oldest_uncommitted_ms: None,
@@ -58,6 +60,7 @@ pub fn RouterDriver::new(
     sinks: Map([]),
     snapshot,
     auth_executor,
+    auth_infrastructure,
     auth_cancels: Map([]),
     auth_reaps: Map([]),
   }
@@ -278,7 +281,11 @@ pub async fn RouterDriver::shutdown_authentication(self : RouterDriver) -> Unit 
       self.runtime.auth_task_count() == 0 &&
       self.auth_reaps.length() == 0 {
       match executor.destroy() {
-        ControlDone => return
+        ControlDone => {
+          release_optional(self.auth_infrastructure)
+          self.auth_infrastructure = None
+          return
+        }
         _ => ()
       }
     }

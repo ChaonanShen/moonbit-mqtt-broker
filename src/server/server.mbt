@@ -75,20 +75,47 @@ async fn wait_for_shutdown(
 fn create_auth_executor(
   config : ServerConfig,
   security : @security.SecurityPolicy,
-) -> @security.AuthExecutor? raise ResourceStartupFailure {
+  ledger : @budget.Ledger,
+) -> (@security.AuthExecutor, @budget.Ticket)? raise ResourceStartupFailure {
   if !security.has_passwords() {
     return None
   }
+  let limits = config.broker_config().resources()
+  let infrastructure = ledger
+    .pool(Infrastructure, limits.get("max_managed_bytes_total"))
+    .unwrap()
+  let requests = ledger
+    .pool(AuthRequest, limits.get("max_auth_request_bytes_total"))
+    .unwrap()
+  let results = ledger
+    .pool(AuthResult, limits.get("max_auth_result_bytes_total"))
+    .unwrap()
+  let records = (config.auth_workers() + config.auth_queue_limit()).to_int64()
+  let ticket = match
+    ledger.reserve([
+      infrastructure.allocation(config.auth_workers().to_int64() * 65536L),
+      requests.allocation(records * 256L),
+      results.allocation(records * 128L),
+    ]) {
+    Ok(value) => value
+    Err(_) =>
+      raise ResourceStartupFailure(
+        "resource budget cannot initialize authentication executor",
+      )
+  }
+  ticket.commit().unwrap()
   match
     @security.AuthExecutor::new(
       config.auth_workers(),
       config.auth_queue_limit(),
     ) {
-    Ok(executor) => Some(executor)
-    Err(_) =>
+    Ok(executor) => Some((executor, ticket))
+    Err(_) => {
+      ticket.release().unwrap()
       raise ResourceStartupFailure(
         "password authentication executor failed to initialize",
       )
+    }
   }
 }
 
@@ -111,7 +138,19 @@ pub async fn serve(
       raise ResourceStartupFailure("resource budget cannot initialize server")
   }
   defer bus.close()
-  let auth_executor = create_auth_executor(config, security)
+  let auth_runtime = create_auth_executor(
+    config,
+    security,
+    initial_state.resource_ledger(),
+  )
+  let auth_executor = match auth_runtime {
+    Some((executor, _)) => Some(executor)
+    None => None
+  }
+  let auth_infrastructure = match auth_runtime {
+    Some((_, ticket)) => Some(ticket)
+    None => None
+  }
   let metrics = BrokerMetrics::new(@async.now())
   let runtime = BrokerRuntime::new(
     config,
@@ -124,8 +163,13 @@ pub async fn serve(
   )
   let driver = match persistence {
     Some(value) =>
-      RouterDriver::new(runtime, snapshot=value.driver_config(), auth_executor?)
-    None => RouterDriver::new(runtime, auth_executor?)
+      RouterDriver::new(
+        runtime,
+        snapshot=value.driver_config(),
+        auth_executor?,
+        auth_infrastructure?,
+      )
+    None => RouterDriver::new(runtime, auth_executor?, auth_infrastructure?)
   }
   let allocator = ConnectionIdAllocator::new()
   run_with_snapshot_writer(persistence, driver, () => {
@@ -222,7 +266,19 @@ pub async fn serve_once(
       raise ResourceStartupFailure("resource budget cannot initialize server")
   }
   defer bus.close()
-  let auth_executor = create_auth_executor(config, security)
+  let auth_runtime = create_auth_executor(
+    config,
+    security,
+    initial_state.resource_ledger(),
+  )
+  let auth_executor = match auth_runtime {
+    Some((executor, _)) => Some(executor)
+    None => None
+  }
+  let auth_infrastructure = match auth_runtime {
+    Some((_, ticket)) => Some(ticket)
+    None => None
+  }
   let metrics = BrokerMetrics::new(@async.now())
   let runtime = BrokerRuntime::new(
     config,
@@ -235,8 +291,13 @@ pub async fn serve_once(
   )
   let driver = match persistence {
     Some(value) =>
-      RouterDriver::new(runtime, snapshot=value.driver_config(), auth_executor?)
-    None => RouterDriver::new(runtime, auth_executor?)
+      RouterDriver::new(
+        runtime,
+        snapshot=value.driver_config(),
+        auth_executor?,
+        auth_infrastructure?,
+      )
+    None => RouterDriver::new(runtime, auth_executor?, auth_infrastructure?)
   }
   run_with_snapshot_writer(persistence, driver, () => {
     @async.with_task_group() <| group => {
