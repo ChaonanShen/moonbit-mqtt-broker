@@ -4,7 +4,7 @@ suberror CliError {
 } derive(Debug)
 
 ///|
-const RELEASE_VERSION : String = "0.1.0"
+const RELEASE_VERSION : String = "0.2.0"
 
 ///|
 fn print_help() -> Unit {

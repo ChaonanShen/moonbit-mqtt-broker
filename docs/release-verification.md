@@ -185,10 +185,10 @@ Recommit and rerun after changes to production code, tests, C FFI, build scripts
 
 Every new native library needs a dependency/version declaration, installation instructions, real positive coverage, a missing-library case and appropriate inventory assertions. Expand the matrix before claiming another OS, architecture or toolchain.
 
-Current scripts still contain `0.1.0` filenames/assertions and legacy tag checks. For a new release, review the manifest, CLI version, CHANGELOG, documentation and affected checks together:
+Release metadata for version 0.2.0 is deliberately checked across the manifest, CLI, system metrics, package filenames, CHANGELOG, documentation and affected tests:
 
 ```bash
-git grep -n '0\.1\.0' -- moon.mod src/cmd/broker scripts tests/integration README.md README.zh_CN.md CHANGELOG.md
+git grep -n 0\.2\.0 -- moon.mod src/cmd/broker scripts tests/integration README.md README.zh_CN.md CHANGELOG.md
 ```
 
 Do not blindly replace fixture values or third-party dependency versions. Version changes must precede verification, not follow it immediately before publishing.
@@ -198,6 +198,8 @@ Do not blindly replace fixture values or third-party dependency versions. Versio
 Provide the evaluator with the complete candidate commit, supported environment, reproduction command, final successful result directory, package digest and soak settings. Explicitly state omitted or infrastructure-blocked checks. Other environments and external hidden tests are not covered automatically.
 
 Keep publication consistent with the verified candidate. If a publishing tool regenerates a ZIP, do not assume another file is the tested artifact without checking; changed candidate contents or packaging require verification. Creating `package.zip` does not upload it or guarantee that an existing registry version can be replaced.
+
+After a successful soak run, pass its result directory as `RELEASE_EVIDENCE_DIR` and its `package.zip` as `RELEASE_PACKAGE_PATH` to `scripts/release-check.sh`. The preflight confirms that the commit, four runtime profiles, hashes and package all describe the same candidate.
 
 ```text
 Candidate version:
@@ -221,7 +223,7 @@ Published version/commit/artifact correspondence:
 - [check-package.sh](../scripts/check-package.sh): package audit and reconstruction; strict runs additionally test/export Release output.
 - [check-argon2.sh](../scripts/check-argon2.sh) and [argon2_environment.sh](../tests/integration/argon2_environment.sh): fixture and missing-runtime diagnostics.
 - [release-gate.sh](../scripts/release-gate.sh): legacy three-pass plus soak workflow; does not automatically invoke the new matrix and cannot replace the strict entry point.
-- [release-check.sh](../scripts/release-check.sh): legacy manual preflight with version/tag/record-format assumptions; new evidence is not its old record format.
+- [release-check.sh](../scripts/release-check.sh): read-only final preflight that matches the package to strict four-profile soak evidence and the candidate commit.
 
 CI runs on push, pull request and manual dispatch; manual dispatch can enable soak. The job timeout is 45 minutes. Artifacts can be uploaded from failed jobs, so their presence is not evidence of a successful job. Update this runbook with changes to the scripts or CI.
 
@@ -248,7 +250,7 @@ changing the host Git configuration or trusting arbitrary directories.
 Protocol, security and large-load functional fixtures explicitly disable rate/IP policy where their workload would exceed the new defaults. Byte accounting remains enabled. Dedicated resource tests cover enabled policy; disabling limits in a functional fixture is not evidence that rate admission passed.
 
 
-## P0-02 resource gate
+## Resource budgets and authentication isolation gates
 
 `scripts/verify-resource-limits-docker.sh` runs all Native tests plus the resource network matrix. The cumulative `verify-release.sh` calls `verify-resource-limits.sh`, so strict distribution/CI includes the gate. Enabled-policy cases cover retained/fanout rollback, QoS2 duplicates and persistent buckets, real Argon2 attempts, pre-TLS IP admission, single-debit raw ingress, slow consumers, non-mutating low-budget restore and failed final snapshots. Only the dedicated high-volume profile disables rate/IP policy; byte accounting stays enabled.
 

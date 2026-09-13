@@ -102,7 +102,7 @@ if (observer.messages.some(message => message.topic === '$SYS/broker/forged')) {
 }
 const values = () => observer.metricCycles.at(-1)
 const first = values()
-if (first['$SYS/broker/version'] !== '0.1.0') throw new Error('version metric mismatch')
+if (first['$SYS/broker/version'] !== '0.2.0') throw new Error('version metric mismatch')
 if (first['$SYS/broker/persistence/state'] !== 'healthy') throw new Error('persistence metric mismatch')
 if (Number(first['$SYS/broker/messages/received']) < 2) throw new Error('received counter too small')
 if (Number(first['$SYS/broker/messages/dropped']) < 1) throw new Error('dropped counter too small')

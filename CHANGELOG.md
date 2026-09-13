@@ -4,11 +4,30 @@ All notable user-visible changes are documented here.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-13
+
 - Implement MQTT 3.1.1 QoS 2 in both directions: duplicate handling, persistent
   reconnect, retained/Will, bounded inbound state and shared QoS 1/2 pending limits.
-- Write Snapshot/Disk V3 with inbound IDs and outbound phases; retain strict V1/V2 readers.
-- Add native, oracle, raw TCP, crash recovery and MQTT.js/Mosquitto QoS 2 gates.
+- Write Snapshot/Disk V3 with inbound IDs and outbound phases while retaining
+  strict V1/V2 readers.
+- Add unified logical byte budgets for sessions, routing, transport, snapshots and
+  authentication, plus default-enabled global/per-IP connection, authentication
+  and publish admission limits.
+- Run Argon2id verification on a bounded native worker executor with PHC cost
+  validation, queue saturation handling, timeouts, cancellation-safe cleanup and
+  bounded operational metrics so expensive password checks do not block routing.
+- Expand release verification with QoS 2 recovery and interoperability, resource
+  saturation, authentication isolation, sanitizer coverage, four minimal runtime
+  profiles, an optional ten-minute soak and reproducible artifact hashes.
 - Preserve latest-committed snapshot durability; acknowledgements do not imply fsync.
+
+### Upgrade notes
+
+- Stop the old broker and back up its complete data directory before upgrading.
+  After version 0.2.0 writes a V3 snapshot, version 0.1.0 cannot read it; rollback
+  requires restoring the pre-upgrade backup.
+- Connection, authentication and publish rate policies are enabled by default.
+  Review the documented limits before upgrading high-volume or NAT-heavy deployments.
 
 ## [0.1.0] - 2026-08-24
 

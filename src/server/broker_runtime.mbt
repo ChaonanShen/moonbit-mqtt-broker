@@ -1198,7 +1198,7 @@ fn BrokerRuntime::emit_system_metrics(
     return []
   }
   let values : Array[(String, String)] = [
-    ("version", "0.1.0"),
+    ("version", "0.2.0"),
     ("uptime_seconds", self.metrics.uptime_seconds(event.now_ms).to_string()),
     ("clients/connected", self.active_by_client.length().to_string()),
     ("sessions/count", state.session_count().to_string()),

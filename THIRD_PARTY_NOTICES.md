@@ -1,7 +1,7 @@
 # Third-party notices
 
 This project is Apache License 2.0. The following software, standards, and
-reference projects are used or consulted for version 0.1.0.
+reference projects are used or consulted for version 0.2.0.
 
 | Item | Version / baseline | License | Use |
 | --- | --- | --- | --- |

@@ -6,10 +6,18 @@
 
 一个使用 MoonBit 实现的轻量级、单机 MQTT 3.1.1 Broker。
 
-`0.1.0` 是一个可实际运行的 Linux x86_64 Native 版本，适用于小型部署、
+`0.2.0` 是一个可实际运行的 Linux x86_64 Native 版本，适用于小型部署、
 本地开发、互操作测试和 MoonBit MQTT 应用。它支持多个 TCP 或 TLS 客户端、
 QoS 0/1/2、通配符订阅、保留消息、Will、Keep Alive、持久会话、可选的重启
 持久化、身份认证、ACL、指标、结构化日志和 TOML 配置。
+
+## 0.2.0 新增功能
+
+- 完整的双向 QoS 2，包括重复包处理、重连重放、离线投递、保留消息、Will 和 Snapshot V3 恢复。
+- 逻辑字节预算以及默认启用的连接、认证和发布准入限制，让过载行为保持有界。
+- 有界原生认证执行器将耗时的 Argon2id 校验移出路由主循环，并通过稳定指标报告饱和状态。
+
+持久化部署升级前，请阅读 [V3 迁移与回滚说明](docs/persistence.zh_CN.md)，并核对[默认资源与限流配置](docs/configuration.zh_CN.md)。
 
 ## 快速开始
 
@@ -33,7 +41,7 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 
 ## 功能
 
-| 范围 | 0.1.0 支持情况 |
+| 范围 | 0.2.0 支持情况 |
 | --- | --- |
 | 协议 | 基于 TCP 或 TLS 的 MQTT 3.1.1 |
 | 消息投递 | QoS 0/1/2 发布订阅；出站按阶段重放 PUBLISH/PUBREL |
