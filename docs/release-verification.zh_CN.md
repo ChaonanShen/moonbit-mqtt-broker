@@ -251,10 +251,10 @@ CI artifact 名称是 `distribution-evidence`，默认保留 7 天。CI 不上�
 
 新增外部库时，应同时补充：库名称与支持版本、安装说明、正常功能用例、缺库负向用例，以及相关 profile 的实际库清单断言。若开始声称支持新的系统或工具链，应扩展矩阵，而不是沿用 Ubuntu 24.04 的通过结论。
 
-当前脚本中仍有针对 `0.1.0` 的文件名、版本断言和旧标签检查。准备下一版本时，应一起核对 `moon.mod`、CLI 版本常量、CHANGELOG、文档和这些断言，例如：
+0.2.0 的版本元数据会在 manifest、CLI、系统指标、包文件名、CHANGELOG、文档和相关测试中显式核对：
 
 ```bash
-git grep -n '0\.1\.0' -- moon.mod src/cmd/broker scripts tests/integration README.md README.zh_CN.md CHANGELOG.md
+git grep -n 0\.2\.0 -- moon.mod src/cmd/broker scripts tests/integration README.md README.zh_CN.md CHANGELOG.md
 ```
 
 不要盲目替换测试数据或第三方版本字符串。版本号更新本身也改变候选包，因此不能在验证成功后再临时改版本发布。
@@ -266,6 +266,8 @@ git grep -n '0\.1\.0' -- moon.mod src/cmd/broker scripts tests/integration READM
 本流程只验证候选，不会检查完所有外部评审隐藏用例，也不会替另一台机器安装系统库。评审应使用声明的环境；若对方环境不同，应取得版本/命令/堆栈后按差异复现。
 
 发布必须保持候选内容与成功记录一致。若发布工具重新生成 ZIP，不应未经核对就把另一个 ZIP 当作已经测试的产物；候选内容或打包结果变化后需要重新验证。脚本产生 `package.zip` 不代表它已经上传，也不代表能覆盖注册表中的同版本模块。
+
+完整 soak 成功后，将结果目录通过 `RELEASE_EVIDENCE_DIR` 传给 `scripts/release-check.sh`，并把同一目录的 `package.zip` 设为 `RELEASE_PACKAGE_PATH`。该预检会确认提交、四种运行环境、哈希与待发布包属于同一候选。
 
 可复用的发布记录模板：
 
@@ -294,7 +296,7 @@ package.zip SHA-256：
 | [check-argon2.sh](../scripts/check-argon2.sh) | 用参考 CLI 独立核验内嵌 fixture |
 | [argon2_environment.sh](../tests/integration/argon2_environment.sh) | 检查缺库时测试与 Broker 的错误处理 |
 | [release-gate.sh](../scripts/release-gate.sh) | 旧的三轮累计回归加 soak；没有自动接入新的四环境入口，不能替代严格发布验证 |
-| [release-check.sh](../scripts/release-check.sh) | 旧版人工发布预检；有 `0.1.0`、标签和旧记录格式约束，不能直接读取新的 evidence 当作旧记录 |
+| [release-check.sh](../scripts/release-check.sh) | 只读最终预检；核对候选提交、四环境 soak 证据与待发布包一致 |
 
 CI 在 push、pull request 和手动触发时运行；手动触发可选择 soak。修改 CI 或这些脚本时，应同步本手册，并以完整退出结果判断完成，不能仅凭 artifact 被上传判断 job 成功。
 
@@ -318,7 +320,7 @@ QoS 2 日常入口：scripts/verify-qos2-docker.sh。累计 verify-release.sh（
 Protocol, security and large-load functional fixtures explicitly disable rate/IP policy where their workload would exceed the new defaults. Byte accounting remains enabled. Dedicated resource tests cover enabled policy; disabling limits in a functional fixture is not evidence that rate admission passed.
 
 
-## P0-02 资源门禁
+## 资源预算与认证隔离门禁
 
 独立入口 `scripts/verify-resource-limits-docker.sh` 包含 Native 全量测试和资源网络矩阵。累计 `verify-release.sh` 已调用 `verify-resource-limits.sh`，严格 distribution/CI 因而覆盖该门禁。矩阵保持限流开启，覆盖原子 retained/fanout、QoS2 重复与持久桶、真实 Argon2 尝试、TLS 前 IP 门禁、raw 字节单次计费、慢消费者、低预算恢复不改文件及最后快照失败退出。负载用例只对其专用高流量 profile 显式关闭 rate/IP 策略，字节预算持续有效。
 

@@ -9,8 +9,8 @@
 | TCP split/sticky packet framing | Supported | Capacity-aware reader plus bounded three-state decoder |
 | Equal packet/receive limits | Supported | 16/16 boundary covers complete CONNECT plus sticky PINGREQ |
 | Packet codec for QoS 0/1/2 families | Supported | Complete-frame adapter; Packet ID/DUP combinations gated |
-| MQTT.js 5.15.2 interoperability | Supported for 0.1.0 | QoS 0/1/2, retained/Will, persistent Session and multi-process restart |
-| Mosquitto 2.0.18 interoperability | Supported for 0.1.0 | QoS 0/1/2, retained and persistent offline restart delivery |
+| MQTT.js 5.15.2 interoperability | Supported for 0.2.0 | QoS 0/1/2, retained/Will, persistent Session and multi-process restart |
+| Mosquitto 2.0.18 interoperability | Supported for 0.2.0 | QoS 0/1/2, retained and persistent offline restart delivery |
 | Aedes 1.1.1 reference matrix | Test-only | Normalized common behavior; no runtime dependency or plugin compatibility claim |
 | Topic validation and PUBLISH/SUBSCRIBE routing | Supported | `+`, `#`, `$SYS`, overlap merge, deterministic order |
 | Keep Alive and PING | Supported | 1.5× deadline; zero disables idle timeout |
@@ -27,8 +27,10 @@
 | State across Broker restart | Supported when `--data-dir` is set | Debounced local snapshot to latest committed revision |
 | SIGTERM / SIGINT shutdown | Supported | Stops normally, suppresses active Wills, forces and drains latest Snapshot |
 | TLS listener | Supported, opt-in | TLS-only single listener; PEM startup validation and bounded handshakes |
-| MQTT.js/Mosquitto over TLS | Supported for 0.1.0 | QoS 0/1/2, retained, persistent Session and restart recovery |
+| MQTT.js/Mosquitto over TLS | Supported for 0.2.0 | QoS 0/1/2, retained, persistent Session and restart recovery |
 | Argon2id authentication | Supported, opt-in | Encoded hashes only; anonymous allowed by default |
+| Bounded authentication executor | Supported | Native worker/queue limits, timeout and cancellation-safe cleanup |
+| Resource and rate admission | Supported, enabled by default | Logical byte budgets plus connection/authentication/publish policies |
 | Static allow-only ACL | Supported, opt-in | Read/write filters, partial SUBACK, `$SYS` client-write denial |
 | Principal-owned Client IDs | Supported | Cross-Principal takeover/clean/resume rejected across restart |
 | Persistent Session expiry | Supported, opt-in | Default never; active Sessions excluded; bounded deterministic sweeps |

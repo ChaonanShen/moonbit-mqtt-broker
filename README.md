@@ -6,11 +6,19 @@
 
 A lightweight, single-node MQTT 3.1.1 broker implemented in MoonBit.
 
-Version `0.1.0` is a usable Linux x86_64 Native release for small deployments,
+Version `0.2.0` is a usable Linux x86_64 Native release for small deployments,
 local development, interoperability testing, and MoonBit MQTT applications. It
 supports multiple TCP or TLS clients, QoS 0/1/2, wildcard subscriptions, retained
 messages, Wills, Keep Alive, persistent Sessions, optional restart persistence,
 authentication, ACLs, metrics, structured logs, and TOML configuration.
+
+## What is new in 0.2.0
+
+- Complete bidirectional QoS 2 with duplicate handling, reconnect replay, offline delivery, retained messages, Wills and Snapshot V3 recovery.
+- Logical byte budgets and default-enabled connection, authentication and publish admission limits keep overload bounded.
+- A bounded native authentication executor keeps expensive Argon2id verification off the routing loop and reports saturation through stable metrics.
+
+Before upgrading a persistent deployment, read the [V3 migration and rollback notes](docs/persistence.md) and review the [default resource and rate limits](docs/configuration.md).
 
 ## Quick start
 
@@ -34,7 +42,7 @@ security example, read the [getting-started guide](docs/getting-started.md).
 
 ## Features
 
-| Area | Version 0.1.0 |
+| Area | Version 0.2.0 |
 | --- | --- |
 | Protocol | MQTT 3.1.1 over TCP or TLS |
 | Delivery | QoS 0/1/2 publish/subscribe; phase-aware PUBLISH/PUBREL replay |

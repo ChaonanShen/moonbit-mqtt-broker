@@ -9,8 +9,8 @@
 | TCP 拆包/粘包 framing | 支持 | 感知容量的 reader 和有界三态 decoder |
 | 相同 packet/receive 上限 | 支持 | 16/16 边界覆盖完整 CONNECT 加粘连 PINGREQ |
 | QoS 0/1/2 packet codec | 支持 | 完整 frame adapter；校验 Packet ID/DUP 组合 |
-| MQTT.js 5.15.2 互操作 | 0.1.0 支持 | QoS 0/1/2、retained/Will、Persistent Session 和跨进程重启 |
-| Mosquitto 2.0.18 互操作 | 0.1.0 支持 | QoS 0/1/2、retained 和 Persistent Session 离线重启投递 |
+| MQTT.js 5.15.2 互操作 | 0.2.0 支持 | QoS 0/1/2、retained/Will、Persistent Session 和跨进程重启 |
+| Mosquitto 2.0.18 互操作 | 0.2.0 支持 | QoS 0/1/2、retained 和 Persistent Session 离线重启投递 |
 | Aedes 1.1.1 参考矩阵 | 仅测试 | 比较规范化的公共行为；不是运行时依赖，也不声明插件兼容性 |
 | Topic 校验与路由 | 支持 | `+`、`#`、`$SYS`、重叠合并和确定性顺序 |
 | Keep Alive 和 PING | 支持 | 1.5 倍 deadline；零表示禁用空闲超时 |
@@ -27,8 +27,10 @@
 | Broker 重启后状态 | 设置 `--data-dir` 时支持 | debounce 本地快照，恢复到最近提交 revision |
 | SIGTERM / SIGINT 退出 | 支持 | 正常停止、抑制活动 Will、强制并排空最新 Snapshot |
 | TLS listener | 可选支持 | 单个纯 TLS listener；启动时校验 PEM，握手有界 |
-| MQTT.js/Mosquitto TLS | 0.1.0 支持 | QoS 0/1/2、retained、Persistent Session 和重启恢复 |
+| MQTT.js/Mosquitto TLS | 0.2.0 支持 | QoS 0/1/2、retained、Persistent Session 和重启恢复 |
 | Argon2id 认证 | 可选支持 | 只接受编码哈希；默认允许匿名 |
+| 有界认证执行器 | 支持 | 原生 worker/队列上限、超时和取消安全清理 |
+| 资源与速率准入 | 支持，默认启用 | 逻辑字节预算及连接/认证/发布策略 |
 | 静态仅允许式 ACL | 可选支持 | 读/写过滤、部分 SUBACK、禁止客户端写 `$SYS` |
 | Principal 所有 Client ID | 支持 | 跨 Principal 接管、清理和恢复在重启后仍被拒绝 |
 | Persistent Session 过期 | 可选支持 | 默认永不过期；排除活动 Session；有界确定性扫描 |

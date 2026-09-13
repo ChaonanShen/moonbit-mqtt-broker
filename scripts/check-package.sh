@@ -23,7 +23,7 @@ done < <(git -c safe.directory="${REPO_ROOT}" ls-files --cached --others --exclu
   moon package --frozen --list >/dev/null 2>&1
   moon package --frozen >/dev/null 2>&1
 )
-readonly STAGED_PACKAGE="${source_stage}/_build/publish/ChaonanShen-moonbit-mqtt-broker-0.1.0.zip"
+readonly STAGED_PACKAGE="${source_stage}/_build/publish/ChaonanShen-moonbit-mqtt-broker-0.2.0.zip"
 test -f "${STAGED_PACKAGE}"
 unzip -Z1 "${STAGED_PACKAGE}" >"${package_list}"
 if grep -Eiq '(^|/)(\.git|_build|target|\.moon(cakes)?|node_modules|test-results|coverage|tmp)(/|$)|(^|/)\.env($|\.)|\.local($|\.)|broker\.snapshot|broker\.lock|\.DS_Store|credentials' "${package_list}"; then
@@ -45,7 +45,7 @@ if grep -Ev '^(moon\.mod|README(\.zh_CN)?\.md|LICENSE|CHANGELOG\.md|THIRD_PARTY_
   exit 1
 fi
 
-readonly PACKAGE="${REPO_ROOT}/_build/publish/ChaonanShen-moonbit-mqtt-broker-0.1.0.zip"
+readonly PACKAGE="${REPO_ROOT}/_build/publish/ChaonanShen-moonbit-mqtt-broker-0.2.0.zip"
 mkdir -p "$(dirname "${PACKAGE}")"
 cp "${STAGED_PACKAGE}" "${PACKAGE}"
 file_count="$(unzip -Z1 "${PACKAGE}" | wc -l | tr -d ' ')"
@@ -67,7 +67,7 @@ fi
   moon test --target native --frozen --deny-warn
   moon build --target native --frozen
   version="$(moon run --target native src/cmd/broker -- --version)"
-  [[ "${version}" = '0.1.0' ]]
+  [[ "${version}" = '0.2.0' ]]
   if [[ -n "${RELEASE_ARTIFACT_DIR:-}" ]]; then
     moon test --target native --release --frozen --deny-warn
     moon build --target native --release --frozen

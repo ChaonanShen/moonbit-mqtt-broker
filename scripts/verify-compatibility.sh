@@ -28,7 +28,7 @@ for gate in \
   'restart persistence example passes' \
   'release package excludes local cache credentials and runtime state' \
   'release package builds and runs outside the source checkout' \
-  'release metadata is consistently versioned 0.1.0'; do
+  'release metadata is consistently versioned 0.2.0'; do
   rg -qF "${gate}" scripts tests/integration || { echo "RELEASE exact gate is missing: ${gate}" >&2; exit 1; }
 done
 
