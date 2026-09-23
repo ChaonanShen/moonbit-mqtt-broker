@@ -46,6 +46,24 @@ fn print_help() -> Unit {
   println("  --management-request-burst N  Default 100")
   println("  --management-connection-rate N  Default 100")
   println("  --management-connection-burst N  Default 200")
+  println("  --management-details-enabled true|false  Default false")
+  println("  --management-operations-enabled true|false  Default false")
+  println("  --management-query-queue-limit N  Default 16")
+  println("  --management-operation-queue-limit N  Default 16")
+  println("  --management-max-operation-records N  Default 256")
+  println("  --management-max-running-operations N  Default 8")
+  println("  --management-operation-timeout-ms N  Default 30000")
+  println("  --management-operation-retention-ms N  Default 900000")
+  println("  --management-max-cursor-records N  Default 256")
+  println("  --management-cursor-ttl-ms N  Default 60000")
+  println("  --management-default-page-size N  Default 50")
+  println("  --management-max-page-size N  Default 100")
+  println("  --management-query-scan-limit N  Default 256")
+  println("  --management-query-timeout-ms N  Default 2000")
+  println("  --management-max-audit-records N  Default 1024")
+  println("  --management-command-rate N  Default 5")
+  println("  --management-command-burst N  Default 10")
+  println("  --management-max-index-bytes N  Default 8388608")
   println("  --management-max-bytes-total N  Default 8388608")
   println("  --max-connections N                Default 128")
   println("  --max-packet-size N                Default 1048576")
@@ -333,6 +351,24 @@ async fn run_main() -> Unit {
   let mut management_request_burst = 100
   let mut management_connection_rate = 100
   let mut management_connection_burst = 200
+  let mut management_details_enabled = false
+  let mut management_operations_enabled = false
+  let mut management_query_queue_limit = 16
+  let mut management_operation_queue_limit = 16
+  let mut management_max_operation_records = 256
+  let mut management_max_running_operations = 8
+  let mut management_operation_timeout_ms = 30000
+  let mut management_operation_retention_ms = 900000
+  let mut management_max_cursor_records = 256
+  let mut management_cursor_ttl_ms = 60000
+  let mut management_default_page_size = 50
+  let mut management_max_page_size = 100
+  let mut management_query_scan_limit = 256
+  let mut management_query_timeout_ms = 2000
+  let mut management_max_audit_records = 1024
+  let mut management_command_rate = 5
+  let mut management_command_burst = 10
+  let mut management_max_index_bytes = 8388608L
   let mut management_max_bytes_total = 8388608L
   let mut once = false
   let mut index = 1
@@ -704,6 +740,114 @@ async fn run_main() -> Unit {
         )
         index += 2
       }
+      "--management-details-enabled" => {
+        management_details_enabled = parse_bool_option(
+          args, index, "--management-details-enabled",
+        )
+        index += 2
+      }
+      "--management-operations-enabled" => {
+        management_operations_enabled = parse_bool_option(
+          args, index, "--management-operations-enabled",
+        )
+        index += 2
+      }
+      "--management-query-queue-limit" => {
+        management_query_queue_limit = parse_bounded_int(
+          args, index, "--management-query-queue-limit", 1,
+        )
+        index += 2
+      }
+      "--management-operation-queue-limit" => {
+        management_operation_queue_limit = parse_bounded_int(
+          args, index, "--management-operation-queue-limit", 1,
+        )
+        index += 2
+      }
+      "--management-max-operation-records" => {
+        management_max_operation_records = parse_bounded_int(
+          args, index, "--management-max-operation-records", 1,
+        )
+        index += 2
+      }
+      "--management-max-running-operations" => {
+        management_max_running_operations = parse_bounded_int(
+          args, index, "--management-max-running-operations", 1,
+        )
+        index += 2
+      }
+      "--management-operation-timeout-ms" => {
+        management_operation_timeout_ms = parse_bounded_int(
+          args, index, "--management-operation-timeout-ms", 1,
+        )
+        index += 2
+      }
+      "--management-operation-retention-ms" => {
+        management_operation_retention_ms = parse_bounded_int(
+          args, index, "--management-operation-retention-ms", 1,
+        )
+        index += 2
+      }
+      "--management-max-cursor-records" => {
+        management_max_cursor_records = parse_bounded_int(
+          args, index, "--management-max-cursor-records", 1,
+        )
+        index += 2
+      }
+      "--management-cursor-ttl-ms" => {
+        management_cursor_ttl_ms = parse_bounded_int(
+          args, index, "--management-cursor-ttl-ms", 1,
+        )
+        index += 2
+      }
+      "--management-default-page-size" => {
+        management_default_page_size = parse_bounded_int(
+          args, index, "--management-default-page-size", 1,
+        )
+        index += 2
+      }
+      "--management-max-page-size" => {
+        management_max_page_size = parse_bounded_int(
+          args, index, "--management-max-page-size", 1,
+        )
+        index += 2
+      }
+      "--management-query-scan-limit" => {
+        management_query_scan_limit = parse_bounded_int(
+          args, index, "--management-query-scan-limit", 1,
+        )
+        index += 2
+      }
+      "--management-query-timeout-ms" => {
+        management_query_timeout_ms = parse_bounded_int(
+          args, index, "--management-query-timeout-ms", 1,
+        )
+        index += 2
+      }
+      "--management-max-audit-records" => {
+        management_max_audit_records = parse_bounded_int(
+          args, index, "--management-max-audit-records", 1,
+        )
+        index += 2
+      }
+      "--management-command-rate" => {
+        management_command_rate = parse_bounded_int(
+          args, index, "--management-command-rate", 1,
+        )
+        index += 2
+      }
+      "--management-command-burst" => {
+        management_command_burst = parse_bounded_int(
+          args, index, "--management-command-burst", 1,
+        )
+        index += 2
+      }
+      "--management-max-index-bytes" => {
+        management_max_index_bytes = parse_bounded_int64(
+          args, index, "--management-max-index-bytes", 1L,
+        )
+        index += 2
+      }
       "--management-max-bytes-total" => {
         management_max_bytes_total = parse_bounded_int64(
           args, index, "--management-max-bytes-total", 1L,
@@ -833,6 +977,24 @@ async fn run_main() -> Unit {
       request_burst=management_request_burst,
       connection_rate=management_connection_rate,
       connection_burst=management_connection_burst,
+      details_enabled=management_details_enabled,
+      operations_enabled=management_operations_enabled,
+      query_queue_limit=management_query_queue_limit,
+      operation_queue_limit=management_operation_queue_limit,
+      max_operation_records=management_max_operation_records,
+      max_running_operations=management_max_running_operations,
+      operation_timeout_ms=management_operation_timeout_ms,
+      operation_retention_ms=management_operation_retention_ms,
+      max_cursor_records=management_max_cursor_records,
+      cursor_ttl_ms=management_cursor_ttl_ms,
+      default_page_size=management_default_page_size,
+      max_page_size=management_max_page_size,
+      query_scan_limit=management_query_scan_limit,
+      query_timeout_ms=management_query_timeout_ms,
+      max_audit_records=management_max_audit_records,
+      command_rate=management_command_rate,
+      command_burst=management_command_burst,
+      max_index_bytes=management_max_index_bytes,
       max_bytes_total=management_max_bytes_total,
     ) {
     Ok(value) => value
@@ -1114,6 +1276,36 @@ async fn run_main() -> Unit {
     println("request_burst = " + management_request_burst.to_string())
     println("connection_rate = " + management_connection_rate.to_string())
     println("connection_burst = " + management_connection_burst.to_string())
+    println("details_enabled = " + management_details_enabled.to_string())
+    println("operations_enabled = " + management_operations_enabled.to_string())
+    println("query_queue_limit = " + management_query_queue_limit.to_string())
+    println(
+      "operation_queue_limit = " + management_operation_queue_limit.to_string(),
+    )
+    println(
+      "max_operation_records = " + management_max_operation_records.to_string(),
+    )
+    println(
+      "max_running_operations = " +
+      management_max_running_operations.to_string(),
+    )
+    println(
+      "operation_timeout_ms = " + management_operation_timeout_ms.to_string(),
+    )
+    println(
+      "operation_retention_ms = " +
+      management_operation_retention_ms.to_string(),
+    )
+    println("max_cursor_records = " + management_max_cursor_records.to_string())
+    println("cursor_ttl_ms = " + management_cursor_ttl_ms.to_string())
+    println("default_page_size = " + management_default_page_size.to_string())
+    println("max_page_size = " + management_max_page_size.to_string())
+    println("query_scan_limit = " + management_query_scan_limit.to_string())
+    println("query_timeout_ms = " + management_query_timeout_ms.to_string())
+    println("max_audit_records = " + management_max_audit_records.to_string())
+    println("command_rate = " + management_command_rate.to_string())
+    println("command_burst = " + management_command_burst.to_string())
+    println("max_index_bytes = " + management_max_index_bytes.to_string())
     println("max_bytes_total = " + management_max_bytes_total.to_string())
     println("[resources]")
     print_resource_section_values(resources, "resources")

@@ -106,6 +106,46 @@ fn map_section(
         add_integer(args, "--management-connection-rate", entry, full_key)
       "management.connection_burst" =>
         add_integer(args, "--management-connection-burst", entry, full_key)
+      "management.details_enabled" =>
+        add_boolean(args, "--management-details-enabled", entry, full_key)
+      "management.operations_enabled" =>
+        add_boolean(args, "--management-operations-enabled", entry, full_key)
+      "management.query_queue_limit" =>
+        add_integer(args, "--management-query-queue-limit", entry, full_key)
+      "management.operation_queue_limit" =>
+        add_integer(args, "--management-operation-queue-limit", entry, full_key)
+      "management.max_operation_records" =>
+        add_integer(args, "--management-max-operation-records", entry, full_key)
+      "management.max_running_operations" =>
+        add_integer(
+          args, "--management-max-running-operations", entry, full_key,
+        )
+      "management.operation_timeout_ms" =>
+        add_integer(args, "--management-operation-timeout-ms", entry, full_key)
+      "management.operation_retention_ms" =>
+        add_integer(
+          args, "--management-operation-retention-ms", entry, full_key,
+        )
+      "management.max_cursor_records" =>
+        add_integer(args, "--management-max-cursor-records", entry, full_key)
+      "management.cursor_ttl_ms" =>
+        add_integer(args, "--management-cursor-ttl-ms", entry, full_key)
+      "management.default_page_size" =>
+        add_integer(args, "--management-default-page-size", entry, full_key)
+      "management.max_page_size" =>
+        add_integer(args, "--management-max-page-size", entry, full_key)
+      "management.query_scan_limit" =>
+        add_integer(args, "--management-query-scan-limit", entry, full_key)
+      "management.query_timeout_ms" =>
+        add_integer(args, "--management-query-timeout-ms", entry, full_key)
+      "management.max_audit_records" =>
+        add_integer(args, "--management-max-audit-records", entry, full_key)
+      "management.command_rate" =>
+        add_integer(args, "--management-command-rate", entry, full_key)
+      "management.command_burst" =>
+        add_integer(args, "--management-command-burst", entry, full_key)
+      "management.max_index_bytes" =>
+        add_integer(args, "--management-max-index-bytes", entry, full_key)
       "management.max_bytes_total" =>
         add_integer(args, "--management-max-bytes-total", entry, full_key)
       "limits.enabled" =>

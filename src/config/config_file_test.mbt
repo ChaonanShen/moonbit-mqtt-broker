@@ -129,3 +129,42 @@ test "management TOML rejects wrong types, unknown keys, and duplicates" {
     config_rejected("[management]\nenabled = true\nenabled = false\n"),
   )
 }
+
+///|
+test "all B management TOML fields map to CLI options" {
+  let args = parse_config_file(
+    (
+      #|[management]
+      #|details_enabled = true
+      #|operations_enabled = true
+      #|query_queue_limit = 4
+      #|operation_queue_limit = 5
+      #|max_operation_records = 20
+      #|max_running_operations = 3
+      #|operation_timeout_ms = 45000
+      #|operation_retention_ms = 120000
+      #|max_cursor_records = 32
+      #|cursor_ttl_ms = 12000
+      #|default_page_size = 10
+      #|max_page_size = 20
+      #|query_scan_limit = 64
+      #|query_timeout_ms = 1500
+      #|max_audit_records = 128
+      #|command_rate = 7
+      #|command_burst = 14
+      #|max_index_bytes = 4194304
+      #|
+    ),
+  )
+  assert_eq(args, [
+    "--management-details-enabled", "true", "--management-operations-enabled", "true",
+    "--management-query-queue-limit", "4", "--management-operation-queue-limit",
+    "5", "--management-max-operation-records", "20", "--management-max-running-operations",
+    "3", "--management-operation-timeout-ms", "45000", "--management-operation-retention-ms",
+    "120000", "--management-max-cursor-records", "32", "--management-cursor-ttl-ms",
+    "12000", "--management-default-page-size", "10", "--management-max-page-size",
+    "20", "--management-query-scan-limit", "64", "--management-query-timeout-ms",
+    "1500", "--management-max-audit-records", "128", "--management-command-rate",
+    "7", "--management-command-burst", "14", "--management-max-index-bytes", "4194304",
+  ])
+}

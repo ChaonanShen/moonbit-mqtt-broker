@@ -207,6 +207,9 @@ pub async fn serve(
         management?,
       )
   }
+  if management is Some(active) && active.config.details_enabled() {
+    ignore(driver.enable_management_connection_index(config.max_connections()))
+  }
   if management is Some(active) {
     let sample = driver.capture_observation(
       @budget.monotonic_ms(),
@@ -457,6 +460,18 @@ pub async fn run(
   let management_runtime = match management {
     None => None
     Some(startup) => {
+      if startup.config.details_enabled() &&
+        startup.config.index_required_bytes(
+          config.broker_config().max_sessions(),
+          config.max_connections(),
+          config.broker_config().max_subscriptions_total(),
+          config.broker_config().max_retained_messages(),
+        ) >
+        startup.config.max_index_bytes() {
+        raise ResourceStartupFailure(
+          "management index capacity exceeds max_index_bytes",
+        )
+      }
       let management_listener = @socket.TcpServer(
         @socket.Addr::parse(startup.config.listen()),
         reuse_addr=true,
@@ -481,6 +496,9 @@ pub async fn run(
     }
   }
   defer (if management_runtime is Some(active) { active.close() })
+  if management_runtime is Some(active) && active.config.details_enabled() {
+    ignore(initial_state.enable_management_index())
+  }
   let management = management_runtime
   logger.log(
     @observability.LogRecord::new(
