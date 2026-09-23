@@ -284,6 +284,9 @@ fn BrokerState::remove_session(
   self.inbound_qos2_total -= session.inbound_qos2_count()
   self.inflight_total = self.inflight_total - session.inflight_count()
   self.pending_qos1_total = self.pending_qos1_total - session.pending_count()
+  if self.admin_sessions is Some(index) {
+    index.remove_all_subscriptions(client_id)
+  }
   ignore(self.subscriptions.remove_all(client_id))
   self.sessions.remove(client_id)
   if self.admin_sessions is Some(index) {
@@ -911,6 +914,14 @@ fn BrokerState::apply_event(
       let delivery_changed = prepared.inflight_added > 0 ||
         prepared.pending_added > 0
       actions.append(self.install_deliveries(prepared))
+      if self.admin_sessions is Some(index) {
+        for filter, previous in originals {
+          if previous is None &&
+            self.subscriptions.qos(client_id, filter) is Some(_) {
+            index.register_subscription(client_id, filter)
+          }
+        }
+      }
       if persistent && (subscriptions_changed || delivery_changed) {
         self.mark_snapshot_dirty()
       }
@@ -927,7 +938,11 @@ fn BrokerState::apply_event(
       }
       let removed : Array[Bool] = []
       for filter in filters {
-        removed.push(self.subscriptions.remove(client_id, filter))
+        let changed = self.subscriptions.remove(client_id, filter)
+        removed.push(changed)
+        if changed && self.admin_sessions is Some(index) {
+          index.remove_subscription(client_id, filter)
+        }
       }
       if removed.any(value => value) && self.session_is_persistent(client_id) {
         self.mark_snapshot_dirty()
@@ -1074,6 +1089,9 @@ fn BrokerState::publish_input(
     if input.payload.length() == 0 {
       self.retained.remove(input.topic)
       retained_changed = previous is Some(_)
+      if retained_changed && self.admin_sessions is Some(index) {
+        index.remove_retained(input.topic)
+      }
     } else {
       retained_changed = previous !=
         Some({ topic: input.topic, payload: input.payload, qos: input.qos })
@@ -1085,6 +1103,9 @@ fn BrokerState::publish_input(
           self.config.max_retained_messages(),
         ),
       )
+      if previous is None && self.admin_sessions is Some(index) {
+        index.register_retained(input.topic)
+      }
     }
   }
   let actions = self.install_deliveries(prepared)

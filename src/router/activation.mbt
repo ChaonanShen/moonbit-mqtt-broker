@@ -137,6 +137,9 @@ pub fn BrokerState::commit_activation(
     self.inbound_qos2_total -= s.inbound_qos2_count()
   }
   if activation.reset {
+    if self.admin_sessions is Some(index) {
+      index.remove_all_subscriptions(activation.id)
+    }
     ignore(self.subscriptions.remove_all(activation.id))
   }
   self.sessions.set(activation.id, activation.session)

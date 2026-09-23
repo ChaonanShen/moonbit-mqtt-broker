@@ -155,3 +155,9 @@ fn RetainedStore::matching_for_router(
   })
   result
 }
+
+///|
+/// Only topic identities are returned; retained payloads are not copied.
+fn RetainedStore::topic_keys(self : RetainedStore) -> Array[@topic.TopicName] {
+  self.messages.keys().collect()
+}
