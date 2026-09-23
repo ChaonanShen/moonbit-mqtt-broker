@@ -37,6 +37,11 @@ pub fn TlsServerConfig::handshake_timeout_ms(self : TlsServerConfig) -> Int {
 /// the public listener. This rejects unreadable, malformed, expired-for-use,
 /// or mismatched certificate/key pairs at startup rather than on first use.
 pub async fn validate_tls_config(config : TlsServerConfig) -> Unit {
+  if !tls_material_preflight(config) {
+    raise ResourceStartupFailure(
+      "TLS material must be safe regular files up to 1 MiB",
+    )
+  }
   @async.with_timeout(config.handshake_timeout_ms(), () => {
     @async.with_task_group() <| group => {
       let (client_reader, server_writer) = @pipe.pipe()

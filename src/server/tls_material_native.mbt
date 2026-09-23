@@ -1,4 +1,20 @@
 ///|
+#borrow(cert, key)
+extern "C" fn tls_material_preflight_ffi(
+  cert : Bytes,
+  cert_length : Int,
+  key : Bytes,
+  key_length : Int,
+) -> Int = "moonbit_mqtt_tls_material_preflight"
+
+///|
+fn tls_material_preflight(config : TlsServerConfig) -> Bool {
+  let cert = @utf8.encode(config.certificate_file())
+  let key = @utf8.encode(config.private_key_file())
+  tls_material_preflight_ffi(cert, cert.length(), key, key.length()) == 0
+}
+
+///|
 #borrow(cert, key, output)
 extern "C" fn tls_material_capture_ffi(
   cert : Bytes,
