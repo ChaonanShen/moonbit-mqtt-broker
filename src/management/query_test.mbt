@@ -54,3 +54,11 @@ test "query parser rejects aliases duplicate and unknown parameters" {
     assert_true(parse_read_query(path, "reader", 50, 100) is Err(_))
   }
 }
+
+///|
+test "optional B fields encode scalar or null, never singleton arrays" {
+  assert_eq(optional_string_json(Some("client")).stringify(), "\"client\"")
+  assert_eq(optional_string_json(None).stringify(), "null")
+  assert_eq(optional_decimal_json(Some(7L)).stringify(), "\"7\"")
+  assert_eq(optional_decimal_json(None).stringify(), "null")
+}

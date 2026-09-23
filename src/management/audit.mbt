@@ -143,10 +143,7 @@ pub fn AuditEvent::to_json(self : AuditEvent) -> Json {
     ("phase", self.phase.to_json()),
     ("result", self.result.to_json()),
     ("effect_applied", self.effect_applied.to_json()),
-    (
-      "state_revision",
-      self.state_revision.map(value => value.to_string()).to_json(),
-    ),
+    ("state_revision", optional_decimal_json(self.state_revision)),
   ])
   fields.to_json()
 }
