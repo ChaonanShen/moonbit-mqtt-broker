@@ -123,7 +123,16 @@ fn parse_scope(value : String) -> AdminScope? {
 }
 
 ///|
-fn TokenDatabase::parse(contents : Bytes) -> Result[TokenDatabase, TokenError] {
+/// Trusted in-memory parser; production startup uses load() so the native
+/// owner/type/mode/size checks run before this parser.
+pub fn TokenDatabase::parse(
+  contents : Bytes,
+) -> Result[TokenDatabase, TokenError] {
+  // Trusted in-memory construction must also leave authentication usable.
+  // CLI startup calls load() and checks the file before exposing a database.
+  if @management_native.initialize() is Err(_) {
+    return Err(CryptoUnavailable)
+  }
   if contents.length() > 16384 {
     return Err(TokenFileTooLarge)
   }
