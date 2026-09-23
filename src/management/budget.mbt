@@ -8,6 +8,7 @@ pub struct ManagementBudget {
   occupied_slots : Array[Bool]
   mut active : Int
   mut cache_live : Bool
+  mut b_tables_live : Bool
   mut closing : Bool
 }
 
@@ -107,19 +108,59 @@ pub fn ManagementBudget::new(
     2L,
     @budget.checked_add(1024L, @budget.checked_mul(8L, response).unwrap()).unwrap(),
   ).unwrap()
-  let total = @budget.checked_add(
+  let base = @budget.checked_add(
     @budget.checked_add(infrastructure, requests).unwrap(),
     cache,
   ).unwrap()
+  let allocations : Array[@budget.Allocation] = [
+    infrastructure_pool.allocation(infrastructure),
+    request_pool.allocation(requests),
+    cache_pool.allocation(cache),
+  ]
+  let mut total = base
+  if config.details_enabled() {
+    let index = config.max_index_bytes()
+    let query = config.query_queue_limit().to_int64() * (1024L + 4L * response)
+    let cursor = config.max_cursor_records().to_int64() * 512L
+    for
+      entry in [
+        (@budget.ManagementIndex, index),
+        (@budget.ManagementQuery, query),
+        (@budget.ManagementCursor, cursor),
+      ] {
+      let (kind, bytes) = entry
+      let pool = match
+        management_pool(ledger, kind, config.max_bytes_total(), cap) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+      allocations.push(pool.allocation(bytes))
+      total = @budget.checked_add(total, bytes).unwrap()
+    }
+    if config.operations_enabled() {
+      let operation = config.max_operation_records().to_int64() * 2048L +
+        config.operation_queue_limit().to_int64() * 512L
+      let audit = config.max_audit_records().to_int64() * 512L
+      for
+        entry in [
+          (@budget.ManagementOperation, operation),
+          (@budget.ManagementAudit, audit),
+        ] {
+        let (kind, bytes) = entry
+        let pool = match
+          management_pool(ledger, kind, config.max_bytes_total(), cap) {
+          Ok(value) => value
+          Err(error) => return Err(error)
+        }
+        allocations.push(pool.allocation(bytes))
+        total = @budget.checked_add(total, bytes).unwrap()
+      }
+    }
+  }
   if total != config.required_bytes() || total > config.max_bytes_total() {
     return Err(@budget.InvalidConfiguration)
   }
-  let parent = match
-    ledger.reserve([
-      infrastructure_pool.allocation(infrastructure),
-      request_pool.allocation(requests),
-      cache_pool.allocation(cache),
-    ]) {
+  let parent = match ledger.reserve(allocations) {
     Ok(ticket) => ticket
     Err(error) => return Err(error)
   }
@@ -130,6 +171,7 @@ pub fn ManagementBudget::new(
     occupied_slots: Array::make(config.max_connections(), false),
     active: 0,
     cache_live: false,
+    b_tables_live: config.details_enabled(),
     closing: false,
   })
 }
@@ -163,7 +205,10 @@ pub fn ManagementRequestLease::release(self : ManagementRequestLease) -> Bool {
   }
   owner.occupied_slots[self.index] = false
   owner.active -= 1
-  if owner.closing && owner.active == 0 && !owner.cache_live {
+  if owner.closing &&
+    owner.active == 0 &&
+    !owner.cache_live &&
+    !owner.b_tables_live {
     owner.release_parent()
   }
   true
@@ -182,7 +227,7 @@ fn ManagementBudget::register_cache(self : ManagementBudget) -> Bool {
 fn ManagementBudget::release_cache(self : ManagementBudget) -> Unit {
   if self.cache_live {
     self.cache_live = false
-    if self.closing && self.active == 0 {
+    if self.closing && self.active == 0 && !self.b_tables_live {
       self.release_parent()
     }
   }
@@ -201,7 +246,7 @@ fn ManagementBudget::release_parent(self : ManagementBudget) -> Unit {
 /// reservation until its real finalizer calls lease.release().
 pub fn ManagementBudget::close(self : ManagementBudget) -> Bool {
   self.closing = true
-  if self.active == 0 && !self.cache_live {
+  if self.active == 0 && !self.cache_live && !self.b_tables_live {
     self.release_parent()
     true
   } else {
@@ -222,4 +267,13 @@ pub fn ManagementBudget::active_count(self : ManagementBudget) -> Int {
 ///|
 pub fn ManagementBudget::is_closed(self : ManagementBudget) -> Bool {
   self.closing && self.parent is None
+}
+
+///|
+/// Called after the driver and management query/operation owners have ended.
+pub fn ManagementBudget::release_b_tables(self : ManagementBudget) -> Unit {
+  self.b_tables_live = false
+  if self.closing && self.active == 0 && !self.cache_live {
+    self.release_parent()
+  }
 }

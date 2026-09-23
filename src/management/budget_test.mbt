@@ -86,3 +86,22 @@ test "ten thousand request-slot cycles conserve the parent reservation" {
   assert_true(owner.close())
   assert_eq(ledger.live_tickets(), 0)
 }
+
+///|
+test "B parent reserves five additional category fees and releases once" {
+  let config = ManagementConfig::new(
+    enabled=true,
+    token_file="/tmp/tokens",
+    details_enabled=true,
+    operations_enabled=true,
+    max_bytes_total=33554432L,
+  ).unwrap()
+  let ledger = @budget.Ledger::new(config.required_bytes() + 100L, 0L).unwrap()
+  let owner = ManagementBudget::new(config, ledger).unwrap()
+  assert_eq(ledger.committed(), config.required_bytes())
+  assert_eq(ledger.usage().length(), 8)
+  assert_false(owner.close())
+  owner.release_b_tables()
+  assert_eq(ledger.occupied(), 0L)
+  assert_eq(ledger.live_tickets(), 0)
+}

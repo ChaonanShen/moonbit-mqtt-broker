@@ -24,6 +24,24 @@ pub struct ManagementConfig {
   connection_rate : Int
   connection_burst : Int
   max_bytes_total : Int64
+  details_enabled : Bool
+  operations_enabled : Bool
+  query_queue_limit : Int
+  operation_queue_limit : Int
+  max_operation_records : Int
+  max_running_operations : Int
+  operation_timeout_ms : Int
+  operation_retention_ms : Int
+  max_cursor_records : Int
+  cursor_ttl_ms : Int
+  default_page_size : Int
+  max_page_size : Int
+  query_scan_limit : Int
+  query_timeout_ms : Int
+  max_audit_records : Int
+  command_rate : Int
+  command_burst : Int
+  max_index_bytes : Int64
 }
 
 ///|
@@ -66,6 +84,24 @@ pub fn ManagementConfig::new(
   connection_rate? : Int = 100,
   connection_burst? : Int = 200,
   max_bytes_total? : Int64 = 8388608L,
+  details_enabled? : Bool = false,
+  operations_enabled? : Bool = false,
+  query_queue_limit? : Int = 16,
+  operation_queue_limit? : Int = 16,
+  max_operation_records? : Int = 256,
+  max_running_operations? : Int = 8,
+  operation_timeout_ms? : Int = 30000,
+  operation_retention_ms? : Int = 900000,
+  max_cursor_records? : Int = 256,
+  cursor_ttl_ms? : Int = 60000,
+  default_page_size? : Int = 50,
+  max_page_size? : Int = 100,
+  query_scan_limit? : Int = 256,
+  query_timeout_ms? : Int = 2000,
+  max_audit_records? : Int = 1024,
+  command_rate? : Int = 5,
+  command_burst? : Int = 10,
+  max_index_bytes? : Int64 = 8388608L,
 ) -> Result[ManagementConfig, ManagementConfigError] {
   if !valid_management_listen(listen) {
     return Err(Invalid("listen"))
@@ -118,6 +154,64 @@ pub fn ManagementConfig::new(
   if max_bytes_total < 1L {
     return Err(Invalid("max_bytes_total"))
   }
+  if details_enabled && !enabled {
+    return Err(Invalid("details_enabled"))
+  }
+  if operations_enabled && !details_enabled {
+    return Err(Invalid("operations_enabled"))
+  }
+  if query_queue_limit < 1 || query_queue_limit > 64 {
+    return Err(Invalid("query_queue_limit"))
+  }
+  if operation_queue_limit < 1 || operation_queue_limit > 64 {
+    return Err(Invalid("operation_queue_limit"))
+  }
+  if max_operation_records < 16 || max_operation_records > 4096 {
+    return Err(Invalid("max_operation_records"))
+  }
+  if max_running_operations < 1 ||
+    max_running_operations > 32 ||
+    max_running_operations > max_operation_records {
+    return Err(Invalid("max_running_operations"))
+  }
+  if operation_timeout_ms < 1000 || operation_timeout_ms > 120000 {
+    return Err(Invalid("operation_timeout_ms"))
+  }
+  if operation_retention_ms < 1000 || operation_retention_ms > 3600000 {
+    return Err(Invalid("operation_retention_ms"))
+  }
+  if max_cursor_records < 16 || max_cursor_records > 4096 {
+    return Err(Invalid("max_cursor_records"))
+  }
+  if cursor_ttl_ms < 1000 || cursor_ttl_ms > 300000 {
+    return Err(Invalid("cursor_ttl_ms"))
+  }
+  if max_page_size < 1 || max_page_size > 500 {
+    return Err(Invalid("max_page_size"))
+  }
+  if default_page_size < 1 || default_page_size > max_page_size {
+    return Err(Invalid("default_page_size"))
+  }
+  if query_scan_limit < max_page_size || query_scan_limit > 2048 {
+    return Err(Invalid("query_scan_limit"))
+  }
+  if query_timeout_ms < 100 ||
+    (details_enabled && query_timeout_ms > request_timeout_ms) {
+    return Err(Invalid("query_timeout_ms"))
+  }
+  if max_audit_records < 64 || max_audit_records > 16384 {
+    return Err(Invalid("max_audit_records"))
+  }
+  if command_rate < 1 || command_rate > 1000 {
+    return Err(Invalid("command_rate"))
+  }
+  if command_burst < 1 || command_burst > 2000 {
+    return Err(Invalid("command_burst"))
+  }
+  if max_index_bytes < 1L ||
+    (details_enabled && max_index_bytes > max_bytes_total) {
+    return Err(Invalid("max_index_bytes"))
+  }
   let config : ManagementConfig = {
     enabled,
     listen,
@@ -136,6 +230,24 @@ pub fn ManagementConfig::new(
     connection_rate,
     connection_burst,
     max_bytes_total,
+    details_enabled,
+    operations_enabled,
+    query_queue_limit,
+    operation_queue_limit,
+    max_operation_records,
+    max_running_operations,
+    operation_timeout_ms,
+    operation_retention_ms,
+    max_cursor_records,
+    cursor_ttl_ms,
+    default_page_size,
+    max_page_size,
+    query_scan_limit,
+    query_timeout_ms,
+    max_audit_records,
+    command_rate,
+    command_burst,
+    max_index_bytes,
   }
   if enabled && config.required_bytes() > max_bytes_total {
     return Err(Invalid("max_bytes_total"))
@@ -161,7 +273,20 @@ pub fn ManagementConfig::required_bytes(self : ManagementConfig) -> Int64 {
   let infrastructure = 65536L + 512L * sockets + 1024L * 32L
   let request_slot = 1024L + 8L * header + 4L * response
   let cache = 2L * (1024L + 8L * response)
-  infrastructure + sockets * request_slot + cache
+  let base = infrastructure + sockets * request_slot + cache
+  if !self.details_enabled {
+    return base
+  }
+  let query = self.query_queue_limit.to_int64() * (1024L + 4L * response)
+  let cursor = self.max_cursor_records.to_int64() * 512L
+  let operations = if self.operations_enabled {
+    self.max_operation_records.to_int64() * 2048L +
+    self.operation_queue_limit.to_int64() * 512L +
+    self.max_audit_records.to_int64() * 512L
+  } else {
+    0L
+  }
+  base + self.max_index_bytes + query + cursor + operations
 }
 
 ///|
@@ -249,4 +374,113 @@ pub fn ManagementConfig::connection_burst(self : ManagementConfig) -> Int {
 ///|
 pub fn ManagementConfig::max_bytes_total(self : ManagementConfig) -> Int64 {
   self.max_bytes_total
+}
+
+///|
+/// Conservative capacity fee, including fixed slots, free lists and reverse
+/// mappings. Actual startup capacities must fit max_index_bytes.
+pub fn ManagementConfig::index_required_bytes(
+  self : ManagementConfig,
+  max_sessions : Int,
+  max_connections : Int,
+  max_subscriptions_total : Int,
+  max_retained_messages : Int,
+) -> Int64 {
+  if !self.details_enabled {
+    return 0L
+  }
+  max_sessions.to_int64() * 256L +
+  max_connections.to_int64() * 192L +
+  max_subscriptions_total.to_int64() * 192L +
+  max_retained_messages.to_int64() * 128L
+}
+
+///|
+pub fn ManagementConfig::details_enabled(self : ManagementConfig) -> Bool {
+  self.details_enabled
+}
+
+///|
+pub fn ManagementConfig::operations_enabled(self : ManagementConfig) -> Bool {
+  self.operations_enabled
+}
+
+///|
+pub fn ManagementConfig::query_queue_limit(self : ManagementConfig) -> Int {
+  self.query_queue_limit
+}
+
+///|
+pub fn ManagementConfig::operation_queue_limit(self : ManagementConfig) -> Int {
+  self.operation_queue_limit
+}
+
+///|
+pub fn ManagementConfig::max_operation_records(self : ManagementConfig) -> Int {
+  self.max_operation_records
+}
+
+///|
+pub fn ManagementConfig::max_running_operations(self : ManagementConfig) -> Int {
+  self.max_running_operations
+}
+
+///|
+pub fn ManagementConfig::operation_timeout_ms(self : ManagementConfig) -> Int {
+  self.operation_timeout_ms
+}
+
+///|
+pub fn ManagementConfig::operation_retention_ms(self : ManagementConfig) -> Int {
+  self.operation_retention_ms
+}
+
+///|
+pub fn ManagementConfig::max_cursor_records(self : ManagementConfig) -> Int {
+  self.max_cursor_records
+}
+
+///|
+pub fn ManagementConfig::cursor_ttl_ms(self : ManagementConfig) -> Int {
+  self.cursor_ttl_ms
+}
+
+///|
+pub fn ManagementConfig::default_page_size(self : ManagementConfig) -> Int {
+  self.default_page_size
+}
+
+///|
+pub fn ManagementConfig::max_page_size(self : ManagementConfig) -> Int {
+  self.max_page_size
+}
+
+///|
+pub fn ManagementConfig::query_scan_limit(self : ManagementConfig) -> Int {
+  self.query_scan_limit
+}
+
+///|
+pub fn ManagementConfig::query_timeout_ms(self : ManagementConfig) -> Int {
+  self.query_timeout_ms
+}
+
+///|
+pub fn ManagementConfig::max_audit_records(self : ManagementConfig) -> Int {
+  self.max_audit_records
+}
+
+///|
+pub fn ManagementConfig::command_rate(self : ManagementConfig) -> Int {
+  self.command_rate
+}
+
+///|
+pub fn ManagementConfig::command_burst(self : ManagementConfig) -> Int {
+  self.command_burst
+}
+
+///|
+pub fn ManagementConfig::max_index_bytes(self : ManagementConfig) -> Int64 {
+  self.max_index_bytes
 }

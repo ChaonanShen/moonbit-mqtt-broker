@@ -144,6 +144,11 @@ fn fixed_resource_kinds() -> Array[@budget.ResourceKind] {
     @budget.ResourceKind::ManagementInfrastructure,
     @budget.ResourceKind::ManagementRequest,
     @budget.ResourceKind::ManagementCache,
+    @budget.ResourceKind::ManagementIndex,
+    @budget.ResourceKind::ManagementQuery,
+    @budget.ResourceKind::ManagementCursor,
+    @budget.ResourceKind::ManagementOperation,
+    @budget.ResourceKind::ManagementAudit,
   ]
 }
 
