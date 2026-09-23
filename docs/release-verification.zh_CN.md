@@ -360,3 +360,12 @@ Prometheus 镜像，要求授权 `up=1`、错误令牌 `up=0` 及
 这些检查与原有运行矩阵使用同一已提交候选及可执行文件。
 `runtime-*-management.log` 应与原运行日志一起留存。最外层退出码、
 源码 SHA、四项 PASS 及产物哈希仍是必需验收条件。
+
+独立的 `scripts/verify-management-performance.sh` 在 20 个 MQTT 连接、
+QoS 0/1/2 负载下，做三轮各 10 秒预热、60 秒测量的开关对照，
+再运行 60 秒过载测试。每个 Broker 容器限制为 2 CPU、256 MiB 和
+64 个进程。开启管理端的每轮发布吞吐至少为基线的 90%；PING 与 QoS 1
+PUBACK 的 P99 不高于「基线两倍」和「基线加 20 ms」中的较大值。
+过载期间每个 5 秒窗口须至少成功一次 PING。原始样本和阈值摘要保留在
+`.local/p1-03a-execution/`。该性能门禁与分发 soak 分开运行，
+避免两组负载互相污染。
