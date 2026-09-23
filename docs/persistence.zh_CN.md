@@ -1,9 +1,10 @@
-# 本地快照持久化
+# 本地持久化：快照与严格 WAL
 
 **中文** | [English](persistence.md)
 
-仅在提供 `--data-dir PATH` 时启用持久化。纯内存模式不会创建任何持久化
-文件。启用后可使用以下选项：
+不提供 `--data-dir PATH` 时为 `off`，不会创建持久化文件。提供数据目录但
+未指定模式时仍使用兼容的 `snapshot`；显式设置 `--persistence-mode strict`
+或 `[persistence] mode = "strict"` 才启用提交前同步的 WAL。快照模式选项：
 
 | 选项 | 默认值 | 约束 |
 | --- | ---: | --- |
@@ -12,9 +13,10 @@
 | `--snapshot-max-delay-ms` | 2,000 | 不小于 debounce |
 | `--snapshot-retry-ms` | 1,000 | 至少为 1 |
 
-未提供 `--data-dir` 时使用快照调优参数属于配置错误。
+未提供 `--data-dir` 时使用快照调优参数属于配置错误。strict 必须配置数据
+目录，并拒绝 snapshot debounce/max-delay/retry 参数；显式 off 不能同时提供数据目录。
 
-## 文件和启动过程
+## 快照模式的文件和启动过程
 
 规范化后的数据目录权限为 `0700`，其中只使用以下固定文件名：
 
@@ -29,7 +31,7 @@ Broker 会在绑定端口前失败。加锁后会尽力删除旧临时文件，�
 空文件、截断、损坏、未知版本、过大、键重复、符号链接、FIFO、设备或目录都会
 导致启动失败。只有恢复成功后才开始监听。
 
-## 提交和失败行为
+## 快照模式的提交和失败行为
 
 每次保存都会先在内存中进行规范编码，然后创建或截断临时文件、写入全部字节、
 完整同步文件、关闭文件、原子替换主文件，最后同步目录。重命名前失败会尽力
@@ -48,12 +50,56 @@ snapshot persistence recovered revision=11
 snapshot committed revision=11 bytes=487
 ```
 
-持久性边界是最近一条成功的 `snapshot committed` 日志。本设计没有 WAL，
+快照模式的持久性边界是最近一条成功的 `snapshot committed` 日志；该模式没有 WAL，
 也不会在发送 PUBACK 前同步；在 debounce 窗口内的变更可能因 `SIGKILL`、
 宿主机故障或断电而丢失。`--once` 自然结束时会排空最后提交的 revision。
 SIGTERM 和 SIGINT 会转换为正常停止请求：停止监听器和连接任务、抑制活动
 Will，并在进程退出前强制写入和排空最新内存 revision。进程级退出测试使用
 60 秒 debounce，因此信号处理路径必须能够创建第一份快照。
+
+## strict WAL 模式
+
+strict 复用 `broker.snapshot.lock` 排他锁及 Disk V3 业务状态，另有版本化
+checkpoint、`broker.manifest` 和编号 `wal-<id>.log` 段。唯一写者顺序追加完整
+事务帧与批次提交帧，完整 `fsync` 成功后，driver 才安装受影响键的变更并放行
+网络动作。写集互不冲突的事务可以共享一次同步；批次上限为 64 个事务、8 MiB，
+收集延迟约 2 ms。单个 delta 默认最多 4 MiB；持久结果超过上限的请求会在提交
+前拒绝，不会降级为快照语义。占盘统计包括 checkpoint、WAL 段和 orphan；默认
+硬上限 1 GiB，并为轮转及 checkpoint 保留 256 MiB。可用
+`--wal-disk-max-bytes` 和 `--wal-disk-reserve-bytes` 调整。
+
+发布者收到 QoS 1 PUBACK 表示本次发布产生的 retained 变化及全部持久目标状态
+已整体提交。QoS 2 PUBREC 还要求持久发布会话的 AwaitPubrel ID 与路由结果
+一起提交，PUBCOMP 则等待该 ID 的删除提交。持久订阅者的 PUBLISH/PUBREL
+须在出站 Packet ID 和阶段提交后才发送。持久 CONNACK、SUBACK、UNSUBACK
+也等相应会话变化提交。管理删除 Operation 只有提交后才报告
+`completion_scope=durable` 和 `committed_lsn_at_finish`；kick 等真实关闭、认证
+任务回收和持久会话清理完成。TCP、TLS、WS、WSS 共用同一运行时与 WAL。
+QoS 0 和 clean 会话不会仅因收到 ACK 就获得跨崩溃消息副本；MQTT 3.1.1
+的 ACL 拒绝后确认并丢弃策略保持不变。
+
+恢复只读取经过校验的 manifest 引用文件，按连续 LSN 重放完整提交批次；旧进程
+即使未送出 ACK，完整提交也可能被重放。只有 active 段末端不完整追加可自动
+截断并同步；完整帧 CRC 错误、缺失引用段、链断裂、坏 checkpoint 或未知版本
+均使启动失败，不自动回退到旧快照。恢复与 WAL 写者就绪前不开放业务。写入或
+同步失败、manifest 发布结果不确定、提交超时会令进程进入 fenced：不发送
+结果不明批次的 ACK，停止 MQTT 业务准入，并维持只读运维诊断且
+`ready=false`。结果须重启并在同一目录锁下恢复判定。checkpoint 在发布前失败
+而 WAL 仍可靠时，可标记 degraded 继续提交，但受占盘上限约束。
+
+正常 SIGTERM/SIGINT 会排空已接纳事务及持久 detach/清理后释放锁。已触发
+Will 的路由属于后继事务：触发与提交之间崩溃仍可能丢失该 Will；未触发 Will
+不会在进程崩溃后补发。OS 崩溃或断电保证还依赖文件系统与设备正确实现
+`fsync`；SIGKILL 测试不能冒充断电实验。
+
+### 模式迁移与回滚
+
+从 snapshot 改为 strict 前，先停止旧进程并备份整个数据目录。首次 strict 启动
+导入 V1/V2/V3 旧快照，并在监听前发布初始 checkpoint 与 manifest。manifest
+一旦存在就是唯一恢复权威；同目录改回 snapshot 会被拒绝。不能删除 manifest
+来让旧二进制读取过期的 `broker.snapshot`。回滚必须恢复迁移前的停机备份，
+备份之后的写入会丢失。存储故障诊断前保留完整 strict 目录，服务持锁时不得
+编辑文件。未选择 strict 时，原快照命令与语义不变。
 
 ## 持久化内容和恢复操作
 
@@ -101,3 +147,5 @@ epoch，V2 保留 owner 与 epoch。下一次状态变化或停机提交写 V3�
 ## 快照字节预算
 
 导出、排队、编码和实际写入共用 snapshot-work 预算；覆盖旧请求会归还其预算，正在写的请求持票至真实保存完成。恢复会在构造记录/复制 payload 前检查类别、会话和全局字节上限，且不改变 V1/V2/V3 格式。预算不足时保留 dirty 状态并产生受限诊断，最终未提交的快照导致关闭失败；不裁剪既有快照或静默空状态启动。文件类型在大小读取前检查，FIFO、目录和符号链接不作为快照读取。详见[资源契约与诊断指标](resource-budgets.md)。
+
+严格模式的 WAL 写入或同步结果不确定时会隔离业务准入；只读管理诊断仍可用。快照模式的失败重试策略不适用于严格模式。

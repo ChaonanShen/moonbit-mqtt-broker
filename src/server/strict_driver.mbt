@@ -87,7 +87,10 @@ fn RouterDriver::poll_strict_completion(self : RouterDriver) -> Unit {
     None => return
   }
   match coordinator.poll() {
-    NoCommitCompletion => ()
+    NoCommitCompletion =>
+      if self.strict_checkpoint_inflight && coordinator.checkpoint_active() {
+        self.drain_strict_queues()
+      }
     CommitFencedResult(reason) => self.strict_fence(reason)
     CommitCheckpointPublished(lsn, _) =>
       if !self.strict_checkpoint_inflight || lsn != self.strict_checkpoint_lsn {
@@ -103,7 +106,7 @@ fn RouterDriver::poll_strict_completion(self : RouterDriver) -> Unit {
       if fatal {
         self.strict_fence("checkpoint-" + reason)
       } else {
-        self.strict_checkpoint_degraded = true
+        self.strict_checkpoint_degraded = reason != "preempted"
         self.strict_checkpoint_next_ms = @async.now() + 1000L
         self.drain_strict_queues()
       }
@@ -139,7 +142,7 @@ fn RouterDriver::drain_strict_queues(self : RouterDriver) -> Unit {
   }
   while !coordinator.has_submitted() &&
         !self.strict_fenced &&
-        !self.strict_checkpoint_inflight &&
+        (!self.strict_checkpoint_inflight || coordinator.checkpoint_active()) &&
         self.strict_checkpoint_cursor is None {
     let queued = match self.strict_held.pop_front() {
       Some(value) => value
@@ -151,7 +154,7 @@ fn RouterDriver::drain_strict_queues(self : RouterDriver) -> Unit {
   }
   while !coordinator.has_submitted() &&
         !self.strict_fenced &&
-        !self.strict_checkpoint_inflight &&
+        (!self.strict_checkpoint_inflight || coordinator.checkpoint_active()) &&
         self.strict_checkpoint_cursor is None {
     match self.strict_management_held.pop_front() {
       Some(event) => self.handle_strict_management_command(event)
@@ -183,6 +186,13 @@ fn RouterDriver::strict_submit_packet_plan(
       match coordinator.submit(mutation, after, connection_id~) {
         Ok(_) => true
         Err(CommitBusy) => false
+        Err(CommitEncoding) | Err(CommitBudget) => {
+          if self.sinks.get(connection_id) is Some(sink) {
+            sink.resolve_handshake(false)
+            sink.try_close(ResourceExhausted)
+          }
+          true
+        }
         Err(_) => {
           self.strict_fence("commit-submit")
           true

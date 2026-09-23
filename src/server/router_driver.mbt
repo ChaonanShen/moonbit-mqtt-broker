@@ -500,8 +500,11 @@ fn RouterDriver::dispatch(
               },
               connection_id~,
             )
-            if submitted is Err(_) {
-              self.strict_fence("will-submit")
+            match submitted {
+              Ok(_) => ()
+              Err(CommitEncoding) | Err(CommitBudget) =>
+                self.runtime.metrics.record_dropped()
+              Err(_) => self.strict_fence("will-submit")
             }
           }
         }

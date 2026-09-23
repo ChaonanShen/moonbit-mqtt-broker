@@ -1,10 +1,11 @@
-# Local snapshot persistence
+# Local persistence: snapshot and strict WAL
 
 [中文](persistence.zh_CN.md) | **English**
 
-Persistence is disabled unless `--data-dir PATH` is provided. In memory-only
-mode the broker creates no persistence files. Enabled mode
-accepts these options:
+Persistence is `off` without `--data-dir PATH`. With a data directory, the
+compatible default remains `snapshot`; choose `--persistence-mode strict` (or
+`[persistence] mode = "strict"`) for synchronous WAL commit barriers. In-memory
+mode creates no persistence files. Snapshot mode accepts these options:
 
 | Option | Default | Constraint |
 | --- | ---: | --- |
@@ -13,9 +14,11 @@ accepts these options:
 | `--snapshot-max-delay-ms` | 2,000 | at least debounce |
 | `--snapshot-retry-ms` | 1,000 | at least 1 |
 
-Snapshot tuning options without `--data-dir` are configuration errors.
+Snapshot tuning options without `--data-dir` are configuration errors. Strict
+mode requires a data directory and rejects snapshot debounce/max-delay/retry
+options. Explicit `off` with a data directory is also invalid.
 
-## Files and startup
+## Snapshot files and startup
 
 The canonicalized data directory is mode `0700`. It contains only fixed names:
 
@@ -32,7 +35,7 @@ the complete Router import. Empty, truncated, corrupt, unknown-version,
 oversize, duplicate-key, symlink, FIFO, device, and directory main files are
 fatal. Listening starts only after successful recovery.
 
-## Commit and failure behavior
+## Snapshot commit and failure behavior
 
 Each save canonical-encodes in memory, creates/truncates temp, writes all bytes,
 performs full file sync, closes it, atomically replaces main, and synchronizes
@@ -54,13 +57,74 @@ snapshot committed revision=11 bytes=487
 ```
 
 The durability boundary is the latest successful `snapshot committed` line.
-This design has no WAL and does not synchronize before PUBACK, PUBREC or PUBCOMP; debounce-window
+Snapshot mode has no WAL and does not synchronize before PUBACK, PUBREC or PUBCOMP; debounce-window
 changes may be lost after `SIGKILL`, host failure, or power loss. Natural
 `--once` completion drains a final submitted revision. SIGTERM and SIGINT are
 converted into a normal service-stop request: the listener and connection tasks
 stop, active Wills are suppressed, and the newest in-memory revision is forced
 and drained before the process exits. The process-level shutdown test uses a
 60-second debounce, so the signal path must create the first snapshot.
+
+## Strict WAL mode
+
+Strict mode uses the same exclusive `broker.snapshot.lock` and the Disk V3
+logical state, with a separate versioned checkpoint, `broker.manifest`, and
+numbered `wal-<id>.log` segments. A single writer appends a complete transaction
+frame and batch commit frame, then performs a full file `fsync`. The driver
+installs the prepared affected-key changes and releases network actions only
+after that sync succeeds. Independent transactions may share a batch (up to 64
+transactions, 8 MiB and approximately 2 ms collection); conflicting writes
+retain their connection order. The default single-delta encoding cap is 4 MiB.
+A request whose persistent result exceeds it is refused before WAL submission;
+it does not switch to snapshot semantics. Disk accounting includes checkpoints,
+segments and orphan files; the default hard limit is 1 GiB with 256 MiB reserved
+for rotation and checkpoint work. `--wal-disk-max-bytes` and
+`--wal-disk-reserve-bytes` configure those disk limits.
+
+A successful QoS 1 PUBACK means the retained change and every persistent
+recipient state produced by that publication are committed together. QoS 2
+PUBREC also commits the persistent publisher's AwaitPubrel ID; PUBCOMP follows
+its committed deletion. A persistent subscriber's PUBLISH/PUBREL is released
+after its outbound Packet ID and phase are committed. Persistent CONNACK,
+SUBACK and UNSUBACK follow their session changes. A management delete Operation
+reports `completion_scope=durable` and `committed_lsn_at_finish` only after its
+delete commits. Kick waits for transport close, auth reap and durable session
+cleanup. These guarantees apply through TCP, TLS, WS and WSS on the same Broker.
+QoS 0 and clean sessions gain no cross-crash delivery copy merely because a
+packet was acknowledged; ACL-rejected MQTT 3.1.1 publications keep the existing
+acknowledge-and-drop behavior.
+
+Recovery reads only files named by the validated manifest. Complete committed
+batches replay in LSN order, even if the old process never delivered their ACK.
+An incomplete active tail is truncated and synced before new writes; a complete
+bad-CRC frame, missing referenced segment, broken chain, bad checkpoint or
+unknown required version fails startup without an automatic fallback. The
+Broker remains unready until recovery and the WAL writer are ready. A write or
+sync failure, uncertain manifest publication or commit timeout fences that
+process: no uncertain batch ACK is sent, MQTT business admission stops, and
+read-only management diagnosis stays available with `ready=false`. Restart
+under the same data directory lock is required to resolve the unknown outcome.
+Checkpoint failure before publication may leave strict commits running as
+`degraded`, subject to the disk cap.
+
+On normal SIGTERM/SIGINT, accepted mutations and durable detach/cleanup drain
+before the lock is released. Triggered Will routing is a successor transaction:
+a crash after the trigger but before its commit can lose that Will. An unfired
+Will is not reconstructed after a process crash. The guarantee after OS crash
+or power loss depends on the filesystem and storage stack honoring `fsync`;
+SIGKILL tests alone do not establish power-loss behavior.
+
+### Mode migration and recovery
+
+Stop the previous process and back up the complete directory before changing
+from snapshot to strict. The first strict start imports the legacy V1/V2/V3
+snapshot and publishes an initial checkpoint and manifest before listening.
+Once a manifest exists, it is the sole authority; switching the directory back
+to snapshot mode is rejected. Never remove the manifest to make an old binary
+read a stale `broker.snapshot`. Rollback uses the stopped pre-migration backup
+and discards writes accepted after that backup. Preserve the entire strict
+directory before investigating a storage failure; do not edit files under a
+live lock. The snapshot CLI/API remains unchanged when `strict` is not selected.
 
 ## Persisted state and recovery operations
 
@@ -106,8 +170,9 @@ Rollback requires stopping the new Broker, preserving its V3 directory, and
 restoring the stopped old-version backup. State accepted after that backup is
 discarded by rollback. There is no implicit V3-to-V2 downgrade.
 
-On disk-full, permission, or runtime I/O errors, the Broker continues serving
-and retries while explicitly degraded. Lock conflict and startup recovery errors
+In snapshot mode, disk-full, permission, or runtime I/O errors leave the
+Broker serving and retrying while explicitly degraded. In strict mode, an
+uncertain WAL write or sync fences business admission until a restart. Lock conflict and startup recovery errors
 are fatal. There is no automatic corrupt-main repair, backup fallback, or temp
 promotion. Before manual recovery, stop the Broker and copy the entire data
 directory. Diagnose and preserve the original files before replacing or

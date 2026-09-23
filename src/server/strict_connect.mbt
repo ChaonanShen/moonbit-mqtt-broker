@@ -9,7 +9,8 @@ pub fn BrokerRuntime::prepare_strict_accepted_connect(
   proposed_generation : Int64,
 ) -> StrictPacketPlan {
   let current = match self.connections.get(connection_id) {
-    Some(value) if value.phase is AwaitConnect => value
+    Some(value) if value.phase is AwaitConnect ||
+      value.phase is Authenticating(_) => value
     _ => return StrictImmediate([])
   }
   if !packet.clean_session && packet.client_id == "" {

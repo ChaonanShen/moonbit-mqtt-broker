@@ -195,6 +195,45 @@ async fn wal_write_synced_new(
 }
 
 ///|
+async fn wal_write_synced_new_preemptible(
+  path : String,
+  bytes : Bytes,
+  preempt : () -> Bool,
+) -> Unit raise PersistenceError {
+  let file = @fs.open(
+    path,
+    mode=WriteOnly,
+    create_mode=CreateNew,
+    permission=0o600,
+  ) catch {
+    _ => raise FileSystem(operation="wal-checkpoint-create", path~)
+  }
+  let mut open = true
+  defer (if open { file.close() })
+  let mut offset = 0
+  while offset < bytes.length() {
+    if preempt() {
+      raise FileSystem(operation="wal-checkpoint-preempted", path~)
+    }
+    let count = if bytes.length() - offset > 1048576 {
+      1048576
+    } else {
+      bytes.length() - offset
+    }
+    wal_write_range(file, path, bytes, offset, count)
+    offset += count
+  }
+  if preempt() {
+    raise FileSystem(operation="wal-checkpoint-preempted", path~)
+  }
+  file.sync(only_data=false) catch {
+    _ => raise FileSystem(operation="wal-checkpoint-sync", path~)
+  }
+  file.close()
+  open = false
+}
+
+///|
 fn WalStore::fail_if(
   self : WalStore,
   point : WalFaultPoint,
@@ -669,6 +708,7 @@ pub async fn WalStore::append_batch(
 pub async fn WalStore::publish_checkpoint(
   self : WalStore,
   checkpoint : WalCheckpoint,
+  preempt? : () -> Bool = () => false,
 ) -> Result[Unit, PersistenceError] {
   if self.closed ||
     self.fenced ||
@@ -677,6 +717,15 @@ pub async fn WalStore::publish_checkpoint(
     self.manifest.generation == 9223372036854775807L ||
     checkpoint.generation != self.manifest.checkpoint_generation + 1L {
     return Err(InvalidConfiguration("invalid WAL checkpoint publication"))
+  }
+  let encoded = match encode_wal_checkpoint_sliced(checkpoint, preempt~) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  if preempt() {
+    return Err(
+      FileSystem(operation="wal-checkpoint-preempted", path="checkpoint"),
+    )
   }
   if self.manifest.active_start_lsn <= checkpoint.lsn {
     match self.rotate() {
@@ -692,15 +741,12 @@ pub async fn WalStore::publish_checkpoint(
   let old = self.manifest
   let mut manifest_renamed = false
   let mut manifest_synced = false
+  let mut checkpoint_creation_attempted = false
   try {
     if wal_exists(final_path) ||
       wal_exists(temp_path) ||
       wal_exists(manifest_temp) {
       raise InvalidConfiguration("checkpoint publication found an orphan file")
-    }
-    let encoded = match encode_wal_checkpoint(checkpoint) {
-      Ok(value) => value
-      Err(error) => raise error
     }
     if self.disk_bytes >
       self.disk_max_bytes - encoded.length().to_int64() - 32768L {
@@ -711,12 +757,19 @@ pub async fn WalStore::publish_checkpoint(
       )
     }
     self.fail_if(CheckpointBeforeCreate, "wal-checkpoint-create", temp_path)
-    wal_write_synced_new(temp_path, encoded)
+    checkpoint_creation_attempted = true
+    wal_write_synced_new_preemptible(temp_path, encoded, preempt)
     self.fail_if(CheckpointAfterFileSync, "wal-checkpoint-file-sync", temp_path)
+    if preempt() {
+      raise FileSystem(operation="wal-checkpoint-preempted", path=temp_path)
+    }
     @fs.rename(temp_path, final_path, replace=false) catch {
       _ => raise FileSystem(operation="wal-checkpoint-rename", path=final_path)
     }
     sync_directory(dir)
+    if preempt() {
+      raise FileSystem(operation="wal-checkpoint-preempted", path=final_path)
+    }
     let next_manifest : WalManifest = {
       ..old,
       generation: old.generation + 1L,
@@ -764,12 +817,20 @@ pub async fn WalStore::publish_checkpoint(
     }
     Ok(())
   } catch {
-    error =>
+    error => {
+      if checkpoint_creation_attempted && !manifest_renamed {
+        best_effort_remove(temp_path)
+        best_effort_remove(final_path)
+        sync_directory(dir) catch {
+          _ => ()
+        }
+      }
       if manifest_renamed && !manifest_synced {
         self.fenced = true
         Err(DurabilityUncertain(manifest_path))
       } else {
-        Err(error)
+        Err(checkpoint_error(error))
       }
+    }
   }
 }

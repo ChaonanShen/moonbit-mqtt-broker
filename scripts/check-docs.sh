@@ -22,7 +22,7 @@ grep -Fq 'moonbit-mqtt-broker-0.2.0.zip' scripts/check-package.sh
 grep -Eq '^## \[0\.2\.0\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$' CHANGELOG.md
 grep -q 'MQTT 5' README.md
 grep -q 'QoS 2' README.md
-grep -q 'zero-loss durability' README.md
+grep -q 'strict local durability' README.md
 grep -q 'latest-committed' README.md
 grep -q 'Linux x86_64' README.md
 if internal_labels="$(git -c safe.directory="${REPO_ROOT}" grep -n -I -i -E 'P0-(01|02|03)' -- '*.md' ':!AGENTS.md')"; then

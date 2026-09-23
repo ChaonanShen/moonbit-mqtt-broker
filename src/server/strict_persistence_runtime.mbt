@@ -36,7 +36,7 @@ pub fn StrictPersistenceRuntime::new(
       writer,
       initial_state.resource_ledger(),
       limits.get("max_wal_pending_bytes_total"),
-      1048576,
+      4194304,
       1L,
       committed_lsn,
       broker=initial_state,

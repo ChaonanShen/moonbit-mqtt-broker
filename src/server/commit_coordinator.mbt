@@ -200,6 +200,11 @@ pub fn CommitCoordinator::checkpoint_generation(
 }
 
 ///|
+pub fn CommitCoordinator::checkpoint_active(self : CommitCoordinator) -> Bool {
+  self.writer.checkpoint_active()
+}
+
+///|
 pub fn CommitCoordinator::is_fenced(self : CommitCoordinator) -> Bool {
   self.fenced || self.writer.is_fenced()
 }
@@ -470,7 +475,9 @@ pub fn CommitCoordinator::submit(
       return Err(CommitEncoding)
     }
   }
-  if encoded.length().to_int64() > 4194304L - self.collecting_bytes {
+  let frame_overhead = (self.collecting.length().to_int64() + 1L) * 21L + 41L
+  if encoded.length().to_int64() >
+    8388608L - frame_overhead - self.collecting_bytes {
     plan.cancel()
     return Err(CommitBusy)
   }
@@ -498,7 +505,7 @@ pub fn CommitCoordinator::submit(
   })
   self.collecting_bytes += encoded.length().to_int64()
   if self.collecting.length() >= 64 ||
-    self.collecting_bytes >= 4194304L ||
+    self.collecting_bytes >= 8388608L ||
     !batchable_plan(plan) {
     if !self.flush() {
       return Err(CommitWriterUnavailable)

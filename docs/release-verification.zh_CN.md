@@ -411,3 +411,30 @@ MQTT.js 检查四入口 QoS 1 路由及 TCP 到 WSS 的持久会话恢复。
 失败，而仅启用 TCP 时仍可校验配置。Native package 定向测试覆盖有界
 Upgrade、WebSocket 帧边界、验证证书的 WSS，以及私有 TLS 材料捕获。
 对已提交候选的完整功能与分发记录由 CI 提供；开发侧只做定向检查。
+
+## P1-01 强持久性门禁
+
+已提交候选的 `verify-release.sh` 各调用一次 `durability_transports.sh`
+与 `durability_commit.sh`：覆盖 TCP、TLS、WS、WSS，QoS 1/2 重启恢复，
+阻塞 fsync 期间另一连接继续响应，以及确认后 SIGKILL 恢复。原生测试覆盖 WAL
+格式、残尾修复、检查点故障点、提交排序和 B12 管理命令。严格分发链还用同一
+导出程序，在 base、argon2、tls、full 四环境分别以非 root、只读根文件系统和
+独立可写持久卷执行 strict 写入、重启与 B12 管理验证。同一份 `evidence.txt`
+须同时含四项 `runtime_<profile>_strict=PASS`。
+
+`RELEASE_SOAK=1` 时，strict transport 门禁增加十分钟 QoS 1/2 混合负载
+（默认 20,000 条，可用 `STRICT_SOAK_PUBLICATIONS` 调整），保存 JSON
+延迟和接收计数。原有稳定性负载的默认 100,000 条保持独立。普通 push CI
+不启用扩展负载。固定磁盘上的 off/snapshot/strict 配对性能测量没有合适的
+GitHub 托管 runner，须按该提交的远端用户测试命令执行；普通 CI 已提交或短程
+开发验证均不能提前算作正式 soak 或硬件性能验收。
+
+远端固定硬件测量入口为 `scripts/run-p1-01-performance.sh`，通过
+`PERF_EXPECTED_SHA` 固定完整提交号。正式运行在同一固定开发镜像、
+2 CPU、512 MiB 和各自独立 Docker 数据卷上交错执行三轮配对测试。每轮含低频、
+八发布者、256 KiB 消息、八接收者扇出、QoS 2、离线积压；strict 再加按节奏
+发送的检查点窗口。保留 ACK 与 QoS 2 PUBREC/PUBCOMP 原始延迟、fsync 跟踪、
+WAL 批量大小、CPU/RSS、卷字节和带保留消息核验的重启时间。正式运行要求
+每个 strict 轮次生成第二代检查点，并保留测试卷供排查。`PERF_QUICK=1`
+只核对夹具，不能算正式测量。根据目标部署的磁盘与延迟预算审阅配对结果；
+项目不虚构通用 P99 阈值。

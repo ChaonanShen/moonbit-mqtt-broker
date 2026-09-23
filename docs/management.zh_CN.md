@@ -63,8 +63,15 @@ max_bytes_total = 33554432
 | `POST /v1/config/reload` | config_admin | 尚无协调器时返回 501 `capability_unavailable` |
 
 连接阶段为 `await_connect`、`authenticating`、`active`。MQTT 注册之前的 TLS
-握手不在列表中。当前只有一个 MQTT 监听器 `mqtt`；管理 HTTP 不计作 MQTT
-连接。
+握手不在列表中。具名 TCP/TLS/WS/WSS MQTT 监听器共享同一 Broker 状态；管理 HTTP
+不计作 MQTT 连接。
+
+状态接口的 persistence 对象包含 mode/state、`committed_lsn`、
+`applied_lsn`、`checkpoint_lsn`、WAL 待提交事务数/字节及快照字段；
+Int64 以十进制字符串输出。strict 的 fenced/recovering 强制 `ready=false`，
+不受仅适用于快照的健康开关放行；事件循环仍健康时只读状态和指标保留。
+Prometheus 的 WAL LSN/待提交 gauge 使用固定名称，不引入 Client ID、Topic
+或文件名标签。
 
 ## 明细、分页与身份
 
@@ -119,11 +126,13 @@ delete 在单写者上重新核对 handle、生命周期 ETag 和离线持久状
 成功、再取新的离线 ETag 后 delete。生命周期过期返回 412，在线目标
 返回 409。
 
-目前写结果均为 `persistence_mode:"off"|"snapshot"` 与
-`completion_scope:"runtime"`。成功只表示运行时状态已变化，不能据此认定
-普通快照已经提交。`snapshot_committed_revision_at_finish` 仅为观察值。
-正常退出会保存最终快照；新快照提交前 SIGKILL 可能恢复旧 Session。
-strict/WAL 耐久完成及 HTTP reload 等待对应功能后续接线。
+off 和 snapshot 模式的写操作报告 `completion_scope:"runtime"`；
+`snapshot_committed_revision_at_finish` 仅是观察值，下一次快照前 SIGKILL
+可能恢复较旧的 Session。strict 删除只有 WAL 已同步并安装才成功；kick 还需
+等待持久 detach/清理及已触发 Will 的后继事务。strict 终态记录报告
+`persistence_mode:"strict"`、`completion_scope:"durable"` 和十进制
+`committed_lsn_at_finish`。已接纳或运行中的 Operation 仍仅存在于本进程，
+HTTP 响应丢失或崩溃可能使调用者不确定，须重启后核对实际状态。
 
 ## 审计与边界
 

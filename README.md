@@ -54,15 +54,16 @@ security example, read the [getting-started guide](docs/getting-started.md).
 | Topics | `+` and `#` filters, deterministic overlap merge, retained messages |
 | Sessions | Clean and persistent Sessions, Client ID takeover, bounded offline QoS 1/2 |
 | Lifecycle | PING, Keep Alive, QoS 0/1/2 Wills, graceful SIGTERM/SIGINT shutdown |
-| Persistence | Optional local checksummed snapshots with strict startup recovery |
+| Persistence | Optional checksummed snapshots or explicit strict WAL with commit-before-ACK recovery |
 | Security | Optional Argon2id passwords, allow-only ACLs, Principal-owned Sessions |
 | Operations | TOML configuration, byte budgets and connection/auth/publish rate limits, `$SYS/broker/#` metrics, text/JSON logs |
 
-MQTT 5, shared subscriptions, bridges, plugins, clustering,
-external databases, WAL, and zero-loss durability are intentionally out of
-scope. Optional persistence provides a latest-committed snapshot guarantee,
-not synchronous message durability. See the [compatibility matrix](docs/compatibility.md) for the exact
-contract and limitations.
+MQTT 5, shared subscriptions, bridges, plugins, clustering and external
+databases remain out of scope. `--data-dir` defaults to latest-committed
+snapshot recovery; explicit `--persistence-mode strict` adds local WAL commit
+barriers for the documented persistent state. It is not replication or an
+end-to-end delivery guarantee. See the [compatibility matrix](docs/compatibility.md)
+and [persistence contract](docs/persistence.md).
 
 ## Configuration
 
@@ -86,12 +87,22 @@ scripts/moon-docker.sh run --target native src/cmd/broker -- \
   --max-pending-total 1024
 ```
 
-Enable local restart persistence with `--data-dir`:
+Enable snapshot-based restart persistence with `--data-dir`:
 
 ```bash
 scripts/moon-docker.sh run --target native src/cmd/broker -- \
   --listen 127.0.0.1:1883 \
   --data-dir /workspace/data
+```
+
+Choose strict local durability explicitly after backing up the data
+directory:
+
+```bash
+scripts/moon-docker.sh run --target native src/cmd/broker -- \
+  --listen 127.0.0.1:1883 \
+  --data-dir /workspace/data \
+  --persistence-mode strict
 ```
 
 All settings can also be loaded from TOML. CLI options override file values:
@@ -210,6 +221,7 @@ standards, behavioral references, versions, licenses, and how each is used are
 recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The broker is
 original MoonBit code; no Aedes or Mosquitto implementation source is copied.
 
-QoS 2 uses Method B deduplication and stage-aware persistent recovery. PUBREC and
-PUBCOMP do not imply fsync; the durability boundary remains the latest-committed
-snapshot. See [compatibility](docs/compatibility.md) and [V3 migration](docs/persistence.md).
+QoS 2 uses Method B deduplication and stage-aware persistent recovery. In
+snapshot mode PUBREC/PUBCOMP do not imply fsync; in strict mode their persistent
+state changes pass the WAL barrier first. See [compatibility](docs/compatibility.md)
+and [mode migration](docs/persistence.md).

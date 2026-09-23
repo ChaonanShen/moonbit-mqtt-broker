@@ -4,7 +4,7 @@ let wal_delta_magic : Bytes = b"MBMDLT01"
 ///|
 pub fn encode_durable_delta(
   delta : @router.DurableDelta,
-  max_bytes? : Int = 1048576,
+  max_bytes? : Int = 4194304,
 ) -> Result[Bytes, PersistenceError] {
   try {
     if max_bytes < 64 || max_bytes > 2147483647 {
@@ -60,7 +60,7 @@ pub fn encode_durable_delta(
 pub fn decode_durable_delta(
   data : Bytes,
   limits : SnapshotDecodeLimits,
-  max_bytes? : Int = 1048576,
+  max_bytes? : Int = 4194304,
 ) -> Result[@router.DurableDelta, PersistenceError] {
   try {
     if data.length() > max_bytes {

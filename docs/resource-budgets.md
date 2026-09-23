@@ -1,6 +1,6 @@
 # Resource budget primitives
 
-The `resource_budget` package provides synchronous single-writer accounting and token buckets. Router/session byte admission is integrated, including retained/subscription/session identity, bidirectional QoS state and reconstruction from V1/V2/V3 snapshots. Transport, CLI/TOML, native monotonic time and connection/traffic admission are integrated. Snapshot export, encoding, queued/active writes and import workspace share the same ledger.
+The `resource_budget` package provides synchronous single-writer accounting and token buckets. Router/session byte admission is integrated, including retained/subscription/session identity, bidirectional QoS state and reconstruction from V1/V2/V3 snapshots. Transport, CLI/TOML, native monotonic time and connection/traffic admission are integrated. Snapshot export, encoding, queued/active writes and import workspace share the same ledger. Strict WAL additionally charges pending encoded transactions and keeps deferred Router reservations through sync completion.
 
 ## Ownership and admission
 
@@ -56,6 +56,35 @@ Authentication attempts requiring a verifier consume rate tokens once before mem
 
 Will storage is charged before copying and retained until orderly release or the completion of its internal publish. New connection activation prepares session state and all fallible allocations before retiring the old transport. Its CONNACK frame and encoding workspace are also reserved first. On takeover, the new connection's CONNACK precedes replay and any old Will delivery to that new connection. Failed preparation leaves the old connection and Will intact.
 
+## Strict WAL ownership and disk budget
+
+`resources.max_wal_pending_bytes_total` defaults to 33,554,432 logical bytes.
+The coordinator reserves each encoded transaction, pending result and held
+network action until its exact writer epoch/LSN completion is applied or the
+process fences. Unlike snapshot's latest-only sink, the WAL request queue never
+replaces an earlier transaction. Deferred multiowner replacement reserves
+positive category/global deltas without marking the old ticket busy across
+`await`; its revision is checked before installation. A changed owner after a
+synced commit fences rather than releasing an ACK from partial state.
+
+A batch holds at most 64 mutually compatible transactions and 8 MiB of WAL
+frames. The default delta cap is 4 MiB; encoding or budget rejection before
+writer submission preserves the old state and closes only that request's
+transport. I/O failure, unknown commit outcome or timeout fences business
+admission and withholds network actions. The single writer retains file and
+lock ownership until the real I/O worker finishes. Other connections' PING,
+auth worker reap and read-only observations can progress during a held sync;
+the initiating connection cannot pass its pending packet.
+
+The strict disk cap is separate from the logical ledger. It counts actual
+checkpoint, segment, manifest, temporary and orphan file sizes; defaults are
+1 GiB total with 256 MiB reserved for checkpoint/rotation. A bounded
+checkpoint cursor copies at most 16 objects and 4 MiB of message data per
+driver step. Checkpoint encoding yields after bounded slices and may be
+preempted by queued WAL batches; the authoritative manifest is published
+before old referenced files are garbage-collected. These are byte and work
+bounds, not a physical RSS ceiling.
+
 ## Snapshot workspace and failure handling
 
 Exports reserve a conservative overlap estimate before copying. The queue owns accepted request leases; replacing an older queued request releases that request, while an active writer retains its separate lease through save/sync completion. Cancellation cleans the active and queued leases. A closed writer does not retry a failed final save forever, and shutdown reports failure if dirty state was not committed.
@@ -102,7 +131,7 @@ generation check so a late producer cannot fill a reused slot. Accepted
 Operations remain owned after HTTP disconnect. Running kick state stays
 bounded by `max_running_operations` and is not reclaimed until transport
 terminal/unregister and every associated native authentication task is
-reaped. Terminal records, idempotency entries, cursors and audit slots are
+reaped; strict kick also waits for the committed detach/Will successor. Terminal records, idempotency entries, cursors and audit slots are
 reclaimed by bounded maintenance scans or fixed-ring overwrite. An index
 invariant failure closes detail/write availability without changing MQTT
 business admission. These reservations remain subject to the Broker's global
@@ -113,6 +142,6 @@ charge.
 
 Additional `$SYS/broker/` topics are `resources/used_bytes`, `resources/reserved_bytes`, `resources/rejections`, `resources/usage`, `limits/rejections`, `persistence/budget_deferred` and `persistence/oldest_dirty_age_ms`. `resources/usage` is a bounded JSON object keyed by resource category with used/reserved/limit values. Control frame/runtime subcaps are folded into their canonical outbound/runtime categories so summing categories does not double-count memory. `limits/rejections` uses fixed operation names, never IP/client/topic labels.
 
-Reservation rejections identify the violated scope and account label with used/requested/limit values. Rejection counters describe admission attempts, including optional promotion attempts, not just closed clients. Oldest dirty age tracks actual writer completion rather than queue submission. Prometheus and an administration API remain separate work.
+Reservation rejections identify the violated scope and account label with used/requested/limit values. Rejection counters describe admission attempts, including optional promotion attempts, not just closed clients. Oldest dirty age tracks actual writer completion rather than queue submission. Prometheus and the administration API expose fixed-category counters and WAL LSNs without per-client labels.
 
 IP expiry rotates through at most 32 existing keys without collecting the entire key table or obtaining a new memory reservation. A key has exactly one rotation entry; cleanup remains possible when the control workspace is otherwise occupied. Fixed server infrastructure reserves 16 KiB of bookkeeping space in addition to queue slots. The `max_auth_result_bytes_total` key bounds completed authentication records until the single-writer loop reaps them; cancellation and timeout do not release running native work early.

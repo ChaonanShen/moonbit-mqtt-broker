@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import http from 'node:http'
 import mqtt from 'mqtt'
 
-const [url, authMode] = process.argv.slice(2)
+const [url, authMode, persistenceMode] = process.argv.slice(2)
+const strictMode = persistenceMode === 'strict'
 assert.ok(url && ['anonymous', 'password'].includes(authMode))
 const token = fs.readFileSync('/artifact/management-admin-client-token', 'utf8').trim()
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -96,7 +97,12 @@ try {
   const headers = { 'If-Match': row.etag, 'Idempotency-Key': 'DistDelete_0123456789' }
   const deleted = await request('DELETE', '/v1/sessions/' + row.handle, headers)
   assert.equal(deleted.status, 202, deleted.body)
-  assert.equal((await finish(JSON.parse(deleted.body).operation_id)).state, 'succeeded')
+  const deleteOperation = await finish(JSON.parse(deleted.body).operation_id)
+  assert.equal(deleteOperation.state, 'succeeded')
+  if (strictMode) {
+    assert.equal(deleteOperation.completion_scope, 'durable')
+    assert.ok(Number(deleteOperation.committed_lsn_at_finish) > 0)
+  }
   assert.equal((await request('DELETE', '/v1/sessions/' + row.handle, headers)).status, 200)
   active = await connect('dist-b-active', {
     topic: 'dist/b/will', payload: 'closed', qos: 1, retain: false
@@ -112,7 +118,8 @@ try {
   const operation = await finish(JSON.parse(kicked.body).operation_id)
   assert.equal(operation.state, 'succeeded')
   assert.equal(operation.transport_closed, true)
-  assert.equal(operation.completion_scope, 'runtime')
+  assert.equal(operation.completion_scope, strictMode ? 'durable' : 'runtime')
+  if (strictMode) assert.ok(Number(operation.committed_lsn_at_finish) > 0)
   console.log('DISTRIBUTION management read/kick/delete smoke passed: ' +
     (tls ? 'TLS' : 'plaintext') + ', ' + authMode)
 } finally {

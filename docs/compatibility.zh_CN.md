@@ -5,7 +5,7 @@
 | 能力 | 当前状态 | 说明 |
 | --- | --- | --- |
 | Linux x86_64 Native 构建 | 支持 | 固定 Docker 和 CI 路径 |
-| 可选 loopback 管理 HTTP | 支持只读 | 匿名 live/ready；按 Bearer 角色访问 metrics/status；无写入、热重载或查询 API |
+| 可选 loopback 管理 HTTP | 支持 | 匿名 live/ready、按角色查询/指标及有界 kick/delete Operation；热重载仍未实现 |
 | MQTT 3.1.1 CONNECT / CONNACK | 支持 | 完整 Clean/Persistent `session_present` 语义 |
 | TCP 拆包/粘包 framing | 支持 | 感知容量的 reader 和有界三态 decoder |
 | 相同 packet/receive 上限 | 支持 | 16/16 边界覆盖完整 CONNECT 加粘连 PINGREQ |
@@ -25,8 +25,8 @@
 | Persistent Session | 跨连接支持 | 订阅、inflight 和有界离线 QoS 1/2 可在重连后恢复 |
 | 重连 DUP 重放 | 支持 | 按阶段保留原 ID，重放 DUP=1 的 PUBLISH 或 PUBREL 0x62 |
 | Snapshot V3 数据边界 | 支持 | 保存 Principal 和 detach epoch；读取旧 V1/V2 并写入 V3 |
-| Broker 重启后状态 | 设置 `--data-dir` 时支持 | debounce 本地快照，恢复到最近提交 revision |
-| SIGTERM / SIGINT 退出 | 支持 | 正常停止、抑制活动 Will、强制并排空最新 Snapshot |
+| Broker 重启后状态 | 设置 `--data-dir` 时支持 | 默认快照恢复最近 revision；显式 strict WAL 重放完整提交 LSN |
+| SIGTERM / SIGINT 退出 | 支持 | 抑制活动 Will；快照排空最终 revision，strict 排空已接纳 WAL 与 detach |
 | TLS listener | 可选支持 | 多入口共享 Broker；启动捕获私有 PEM 副本，握手有界 |
 | MQTT.js/Mosquitto TLS | 0.2.0 支持 | QoS 0/1/2、retained、Persistent Session 和重启恢复 |
 | Argon2id 认证 | 可选支持 | 只接受编码哈希；默认允许匿名 |
@@ -42,7 +42,8 @@
 | MQTT 5 | 不支持 | 不在范围内 |
 | WebSocket / WSS | 可选支持 | MQTT 二进制帧、mqtt 子协议、Origin 允许列表与有界 Upgrade |
 | 共享订阅 / Bridge / 插件 / 集群 | 不支持 | 仅单机 Broker |
-| 外部数据库 / WAL / 零丢失持久化 | 不支持 | 仅最近提交的本地快照 |
+| 严格本地 WAL | 显式可选支持 | 约定持久状态提交后 ACK；不确定写入时 fenced，不提供复制 |
+| 外部数据库 / 集群 / 端到端零丢失 | 不支持 | 仅单机存储与 MQTT 交换边界 |
 
 CONNECT 必须是第一个 packet。非法 frame、超大声明、方向错误、重复 CONNECT、
 其他不支持的流程都会关闭连接。客户端发出的 QoS 1/2 publication 如果
@@ -59,9 +60,10 @@ Broker 不会在保持连接期间周期性重传。Persistent Session 恢复时
 Packet ID 和下一个 Packet ID 可跨 Broker 重启。Clean Session、离线 QoS 0、
 连接、Keep Alive timer 和尚未触发的 Will 不会持久化。
 
-这不是完全持久或零丢失的 Broker。崩溃时 debounce 窗口内的变更可能丢失；恢复
-边界是最近一次成功提交的快照。主快照损坏会阻止启动，而不是被忽略或用旧临时
-数据替换。
+快照模式在崩溃时可能丢失 debounce 窗口内的变更，恢复到最近提交快照。
+strict 模式在放行对应持久状态 ACK 前提交 WAL，且未收到 ACK 的完整提交也
+可能被重放。两种模式都不复制数据或保证下游业务处理；权威快照/WAL 损坏会
+拒绝启动，不自动回退。
 
 发布验证会将规范化的公共矩阵与 Mosquitto 2.0.18 和 Aedes 1.1.1 比较。
 当一个客户端同时具有重叠的 QoS 0 与 QoS 1 订阅时，Mosquitto 可能选择 QoS 0；
@@ -70,8 +72,8 @@ MQTT 3.1.1 第 3.3.5 节要求使用所有匹配订阅的最高 QoS。因此 Moo
 Aedes 仅作为行为参考，Broker 不链接任何 Aedes 源码。
 
 TLS 使用固定的 `moonbitlang/async@0.20.6`、基于 OpenSSL 的 Native transport。
-listener 只能选择明文或 TLS，不能同时提供两者。不声明支持 mTLS、SNI 路由、
-证书热加载、多 listener 或 Windows TLS。该依赖目前将服务端 TLS 构造器标记为
+每个 listener 可分别选择 TCP、TLS、WS、WSS，且共享同一 Broker 状态。
+不声明支持 mTLS、SNI 路由、证书热加载或 Windows TLS。该依赖目前将服务端 TLS 构造器标记为
 experimental；本版本固定其精确版本，并在 CI 中验证启动、拒绝、互操作、并发、
 退出和重启行为。
 
@@ -92,8 +94,8 @@ retained、QoS 1 inflight/pending、收发/丢弃消息、认证失败、ACL 拒
 未知 PUBREC 无状态回复 PUBREL；现存交换收到错误阶段的确认会关闭连接。
 
 QoS 保证针对每段 MQTT 交换，降级为 QoS 1 的下游仍可能重复。
-PUBREC/PUBCOMP 不代表已 fsync；崩溃恢复仍以 latest-committed 快照为边界，
-不承诺端到端业务 exactly-once 或崩溃零丢失。
+快照模式的 PUBREC/PUBCOMP 不代表已 fsync；strict 模式会先提交对应持久
+状态。两者均不承诺端到端业务 exactly-once 或存储设备丢失后的数据完整。
 
 指标 qos/inflight、qos/pending 统计 QoS 1/2 合计，旧 qos1 名称保留为总数别名。
 qos2/inbound、qos2/await_pubrec、qos2/await_pubcomp 统计当前状态；qos2/received

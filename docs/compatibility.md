@@ -5,7 +5,7 @@
 | Capability | Current status | Notes |
 | --- | --- | --- |
 | Linux x86_64 Native build | Supported | Pinned Docker and CI path |
-| Optional loopback management HTTP | Supported read-only | Anonymous live/ready; scoped Bearer metrics/status; no write, reload or query API |
+| Optional loopback management HTTP | Supported | Anonymous live/ready; scoped Bearer metrics/status, bounded reads and kick/delete Operations; reload remains out of scope |
 | MQTT 3.1.1 CONNECT / CONNACK | Supported | Full clean/persistent `session_present` semantics |
 | TCP split/sticky packet framing | Supported | Capacity-aware reader plus bounded three-state decoder |
 | Equal packet/receive limits | Supported | 16/16 boundary covers complete CONNECT plus sticky PINGREQ |
@@ -25,8 +25,8 @@
 | Persistent Session | Supported across connections | Subscriptions, inflight and bounded offline QoS 1/2 survive reconnect |
 | Reconnect DUP replay | Supported | Original IDs; PUBLISH with DUP=1 or PUBREL 0x62 by phase |
 | Snapshot V3 data boundary | Supported | Inbound IDs and outbound phases; reads legacy V1/V2 and writes V3 |
-| State across Broker restart | Supported when `--data-dir` is set | Debounced local snapshot to latest committed revision |
-| SIGTERM / SIGINT shutdown | Supported | Stops normally, suppresses active Wills, forces and drains latest Snapshot |
+| State across Broker restart | Supported when `--data-dir` is set | Snapshot defaults to latest committed revision; explicit strict WAL replays complete committed LSNs |
+| SIGTERM / SIGINT shutdown | Supported | Suppresses active Wills; snapshot drains final revision, strict drains accepted WAL and detach work |
 | TLS listener | Supported, opt-in | Shared multi-listener Broker; private startup PEM snapshot and bounded handshakes |
 | MQTT.js/Mosquitto over TLS | Supported for 0.2.0 | QoS 0/1/2, retained, persistent Session and restart recovery |
 | Argon2id authentication | Supported, opt-in | Encoded hashes only; anonymous allowed by default |
@@ -42,7 +42,8 @@
 | MQTT 5 | Unsupported | Out of scope |
 | WebSocket / WSS | Supported, opt-in | Binary MQTT frames, mqtt subprotocol, Origin allowlist and bounded Upgrade |
 | Shared subscriptions / Bridge / plugins / cluster | Unsupported | Single-node Broker only |
-| External database / WAL / zero-loss durability | Unsupported | Latest-committed local snapshot only |
+| Strict local WAL | Supported, opt-in | Commit-before-ACK for defined persistent state; fenced on uncertain write, no replication |
+| External database / cluster / end-to-end zero-loss | Unsupported | Single-node storage and MQTT exchange boundary only |
 
 CONNECT must be the first packet. Malformed frames, oversize declarations,
 direction errors, duplicate CONNECT, or other unsupported flows close
@@ -63,10 +64,11 @@ inflight/pending QoS 1/2, inbound QoS 2 IDs, original Packet IDs, and the next P
 Broker restart. Clean Sessions, QoS 0 offline messages, connections, Keep Alive
 timers, and Wills that have not yet fired are not persisted.
 
-This is not a fully durable or zero-loss Broker. Changes inside the debounce
-window may be lost on crash; recovery is to the most recent successfully
-committed snapshot. A corrupt main snapshot prevents startup rather than being
-ignored or replaced by stale temp data.
+Snapshot mode can lose debounce-window changes after a crash and restores the
+latest committed snapshot. Strict mode restores complete WAL commits before
+releasing the corresponding persistent-state ACKs; an unacknowledged commit
+may also replay. Neither mode replicates data or guarantees end-to-end business
+processing. Corrupt authoritative snapshot/WAL files fail startup closed.
 
 Release verification compares a normalized common matrix against Mosquitto 2.0.18 and Aedes
 1.1.1. Mosquitto may choose QoS 0 when one client has overlapping QoS 0 and
@@ -77,8 +79,8 @@ count and payload for that reference-deviation case. Aedes is a behavioral
 reference only, and no Aedes source is linked into the Broker.
 
 TLS uses the pinned `moonbitlang/async@0.20.6` OpenSSL-backed Native transport.
-The listener is either plaintext or TLS, never both. mTLS, SNI routing,
-certificate reload, multiple listeners, and Windows TLS are not claimed.
+Each listener selects TCP, TLS, WS or WSS; all entries share one Broker state.
+mTLS, SNI routing, certificate reload and Windows TLS are not claimed.
 The dependency currently marks its server-side TLS constructors experimental;
 this release pins the exact version and validates startup, rejection,
 interoperability, concurrency, shutdown, and restart behavior in CI.
@@ -104,8 +106,9 @@ with fixed header 0x62. Unknown PUBREC receives stateless PUBREL; confirmations
 for an existing but incompatible phase close the connection.
 
 The guarantee applies to each MQTT exchange. Downstream QoS 1 can still repeat.
-PUBREC/PUBCOMP do not imply fsync: crash recovery remains latest-committed
-snapshot recovery, without end-to-end exactly-once or zero-loss durability.
+In snapshot mode PUBREC/PUBCOMP do not imply fsync. In strict mode their
+persistent-state changes are WAL committed first. Neither mode promises
+end-to-end exactly-once or protection against loss of the storage device.
 
 Metrics qos/inflight and qos/pending count QoS 1/2; legacy qos1 names remain aliases.
 qos2/inbound, qos2/await_pubrec and qos2/await_pubcomp report held state.

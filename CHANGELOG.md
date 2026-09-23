@@ -4,6 +4,16 @@ All notable user-visible changes are documented here.
 
 ## [Unreleased]
 
+- Add opt-in strict local WAL durability with fsync-gated MQTT acknowledgements,
+  QoS 1/2 and persistent Session recovery, bounded group commits, checkpoint
+  rotation and fail-closed recovery/fencing. Snapshot remains the default with
+  a data directory.
+- Make management delete and kick completion durable in strict mode, with
+  committed LSN diagnostics and read-only access after a durability fence.
+- Verify strict behavior through all four MQTT transports, snapshot migration,
+  held-fsync/crash recovery, four isolated library profiles and optional soak;
+  provide a fixed-disk paired performance runner.
+
 ## [0.2.0] - 2026-09-13
 
 - Implement MQTT 3.1.1 QoS 2 in both directions: duplicate handling, persistent

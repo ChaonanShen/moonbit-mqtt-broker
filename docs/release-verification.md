@@ -352,3 +352,41 @@ Upgrade parsing, WebSocket frame boundaries, WSS with certificate
 verification, and private TLS material capture. CI supplies the complete
 functional and distribution record for the committed candidate; development
 uses only focused checks.
+
+## P1-01 strict durability gate
+
+The committed-candidate release chain calls `durability_transports.sh` and
+`durability_commit.sh` once from `verify-release.sh`. They exercise TCP,
+TLS, WS and WSS, QoS 1/2 restart recovery, a held fsync with an independent
+connection, and SIGKILL after a committed acknowledgement. Native tests cover
+WAL format, tail repair, checkpoint failure points, coordinator ordering and
+management B12. The distribution verifier additionally runs strict seed,
+restart and B12 admin operations in each of the four runtime profiles using
+the exported candidate binary, a non-root process, read-only root filesystem
+and an independently writable persistent volume. Require
+`runtime_base_strict`, `runtime_argon2_strict`, `runtime_tls_strict` and
+`runtime_full_strict` to be `PASS` in the same `evidence.txt`.
+
+With `RELEASE_SOAK=1`, the strict transport gate also runs the bounded
+ten-minute mixed QoS 1/2 workload (default 20,000 publications, configurable
+with `STRICT_SOAK_PUBLICATIONS`) and saves its JSON latency/receive counts.
+The older stability workload retains its independent default of 100,000
+publications. A default push CI run does not enable these extended workloads.
+The fixed-disk paired off/snapshot/strict performance measurement has no
+suitable GitHub-hosted runner; follow the remote manual command handoff for
+the exact pushed candidate. Neither a default CI submission nor a short
+development smoke establishes formal soak or hardware performance acceptance.
+
+The remote `scripts/run-p1-01-performance.sh` is the fixed-hardware
+measurement entry point. Set `PERF_EXPECTED_SHA` to the complete pushed SHA.
+It runs three rotated paired rounds on the same pinned development image,
+two CPUs, 512 MiB and independent Docker named data volumes. Each round covers
+low-rate, eight-publisher, 256 KiB payload, eight-recipient fanout, QoS 2,
+and offline backlog scenarios; strict additionally has a paced checkpoint
+window. It records ACK and QoS 2 PUBREC/PUBCOMP samples, traced fsync times,
+WAL batch fill and bytes, CPU/RSS samples, volume bytes and measured restart
+time with a retained-state probe. A formal run requires a second checkpoint
+generation in each strict round and retains the test volumes for investigation.
+A `PERF_QUICK=1` run is only fixture validation. Compare paired rounds on the
+actual named storage and review latency and capacity against the target
+deployment's budget; no universal P99 target is asserted by this project.
