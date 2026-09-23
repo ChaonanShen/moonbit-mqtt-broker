@@ -22,6 +22,8 @@ pub(all) enum WalWork {
 pub struct WalWriter {
   store : WalStore
   requests : @async.Queue[WalWork]
+  mut preempted_work : WalWork?
+  mut checkpoint_active : Bool
   completions : @async.Queue[WalCompletion]
   mut closed : Bool
   mut stopped : Bool
@@ -33,6 +35,8 @@ pub fn WalWriter::new(store : WalStore) -> WalWriter {
   {
     store,
     requests: @async.Queue(kind=Blocking(1)),
+    preempted_work: None,
+    checkpoint_active: false,
     completions: @async.Queue(kind=Blocking(1)),
     closed: false,
     stopped: false,
@@ -91,6 +95,11 @@ pub fn WalWriter::checkpoint_generation(self : WalWriter) -> Int64 {
 }
 
 ///|
+pub fn WalWriter::checkpoint_active(self : WalWriter) -> Bool {
+  self.checkpoint_active
+}
+
+///|
 pub fn WalWriter::is_fenced(self : WalWriter) -> Bool {
   self.fenced || self.store.is_fenced()
 }
@@ -112,7 +121,13 @@ pub fn WalWriter::close_store(self : WalWriter) -> Unit {
 ///|
 pub async fn WalWriter::run(self : WalWriter, wake : () -> Unit) -> Unit {
   for ;; {
-    let work = self.requests.get() catch { _ => break }
+    let work = match self.preempted_work {
+      Some(value) => {
+        self.preempted_work = None
+        value
+      }
+      None => self.requests.get() catch { _ => break }
+    }
     let completion = match work {
       WriteBatch(submission) => {
         let first = submission.batch.previous_lsn + 1L
@@ -135,11 +150,28 @@ pub async fn WalWriter::run(self : WalWriter, wake : () -> Unit) -> Unit {
         }
       }
       WriteCheckpoint(checkpoint) => {
+        self.checkpoint_active = true
+        wake()
         let result = @async.protect_from_cancel(() => {
-          self.store.publish_checkpoint(checkpoint)
+          self.store.publish_checkpoint(checkpoint, preempt=() => {
+            if self.preempted_work is Some(_) {
+              return true
+            }
+            let queued = self.requests.try_get() catch { _ => None }
+            match queued {
+              Some(value) => {
+                self.preempted_work = Some(value)
+                true
+              }
+              None => false
+            }
+          })
         })
+        self.checkpoint_active = false
         match result {
           Ok(_) => CheckpointPublished(checkpoint.lsn, checkpoint.generation)
+          Err(FileSystem(operation="wal-checkpoint-preempted", ..)) =>
+            CheckpointFailed("preempted", false)
           Err(error) => {
             if self.store.is_fenced() {
               self.fenced = true

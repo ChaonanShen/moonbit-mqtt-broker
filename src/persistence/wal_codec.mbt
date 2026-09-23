@@ -110,8 +110,8 @@ fn encode_wal_frame(
 ///|
 pub fn encode_wal_batch(
   batch : WalBatch,
-  max_bytes? : Int = 4194304,
-  max_transaction_bytes? : Int = 1048576,
+  max_bytes? : Int = 8388608,
+  max_transaction_bytes? : Int = 4194304,
 ) -> Result[Bytes, PersistenceError] {
   try {
     if max_bytes < 46 ||
@@ -157,8 +157,8 @@ pub fn encode_wal_batch(
 pub fn decode_wal_batch(
   bytes : Bytes,
   previous_lsn : Int64,
-  max_bytes? : Int = 4194304,
-  max_transaction_bytes? : Int = 1048576,
+  max_bytes? : Int = 8388608,
+  max_transaction_bytes? : Int = 4194304,
 ) -> Result[WalBatch, PersistenceError] {
   try {
     if bytes.length() > max_bytes ||

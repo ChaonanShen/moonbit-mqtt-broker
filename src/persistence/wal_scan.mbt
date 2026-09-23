@@ -15,8 +15,8 @@ pub fn scan_wal_segment(
   data : Bytes,
   active : Bool,
   max_segment_bytes? : Int = 67108864,
-  max_batch_bytes? : Int = 4194304,
-  max_transaction_bytes? : Int = 1048576,
+  max_batch_bytes? : Int = 8388608,
+  max_transaction_bytes? : Int = 4194304,
 ) -> Result[WalSegmentScan, PersistenceError] {
   try {
     if max_segment_bytes < 40 ||

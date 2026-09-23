@@ -32,6 +32,7 @@ persistent_session_expiry = "30d"
 max_session_expirations_per_tick = 128
 
 [persistence]
+mode = "snapshot"
 data_dir = "/var/lib/moonbit-mqtt-broker"
 max_snapshot_bytes = 67108864
 snapshot_debounce_ms = 250
@@ -62,6 +63,24 @@ log_level = "info"
 
 `--check-config` validates TOML and referenced TLS/security files without
 binding, locking, opening persistence, or creating the data directory.
+For synchronous WAL durability, set `mode = "strict"` with `data_dir`. Omitting
+`mode` preserves the snapshot default when a directory is supplied; without a
+directory the mode is `off`. Explicit `off` with `data_dir`, strict without
+`data_dir`, and strict with snapshot timing knobs are errors. Strict accepts:
+
+```toml
+[persistence]
+mode = "strict"
+data_dir = "/var/lib/moonbit-mqtt-broker"
+wal_disk_max_bytes = 1073741824
+wal_disk_reserve_bytes = 268435456
+```
+
+The disk maximum must exceed the reserve by at least one 64 MiB segment.
+The default WAL transaction encoding cap is 4 MiB; an oversized persistent
+result is refused before append. The batch cap is 64 transactions or 8 MiB,
+with an approximately 2 ms collection delay. Checkpoints are attempted every
+60 seconds. See [strict commit and recovery](persistence.md#strict-wal-mode).
 `--print-effective-config` also applies CLI overrides and prints canonical TOML
 with private-key/password-file values replaced by `<redacted>`.
 
@@ -150,8 +169,10 @@ Restart=on-failure
 docker stop --signal=SIGTERM --time=30 moonbit-mqtt-broker
 ```
 
-SIGTERM/SIGINT suppress active Wills and drain the newest snapshot. SIGKILL
-retains only the latest committed snapshot and is not a normal stop mechanism.
+In snapshot mode, SIGTERM/SIGINT suppress active Wills and drain the newest
+snapshot; SIGKILL retains only the latest committed snapshot. In strict mode,
+normal shutdown drains accepted WAL mutations and durable detach operations;
+SIGKILL recovery replays complete committed batches.
 
 Pending QoS 1/2 share one queue: max_pending_per_session/total are the canonical
 keys. The old max_pending_qos1_per_session/total keys and CLI flags remain aliases.

@@ -342,3 +342,37 @@ test "strict takeover closes old transport after durable activation and queues i
   release_optional(pending.2)
   assert_eq(runtime.check_invariants(), Ok(()))
 }
+
+///|
+test "strict authenticated CONNECT can prepare from Authenticating phase" {
+  let broker_config = @router.BrokerConfig::new(4, 16, 4).unwrap()
+  let config = ServerConfig::new(4, 1024, 2048, 8, 32, 1000, 100, broker_config).unwrap()
+  let runtime = BrokerRuntime::new(
+    config,
+    @router.BrokerState::new(broker_config),
+  )
+  let connection_id = ConnectionId::new(103L)
+  ignore(runtime.apply(TransportOpened({ connection_id, accepted_at_ms: 1L })))
+  let meta = runtime.connections.get(connection_id).unwrap()
+  runtime.connections.set(connection_id, { ..meta, phase: Authenticating(7L) })
+  let prepared = runtime.prepare_strict_accepted_connect(
+    connection_id,
+    {
+      client_id: "authenticated",
+      username: None,
+      password: None,
+      keep_alive: 10,
+      clean_session: false,
+      will: None,
+    },
+    2L,
+    @security.Principal::Anonymous,
+    Map([]),
+    1L,
+  )
+  match prepared {
+    StrictPrepared(plan, _) => plan.cancel()
+    _ => fail("authenticated CONNECT must prepare durable activation")
+  }
+  assert_eq(runtime.broker_state().session_count(), 0)
+}

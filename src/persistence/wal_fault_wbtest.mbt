@@ -167,3 +167,57 @@ async test "checkpoint manifest rename uncertainty fences without deleting old c
     restored.close()
   })
 }
+
+///|
+async test "checkpoint slice preempts for WAL work without publishing partial manifest" {
+  with_wal_fault_dir("checkpoint-preempt", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let lock = SnapshotStore::open(config).unwrap()
+    let wal = WalStore::bootstrap(lock, wal_fault_checkpoint()).unwrap()
+    assert_eq(wal.append_batch(wal_fault_batch()), Ok(1L))
+    let large = Bytes::make(2097152, b'x')
+    let checkpoint : WalCheckpoint = {
+      generation: 2L,
+      lsn: 1L,
+      identities: [],
+      snapshot: {
+        version: 3,
+        sessions: [],
+        retained: [{ topic: "large", payload: large, qos: 1 }],
+      },
+    }
+    let mut slices = 0
+    let result = wal.publish_checkpoint(checkpoint, preempt=() => {
+      slices += 1
+      slices >= 2
+    })
+    assert_true(
+      result is Err(FileSystem(operation="wal-checkpoint-preempted", ..)),
+    )
+    assert_false(wal.is_fenced())
+    assert_eq(wal.manifest().checkpoint_lsn, 0L)
+    assert_false(@fs.exists(path + "/checkpoint-2.snap"))
+    assert_eq(
+      wal.append_batch({
+        previous_lsn: 1L,
+        transactions: [
+          {
+            lsn: 2L,
+            delta: encode_durable_delta(@router.DurableDelta::empty()).unwrap(),
+          },
+        ],
+      }),
+      Ok(2L),
+    )
+    wal.close()
+    let second = SnapshotStore::open(config).unwrap()
+    let limits = wal_fault_limits()
+    let (recovered, replay) = WalStore::recover_state(
+      second,
+      limits.broker_config(),
+      limits,
+    ).unwrap()
+    assert_eq(replay.committed_lsn(), 2L)
+    recovered.close()
+  })
+}

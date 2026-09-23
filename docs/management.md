@@ -69,9 +69,16 @@ binding. See [configuration](configuration.md) and
 | `POST /v1/config/reload` | config_admin | 501 `capability_unavailable` until the reload coordinator exists |
 
 A connection begins at `await_connect`, may enter `authenticating`, and then
-`active`. TLS handshakes before MQTT registration are not listed. This release
-has one MQTT listener, ID `mqtt`; the management listener is separate and does
-not count as an MQTT connection.
+`active`. TLS handshakes before MQTT registration are not listed. Named TCP/TLS/WS/WSS MQTT listeners share the same Broker state; the
+management listener is separate and does not count as an MQTT connection.
+
+The status persistence object reports `mode`, `state`, `committed_lsn`,
+`applied_lsn`, `checkpoint_lsn`, pending WAL transactions/bytes, and the
+snapshot fields. Int64 values are decimal strings. In strict mode a fenced or
+recovering state forces `ready=false` regardless of the snapshot-only health
+switch; read-only status and metrics remain available while the event loop is
+healthy. Prometheus exposes bounded WAL LSN/pending gauges without Client ID,
+topic or file labels.
 
 ## Details and pagination
 
@@ -137,13 +144,15 @@ messages or publish a historical Will. To remove an online Session: kick,
 wait for its Operation to succeed, fetch the new offline ETag, then delete.
 A stale lifecycle ETag returns 412; an online target returns 409.
 
-All writes currently report `persistence_mode:"off"|"snapshot"` and
-`completion_scope:"runtime"`. A successful delete means the runtime state
-changed, not that the latest snapshot was committed. The
-`snapshot_committed_revision_at_finish` field is only an observation. A normal
-shutdown writes the final snapshot; SIGKILL before the next snapshot may
-restore an earlier Session. Strict/WAL durable completion and HTTP reload
-remain future integration work.
+In `off` and `snapshot`, writes report `completion_scope:"runtime"`;
+`snapshot_committed_revision_at_finish` is only an observation, and a SIGKILL
+before the next snapshot can restore an older Session. In `strict`, delete
+succeeds only after its WAL transaction is synced and applied. Kick also waits
+for the durable detach/cleanup and any triggered Will successor transaction.
+Terminal strict records report `persistence_mode:"strict"`,
+`completion_scope:"durable"`, and decimal `committed_lsn_at_finish`. Accepted
+and running Operation records remain process-local; a lost HTTP response or
+crash can still leave the caller uncertain and must be reconciled on restart.
 
 ## Audit and limits
 

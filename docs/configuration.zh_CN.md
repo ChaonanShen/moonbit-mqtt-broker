@@ -32,6 +32,7 @@ persistent_session_expiry = "30d"
 max_session_expirations_per_tick = 128
 
 [persistence]
+mode = "snapshot"
 data_dir = "/var/lib/moonbit-mqtt-broker"
 max_snapshot_bytes = 67108864
 snapshot_debounce_ms = 250
@@ -61,7 +62,22 @@ log_level = "info"
 ```
 
 `--check-config` 会验证 TOML 及其引用的 TLS/安全文件，但不会监听端口、
-获取持久化锁、打开持久化文件或创建数据目录。
+获取持久化锁、打开持久化文件或创建数据目录。选择同步 WAL 时，在提供
+`data_dir` 的同时配置 `mode = "strict"`。有数据目录而省略 mode 仍默认
+snapshot；没有目录则为 off。off 配目录、strict 无目录或 strict 使用快照
+定时参数均为配置错误。strict 的占盘设置如下：
+
+```toml
+[persistence]
+mode = "strict"
+data_dir = "/var/lib/moonbit-mqtt-broker"
+wal_disk_max_bytes = 1073741824
+wal_disk_reserve_bytes = 268435456
+```
+
+磁盘硬上限须比保留空间至少多一个 64 MiB 段。单事务 delta 默认最多
+4 MiB，超出的持久结果在追加前拒绝；批次上限 64 个事务或 8 MiB，收集延迟
+约 2 ms。每 60 秒尝试 checkpoint。详见[严格提交与恢复](persistence.zh_CN.md#strict-wal-模式)。
 
 `--print-effective-config` 还会应用命令行覆盖，并以规范 TOML 输出最终配置；
 私钥和密码文件的值会替换为 `<redacted>`。

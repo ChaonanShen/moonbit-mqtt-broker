@@ -52,14 +52,15 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 | Topic | `+`、`#` 过滤器，重叠订阅确定性合并，保留消息 |
 | 会话 | Clean/Persistent Session、Client ID 接管、有界离线 QoS 1/2 |
 | 生命周期 | PING、Keep Alive、QoS 0/1/2 Will、SIGTERM/SIGINT 优雅退出 |
-| 持久化 | 可选本地校验快照和严格启动恢复 |
+| 持久化 | 可选校验快照或显式 strict WAL 提交后确认与恢复 |
 | 安全 | 可选 Argon2id 密码、仅允许式 ACL、Principal 所有权会话 |
 | 运维 | TOML 配置、字节预算与连接/认证/发布限流、`$SYS/broker/#` 指标、文本/JSON 日志 |
 
-MQTT 5、共享订阅、Bridge、插件、集群、外部数据库、
-WAL 和零丢失持久化明确不在本版本范围内。可选持久化只保证恢复到最近一次
-成功提交的快照，不提供同步消息持久化。详细边界见
-[兼容性矩阵](docs/compatibility.zh_CN.md)。
+MQTT 5、共享订阅、Bridge、插件、集群与外部数据库仍不在本版范围内。
+`--data-dir` 默认按最近成功快照恢复；显式 `--persistence-mode strict`
+对约定的持久状态增加本机 WAL 提交屏障，不等于复制或端到端投递保证。
+详细边界见[兼容性矩阵](docs/compatibility.zh_CN.md)和
+[持久化说明](docs/persistence.zh_CN.md)。
 
 ## 配置
 
@@ -82,12 +83,21 @@ scripts/moon-docker.sh run --target native src/cmd/broker -- \
   --max-pending-total 1024
 ```
 
-通过 `--data-dir` 启用本地重启持久化：
+通过 `--data-dir` 启用默认的快照重启持久化：
 
 ```bash
 scripts/moon-docker.sh run --target native src/cmd/broker -- \
   --listen 127.0.0.1:1883 \
   --data-dir /workspace/data
+```
+
+备份数据目录后可显式启用严格本机持久化：
+
+```bash
+scripts/moon-docker.sh run --target native src/cmd/broker -- \
+  --listen 127.0.0.1:1883 \
+  --data-dir /workspace/data \
+  --persistence-mode strict
 ```
 
 所有设置也可以从 TOML 加载，命令行参数优先于配置文件：
@@ -209,5 +219,6 @@ Argon2、只有 OpenSSL、两者齐全。Broker 环境没有 MoonBit、编译器
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 中。Broker 为原创 MoonBit
 代码，没有复制 Aedes 或 Mosquitto 的实现源码。
 
-QoS 2 采用 Method B 去重和按阶段恢复；PUBREC/PUBCOMP 不代表已 fsync，持久性仍以
-最新成功提交快照为边界。详见[兼容性](docs/compatibility.zh_CN.md)及[V3 迁移](docs/persistence.zh_CN.md)。
+QoS 2 采用 Method B 去重和按阶段恢复。快照模式的 PUBREC/PUBCOMP 不代表
+已 fsync；strict 模式会先提交对应的持久状态。详见
+[兼容性](docs/compatibility.zh_CN.md)及[模式迁移](docs/persistence.zh_CN.md)。

@@ -37,6 +37,9 @@ jobs:
           path: |
             test-results/distribution/**/*.log
             test-results/distribution/**/*.txt
+            test-results/distribution/**/*.exit-code
+            test-results/distribution/**/*.json
+            test-results/distribution/**/*.tsv
             test-results/distribution/**/runtime-reference.json
             test-results/distribution/**/artifacts.sha256
             test-results/distribution/**/package.zip

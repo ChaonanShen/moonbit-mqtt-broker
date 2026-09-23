@@ -169,9 +169,14 @@ fn RouterDriver::run_strict_management_delete(
     self.runtime.admission.prune_publishers(self.runtime.broker_state())
     self.runtime.map_broker_actions(broker_actions)
   })
-  if submitted is Err(_) {
-    self.strict_delete_failed(operation_id, "durability_unavailable")
-    self.strict_fence("admin-delete-submit")
+  match submitted {
+    Ok(_) => ()
+    Err(CommitEncoding) | Err(CommitBudget) =>
+      self.strict_delete_failed(operation_id, "capacity_exhausted")
+    Err(_) => {
+      self.strict_delete_failed(operation_id, "durability_unavailable")
+      self.strict_fence("admin-delete-submit")
+    }
   }
 }
 

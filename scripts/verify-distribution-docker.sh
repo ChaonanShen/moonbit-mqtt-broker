@@ -25,6 +25,7 @@ mkdir -p "${RESULTS}"
 exec > >(tee "${RESULTS}/verification.log") 2>&1
 volume_created=0
 broker_started=0
+strict_volumes=()
 finish() {
   local status=$?
   trap - EXIT
@@ -35,6 +36,9 @@ finish() {
   if [[ "${volume_created}" -eq 1 ]]; then
     docker volume rm "${SOURCE_VOLUME}" >/dev/null || true
   fi
+  for strict_volume in "${strict_volumes[@]}"; do
+    docker volume rm "${strict_volume}" >/dev/null 2>&1 || true
+  done
   printf 'exit_code=%s\ncompleted_at=%s\n' "${status}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"${RESULTS}/evidence.txt"
   printf 'DISTRIBUTION_EXIT=%s\nDISTRIBUTION_RESULTS=%s\n' "${status}" "${RESULTS}"
   exit "${status}"
@@ -63,9 +67,11 @@ docker run --rm --entrypoint tar --volume "${SOURCE_VOLUME}:/workspace" \
   --volume "${RESULTS}:/results:ro" --workdir /workspace "${DEV_IMAGE}" -xf /results/source.tar
 docker run --rm --platform linux/amd64 --entrypoint bash \
   --volume "${SOURCE_VOLUME}:/workspace" --volume "${RESULTS}:/results" --workdir /workspace \
+  --env "CANDIDATE_SHA=${SOURCE_SHA}" \
   --env "RELEASE_SOAK=${RELEASE_SOAK:-0}" \
   --env "RELEASE_SOAK_SECONDS=${RELEASE_SOAK_SECONDS:-600}" \
   --env "RELEASE_SOAK_PUBLICATIONS=${RELEASE_SOAK_PUBLICATIONS:-100000}" \
+  --env "STRICT_SOAK_PUBLICATIONS=${STRICT_SOAK_PUBLICATIONS:-20000}" \
   "${DEV_IMAGE}" scripts/verify-distribution-build.sh
 
 runtime_options=(--platform linux/amd64 --network none --read-only \
@@ -185,6 +191,100 @@ for profile in base argon2 tls full; do
   docker logs "$BROKER_CONTAINER" >"$RESULTS/runtime-$profile-admin.log" 2>&1
   docker rm "$BROKER_CONTAINER" >/dev/null
   broker_started=0
+  # The same exported candidate binary is exercised in strict mode on a
+  # dedicated writable volume while the runtime root remains read-only.
+  strict_volume="moonbit-mqtt-strict-${profile}-${RUN_ID}"
+  docker volume create "${strict_volume}" >/dev/null
+  strict_volumes+=("${strict_volume}")
+  docker run --rm --platform linux/amd64 --user 0 \
+    --volume "${strict_volume}:/data:rw" --entrypoint sh "${runtime_image}" -c \
+    'chown 65532:65532 /data && chmod 0700 /data'
+  strict_config="${RESULTS}/strict-${profile}.toml"
+  primary_transport=tcp; secondary_transport=ws; secondary_scheme=ws
+  if [[ "${has_tls}" -eq 1 ]]; then
+    primary_transport=tls; secondary_transport=wss; secondary_scheme=wss
+  fi
+  cat >"${strict_config}" <<EOF
+[persistence]
+mode = "strict"
+data_dir = "/data"
+[server]
+max_connections = 32
+[[listeners]]
+id = "primary"
+transport = "${primary_transport}"
+listen = "127.0.0.1:1883"
+max_connections = 32
+EOF
+  if [[ "${has_tls}" -eq 1 ]]; then
+    printf 'tls_cert = "/artifact/server.crt"\ntls_key = "/artifact/server.key"\n' >>"${strict_config}"
+  fi
+  cat >>"${strict_config}" <<EOF
+[[listeners]]
+id = "secondary"
+transport = "${secondary_transport}"
+listen = "127.0.0.1:8083"
+max_connections = 32
+EOF
+  if [[ "${has_tls}" -eq 1 ]]; then
+    printf 'tls_cert = "/artifact/server.crt"\ntls_key = "/artifact/server.key"\n' >>"${strict_config}"
+  fi
+  strict_auth_args=()
+  if [[ "${has_argon2}" -eq 1 ]]; then
+    strict_auth_args=(--allow-anonymous false --password-file /artifact/passwords)
+  fi
+  strict_options=("${runtime_options[@]}" --volume "${strict_volume}:/data:rw" \
+    --volume "${strict_config}:/strict-config.toml:ro")
+  primary_url="${scheme}://127.0.0.1:1883"
+  secondary_url="${secondary_scheme}://127.0.0.1:8083/mqtt"
+  docker run --detach "${strict_options[@]}" --name "${BROKER_CONTAINER}" \
+    "${runtime_image}" --config /strict-config.toml "${strict_auth_args[@]}" >/dev/null
+  broker_started=1
+  docker run --rm --platform linux/amd64 --network "container:${BROKER_CONTAINER}" \
+    --entrypoint node --volume "${SOURCE_VOLUME}:/workspace:ro" \
+    --volume "${RESULTS}/runtime:/artifact:ro" --workdir /workspace "${DEV_IMAGE}" \
+    tests/integration/distribution_strict.mjs seed "${primary_url}" "${secondary_url}" "${auth_mode}" \
+    >"${RESULTS}/strict-${profile}-seed-client.log" 2>&1
+  cat "${RESULTS}/strict-${profile}-seed-client.log"
+  docker stop --time 10 "${BROKER_CONTAINER}" >/dev/null
+  [[ "$(docker inspect --format '{{.State.ExitCode}}' "${BROKER_CONTAINER}")" = 0 ]]
+  docker logs "${BROKER_CONTAINER}" >"${RESULTS}/strict-${profile}-seed.log" 2>&1
+  docker rm "${BROKER_CONTAINER}" >/dev/null
+  broker_started=0
+  docker run --detach "${strict_options[@]}" --name "${BROKER_CONTAINER}" \
+    "${runtime_image}" --config /strict-config.toml "${strict_auth_args[@]}" >/dev/null
+  broker_started=1
+  docker run --rm --platform linux/amd64 --network "container:${BROKER_CONTAINER}" \
+    --entrypoint node --volume "${SOURCE_VOLUME}:/workspace:ro" \
+    --volume "${RESULTS}/runtime:/artifact:ro" --workdir /workspace "${DEV_IMAGE}" \
+    tests/integration/distribution_strict.mjs verify "${primary_url}" "${secondary_url}" "${auth_mode}" \
+    >"${RESULTS}/strict-${profile}-verify-client.log" 2>&1
+  cat "${RESULTS}/strict-${profile}-verify-client.log"
+  docker stop --time 10 "${BROKER_CONTAINER}" >/dev/null
+  [[ "$(docker inspect --format '{{.State.ExitCode}}' "${BROKER_CONTAINER}")" = 0 ]]
+  docker logs "${BROKER_CONTAINER}" >"${RESULTS}/strict-${profile}-verify.log" 2>&1
+  docker rm "${BROKER_CONTAINER}" >/dev/null
+  broker_started=0
+  docker run --detach "${strict_options[@]}" --name "${BROKER_CONTAINER}" \
+    "${runtime_image}" --config /strict-config.toml "${strict_auth_args[@]}" \
+    --management-enabled true --management-details-enabled true \
+    --management-operations-enabled true --management-max-bytes-total 33554432 \
+    --management-listen 127.0.0.1:9091 \
+    --management-token-file /artifact/management-tokens >/dev/null
+  broker_started=1
+  docker run --rm --platform linux/amd64 --network "container:${BROKER_CONTAINER}" \
+    --entrypoint node --volume "${SOURCE_VOLUME}:/workspace:ro" \
+    --volume "${RESULTS}/runtime:/artifact:ro" --workdir /workspace "${DEV_IMAGE}" \
+    tests/integration/management_runtime_admin_smoke.mjs \
+    "${primary_url}" "${auth_mode}" strict \
+    >"${RESULTS}/strict-${profile}-admin-client.log" 2>&1
+  cat "${RESULTS}/strict-${profile}-admin-client.log"
+  docker stop --time 10 "${BROKER_CONTAINER}" >/dev/null
+  [[ "$(docker inspect --format '{{.State.ExitCode}}' "${BROKER_CONTAINER}")" = 0 ]]
+  docker logs "${BROKER_CONTAINER}" >"${RESULTS}/strict-${profile}-admin.log" 2>&1
+  docker rm "${BROKER_CONTAINER}" >/dev/null
+  broker_started=0
+  printf 'runtime_%s_strict=PASS\n' "${profile}" >>"${RESULTS}/evidence.txt"
   printf 'runtime_%s=PASS\n' "${profile}" >>"${RESULTS}/evidence.txt"
 done
 [[ "$(git rev-parse HEAD)" = "${SOURCE_SHA}" ]]

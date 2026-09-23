@@ -29,7 +29,7 @@ pub fn WalRecovery::restore_state(
   self : WalRecovery,
   broker_config : @router.BrokerConfig,
   limits : SnapshotDecodeLimits,
-  max_delta_bytes? : Int = 1048576,
+  max_delta_bytes? : Int = 4194304,
 ) -> Result[WalRecoveredState, PersistenceError] {
   let initial = self.checkpoint
   let generations = initial.identities.map(item => item.generation)
