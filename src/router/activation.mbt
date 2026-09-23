@@ -140,6 +140,15 @@ pub fn BrokerState::commit_activation(
     ignore(self.subscriptions.remove_all(activation.id))
   }
   self.sessions.set(activation.id, activation.session)
+  if self.admin_sessions is Some(index) {
+    if old is None {
+      index.register(activation.id)
+    } else if activation.reset {
+      index.replace(activation.id)
+    } else {
+      index.bump(activation.id)
+    }
+  }
   self.inflight_total += activation.session.inflight_count()
   self.pending_qos1_total += activation.session.pending_count()
   self.inbound_qos2_total += activation.session.inbound_qos2_count()
