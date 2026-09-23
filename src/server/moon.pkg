@@ -11,6 +11,8 @@ import {
   "ChaonanShen/moonbit-mqtt-broker/topic",
   "ChaonanShen/moonbit-mqtt-broker/observability",
   "ChaonanShen/moonbit-mqtt-broker/management",
+  "ChaonanShen/moonbit-mqtt-broker/http_transport",
+  "moonbitlang/core/json",
   "moonbitlang/async/io",
   "moonbitlang/async/pipe",
   "moonbitlang/async/socket",
