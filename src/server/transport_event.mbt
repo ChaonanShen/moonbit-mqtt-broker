@@ -10,5 +10,6 @@ pub(all) enum DriverEvent {
   Accounted(RuntimeEvent, @budget.Ticket)
   RegisterTransport(RegisterTransportEvent)
   Runtime(RuntimeEvent)
+  ObservationDue
   UnregisterTransport(ConnectionId)
 }

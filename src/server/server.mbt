@@ -4,6 +4,7 @@ async fn run_ticker(
   events : @async.Queue[DriverEvent],
   persistence : PersistenceRuntime?,
   bus? : EventBus,
+  observation_interval_ms? : Int,
 ) -> Unit {
   let keep_alive_interval = config.keep_alive_check_interval_ms()
   let auth_interval = config.auth_poll_interval_ms()
@@ -11,6 +12,18 @@ async fn run_ticker(
     keep_alive_interval
   } else {
     auth_interval
+  }
+  let interval = match observation_interval_ms {
+    Some(value) if value > 0 && value < interval => value
+    _ => interval
+  }
+  let first_mono = @budget.monotonic_ms()
+  let mut next_observation_at : Int64? = match observation_interval_ms {
+    Some(value) if value > 0 &&
+      first_mono >= 0L &&
+      first_mono <= 9223372036854775807L - value.to_int64() =>
+      Some(first_mono + value.to_int64())
+    _ => None
   }
   let started_at = @async.now()
   let mut next_deadlines_at = started_at + keep_alive_interval.to_int64()
@@ -54,6 +67,21 @@ async fn run_ticker(
           }
       }
       next_metrics_at = now_ms + config.system_metrics_interval_ms().to_int64()
+    }
+    if next_observation_at is Some(deadline) {
+      let current_mono = @budget.monotonic_ms()
+      if current_mono >= deadline {
+        if bus is Some(active) {
+          active.post_observation()
+        }
+        let observation_delay = observation_interval_ms.unwrap().to_int64()
+        next_observation_at = if current_mono < 0L ||
+          current_mono > 9223372036854775807L - observation_delay {
+          None
+        } else {
+          Some(current_mono + observation_delay)
+        }
+      }
     }
   }
 }

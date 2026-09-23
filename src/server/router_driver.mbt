@@ -439,6 +439,7 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
       )
     }
     Runtime(event) => self.handle_runtime_event(event)
+    ObservationDue => ()
     UnregisterTransport(connection_id) => self.sinks.remove(connection_id)
   }
   self.poll_authentication()
