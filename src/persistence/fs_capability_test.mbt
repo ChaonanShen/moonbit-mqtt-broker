@@ -105,3 +105,39 @@ async test "persistence task group runs cancelled task cleanup before drain defe
   }
   assert_eq(log, ["producer-stopped", "drain"])
 }
+
+///|
+async test "persistence filesystem supports append and offset writes" {
+  with_capability_dir("append-offset", path => {
+    let file_path = path + "/wal"
+    let file = @fs.open(
+      file_path,
+      mode=ReadWrite,
+      create_mode=CreateNew,
+      permission=0o600,
+    )
+    file.write_at(b"abc", position=0L)
+    file.write_at(b"def", position=3L)
+    file.sync(only_data=false)
+    assert_eq(file.size(), 6L)
+    file.close()
+    let append = @fs.open(
+      file_path,
+      mode=WriteOnly,
+      create_mode=OpenExisting,
+      append=true,
+    )
+    append.write(b"ghi")
+    append.sync(only_data=false)
+    append.close()
+    assert_eq(@fs.read_file(file_path).text(), "abcdefghi")
+    let truncate = @fs.open(
+      file_path,
+      mode=WriteOnly,
+      create_mode=TruncateExisting,
+    )
+    truncate.sync(only_data=false)
+    truncate.close()
+    assert_eq(@fs.read_file(file_path).text(), "")
+  })
+}
