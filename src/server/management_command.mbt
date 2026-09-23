@@ -242,7 +242,13 @@ fn RouterDriver::accept_management_command(
     return
   }
   let now_wall = @async.now()
-  let mode = if active.persistence is Some(_) { "snapshot" } else { "off" }
+  let mode = if self.strict is Some(_) {
+    "strict"
+  } else if active.persistence is Some(_) {
+    "snapshot"
+  } else {
+    "off"
+  }
   let record = match
     table.insert(
       spec.actor_token_id,

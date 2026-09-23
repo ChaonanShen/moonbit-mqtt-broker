@@ -131,6 +131,7 @@ fn fixed_resource_kinds() -> Array[@budget.ResourceKind] {
     @budget.ResourceKind::Outbound,
     @budget.ResourceKind::Routing,
     @budget.ResourceKind::Snapshot,
+    @budget.ResourceKind::WalPending,
     @budget.ResourceKind::AuthRequest,
     @budget.ResourceKind::AuthWorkspace,
     @budget.ResourceKind::AuthResult,
@@ -440,6 +441,41 @@ pub fn render_prometheus(
       }
     }
   }
+  add_scalar(
+    lines,
+    "wal_committed_lsn",
+    "Last synced WAL LSN",
+    sample.committed_lsn.unwrap_or(0L).to_string(),
+    false,
+  )
+  add_scalar(
+    lines,
+    "wal_applied_lsn",
+    "Last applied WAL LSN",
+    sample.applied_lsn.unwrap_or(0L).to_string(),
+    false,
+  )
+  add_scalar(
+    lines,
+    "wal_checkpoint_lsn",
+    "Published WAL checkpoint LSN",
+    sample.checkpoint_lsn.unwrap_or(0L).to_string(),
+    false,
+  )
+  add_scalar(
+    lines,
+    "wal_pending_transactions",
+    "Uncommitted WAL transactions",
+    sample.wal_pending_transactions.to_string(),
+    false,
+  )
+  add_scalar(
+    lines,
+    "wal_pending_bytes",
+    "Uncommitted WAL bytes",
+    sample.wal_pending_bytes.to_string(),
+    false,
+  )
   let state = add_family(
     lines, "snapshot_state", "Snapshot persistence state", "gauge",
   )
@@ -448,6 +484,8 @@ pub fn render_prometheus(
       ("disabled", PersistenceState::Disabled),
       ("healthy", PersistenceState::Healthy),
       ("degraded", PersistenceState::Degraded),
+      ("recovering", PersistenceState::Recovering),
+      ("fenced", PersistenceState::Fenced),
     ] {
     let (label, candidate) = item
     lines.push(
@@ -562,6 +600,11 @@ pub fn worst_case_response_bytes() -> Int {
     persistence_state: PersistenceState::Degraded,
     state_revision: max,
     snapshot_committed_revision: Some(max),
+    committed_lsn: Some(max),
+    applied_lsn: Some(max),
+    checkpoint_lsn: Some(max),
+    wal_pending_transactions: max,
+    wal_pending_bytes: max,
     snapshot_dirty_age_ms: max,
     snapshot_budget_deferred: max,
     lifecycle: ServiceLifecycle::Failed,

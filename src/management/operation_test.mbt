@@ -159,3 +159,41 @@ test "ten thousand operation expiry cycles reuse slots without ID or key leaks" 
   }
   assert_true(table.check_invariants())
 }
+
+///|
+test "strict operation records committed LSN only after durable success" {
+  let table = OperationTable::new("boot", 2, 1000L)
+  let record = table
+    .insert(
+      "operator",
+      DeleteSession,
+      "1",
+      "delete:1",
+      "Key_0123456789abe",
+      "strict",
+      100L,
+      1000L,
+    )
+    .unwrap()
+  assert_false(table.mark_durable_finish(record.id, 1L))
+  assert_true(table.start(record.id, Applying, 101L))
+  assert_true(
+    table.finish(
+      record.id,
+      true,
+      true,
+      false,
+      false,
+      None,
+      Some(7L),
+      None,
+      102L,
+      2000L,
+    ),
+  )
+  assert_true(table.mark_durable_finish(record.id, 42L))
+  let done = table.get_internal(record.id).unwrap()
+  assert_eq(done.committed_lsn_at_finish, Some(42L))
+  assert_eq(done.completion_scope, "durable")
+  assert_true(done.to_json().stringify().contains("committed_lsn_at_finish"))
+}

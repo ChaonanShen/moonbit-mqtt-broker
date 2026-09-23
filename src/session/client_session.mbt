@@ -531,3 +531,63 @@ pub fn ClientSession::promote_for_commit(
 ) -> Result[Array[SessionDelivery], SessionError] {
   self.promote_pending(limits)
 }
+
+///|
+pub fn ClientSession::inflight_item(
+  self : ClientSession,
+  index : Int,
+) -> OutboundInflight? {
+  if index < 0 || index >= self.inflight.length() {
+    None
+  } else {
+    Some(self.inflight[index].copy())
+  }
+}
+
+///|
+pub fn ClientSession::pending_item(
+  self : ClientSession,
+  index : Int,
+) -> SessionMessage? {
+  if index < 0 || index >= self.pending.length() {
+    None
+  } else {
+    Some(self.pending[index].copy())
+  }
+}
+
+///|
+pub fn ClientSession::inbound_qos2_item(
+  self : ClientSession,
+  index : Int,
+) -> SessionPacketId? {
+  if index < 0 || index >= self.inbound_qos2.length() {
+    None
+  } else {
+    Some(self.inbound_qos2[index])
+  }
+}
+
+///|
+pub fn ClientSession::inflight_item_cost(
+  self : ClientSession,
+  index : Int,
+) -> Int64? {
+  if index < 0 || index >= self.inflight.length() {
+    None
+  } else {
+    Some(self.inflight[index].cost())
+  }
+}
+
+///|
+pub fn ClientSession::pending_item_cost(
+  self : ClientSession,
+  index : Int,
+) -> Int64? {
+  if index < 0 || index >= self.pending.length() {
+    None
+  } else {
+    Some(self.pending[index].cost())
+  }
+}

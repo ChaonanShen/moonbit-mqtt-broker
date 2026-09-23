@@ -195,3 +195,76 @@ async test "WAL recovery replays committed state result without routing" {
     recovered.close()
   })
 }
+
+///|
+async test "WAL checkpoint publication retains only the active post-checkpoint chain" {
+  with_wal_store_dir("checkpoint", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let first = SnapshotStore::open(config).unwrap()
+    let wal = WalStore::bootstrap(first, wal_store_empty_checkpoint()).unwrap()
+    let empty_delta = encode_durable_delta(@router.DurableDelta::empty()).unwrap()
+    assert_eq(
+      wal.append_batch({
+        previous_lsn: 0L,
+        transactions: [{ lsn: 1L, delta: empty_delta }],
+      }),
+      Ok(1L),
+    )
+    let checkpoint : WalCheckpoint = {
+      ..wal_store_empty_checkpoint(),
+      generation: 2L,
+      lsn: 1L,
+    }
+    assert_eq(wal.publish_checkpoint(checkpoint), Ok(()))
+    assert_eq(wal.manifest().checkpoint_lsn, 1L)
+    assert_eq(wal.manifest().sealed_segments.length(), 0)
+    assert_false(@fs.exists(path + "/checkpoint-1.snap"))
+    assert_false(@fs.exists(path + "/wal-1.log"))
+    assert_eq(
+      wal.append_batch({
+        previous_lsn: 1L,
+        transactions: [{ lsn: 2L, delta: empty_delta }],
+      }),
+      Ok(2L),
+    )
+    wal.close()
+    let second = SnapshotStore::open(config).unwrap()
+    let limits = wal_store_limits()
+    let (recovered, replay) = WalStore::recover(second, limits).unwrap()
+    assert_eq(replay.checkpoint().lsn, 1L)
+    assert_eq(replay.committed_lsn(), 2L)
+    assert_eq(replay.batches().length(), 1)
+    assert_eq(
+      replay
+      .restore_state(limits.broker_config(), limits)
+      .unwrap()
+      .committed_lsn(),
+      2L,
+    )
+    recovered.close()
+  })
+}
+
+///|
+async test "WAL disk cap includes unreferenced sparse orphan files" {
+  with_wal_store_dir("orphan-cap", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let first = SnapshotStore::open(config).unwrap()
+    let wal = WalStore::bootstrap(first, wal_store_empty_checkpoint()).unwrap()
+    wal.close()
+    let orphan = @fs.open(
+      path + "/wal-999.log",
+      mode=WriteOnly,
+      create_mode=CreateNew,
+      permission=0o600,
+    )
+    orphan.write_at(b"x", position=940000000L)
+    orphan.sync(only_data=false)
+    orphan.close()
+    let second = SnapshotStore::open(config).unwrap()
+    assert_true(
+      WalStore::recover(second, wal_store_limits()) is Err(LimitExceeded(..)),
+    )
+    second.close()
+  })
+}

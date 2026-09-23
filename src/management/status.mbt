@@ -3,6 +3,7 @@ fn status_persistence_mode(value : PersistenceMode) -> String {
   match value {
     Off => "off"
     Snapshot => "snapshot"
+    Strict => "strict"
   }
 }
 
@@ -12,6 +13,8 @@ fn status_persistence_state(value : PersistenceState) -> String {
     Disabled => "disabled"
     Healthy => "healthy"
     Degraded => "degraded"
+    Recovering => "recovering"
+    Fenced => "fenced"
   }
 }
 
@@ -86,6 +89,11 @@ pub fn encode_status(
     ),
     ("dirty_age_ms", json_decimal(sample.snapshot_dirty_age_ms)),
     ("budget_deferred", json_decimal(sample.snapshot_budget_deferred)),
+    ("committed_lsn", json_optional_decimal(sample.committed_lsn)),
+    ("applied_lsn", json_optional_decimal(sample.applied_lsn)),
+    ("checkpoint_lsn", json_optional_decimal(sample.checkpoint_lsn)),
+    ("wal_pending_transactions", json_decimal(sample.wal_pending_transactions)),
+    ("wal_pending_bytes", json_decimal(sample.wal_pending_bytes)),
   ])
   let resources : Map[String, Json] = Map([
     ("committed_bytes", json_decimal(sample.resource_total_committed)),
@@ -125,7 +133,10 @@ pub fn encode_status(
     ("details", details_enabled.to_json()),
     ("operations", operations_enabled.to_json()),
     ("reload", false.to_json()),
-    ("completion_scope", "runtime".to_json()),
+    (
+      "completion_scope",
+      (if sample.persistence_mode == Strict { "durable" } else { "runtime" }).to_json(),
+    ),
   ])
   let root : Map[String, Json] = Map([
     ("api_version", @json.to_json("1")),

@@ -116,7 +116,12 @@ fn print_help() -> Unit {
   println("  --max-inbound-qos2-total N         Default 4096")
   println("  --max-pending-qos1-per-session N   Legacy alias")
   println("  --max-pending-qos1-total N         Legacy alias")
-  println("  --data-dir PATH                    Enable Disk V3 snapshots")
+  println("  --data-dir PATH                    Persistence data directory")
+  println(
+    "  --persistence-mode off|snapshot|strict  Default off without data-dir, snapshot with data-dir",
+  )
+  println("  --wal-disk-max-bytes N             Default 1073741824")
+  println("  --wal-disk-reserve-bytes N         Default 268435456")
   println("  --max-snapshot-bytes N             Default 67108864")
   println("  --snapshot-debounce-ms N           Default 250")
   println("  --snapshot-max-delay-ms N          Default 2000")
@@ -345,6 +350,11 @@ async fn run_main() -> Unit {
   let mut max_inbound_qos2_per_session = 64
   let mut max_inbound_qos2_total = 4096
   let mut data_dir : String? = None
+  let mut persistence_mode = "auto"
+  let mut wal_disk_max_bytes = 1073741824L
+  let mut wal_disk_reserve_bytes = 268435456L
+  let mut wal_option_used = false
+  let mut snapshot_timing_option_used = false
   let mut max_snapshot_bytes = 67108864L
   let mut snapshot_debounce_ms = 250L
   let mut snapshot_max_delay_ms = 2000L
@@ -582,6 +592,30 @@ async fn run_main() -> Unit {
         data_dir = Some(args[index + 1])
         index = index + 2
       }
+      "--persistence-mode" => {
+        if index + 1 >= args.length() ||
+          !(args[index + 1] == "off" ||
+          args[index + 1] == "snapshot" ||
+          args[index + 1] == "strict") {
+          raise CliError("--persistence-mode must be off, snapshot or strict")
+        }
+        persistence_mode = args[index + 1]
+        index += 2
+      }
+      "--wal-disk-max-bytes" => {
+        wal_disk_max_bytes = parse_bounded_int64(
+          args, index, "--wal-disk-max-bytes", 335544320L,
+        )
+        wal_option_used = true
+        index += 2
+      }
+      "--wal-disk-reserve-bytes" => {
+        wal_disk_reserve_bytes = parse_bounded_int64(
+          args, index, "--wal-disk-reserve-bytes", 268435456L,
+        )
+        wal_option_used = true
+        index += 2
+      }
       "--max-snapshot-bytes" => {
         max_snapshot_bytes = parse_bounded_int64(
           args, index, "--max-snapshot-bytes", 24L,
@@ -594,6 +628,7 @@ async fn run_main() -> Unit {
           args, index, "--snapshot-debounce-ms", 1L,
         )
         snapshot_option_used = true
+        snapshot_timing_option_used = true
         index = index + 2
       }
       "--snapshot-max-delay-ms" => {
@@ -601,6 +636,7 @@ async fn run_main() -> Unit {
           args, index, "--snapshot-max-delay-ms", 1L,
         )
         snapshot_option_used = true
+        snapshot_timing_option_used = true
         index = index + 2
       }
       "--snapshot-retry-ms" => {
@@ -608,6 +644,7 @@ async fn run_main() -> Unit {
           args, index, "--snapshot-retry-ms", 1L,
         )
         snapshot_option_used = true
+        snapshot_timing_option_used = true
         index = index + 2
       }
       "--tls-cert" => {
@@ -1373,6 +1410,31 @@ async fn run_main() -> Unit {
   if snapshot_option_used && data_dir is None {
     raise CliError("snapshot options require --data-dir")
   }
+  let effective_persistence_mode = if persistence_mode == "auto" {
+    if data_dir is Some(_) {
+      "snapshot"
+    } else {
+      "off"
+    }
+  } else {
+    persistence_mode
+  }
+  if effective_persistence_mode == "off" && data_dir is Some(_) {
+    raise CliError("off persistence must not specify --data-dir")
+  }
+  if effective_persistence_mode != "off" && data_dir is None {
+    raise CliError("snapshot and strict persistence require --data-dir")
+  }
+  if effective_persistence_mode == "strict" && snapshot_timing_option_used {
+    raise CliError("snapshot timing options do not apply to strict persistence")
+  }
+  if wal_option_used && effective_persistence_mode != "strict" {
+    raise CliError("WAL options require strict persistence")
+  }
+  if wal_disk_reserve_bytes > 9223372036854775807L - 67108864L ||
+    wal_disk_max_bytes < wal_disk_reserve_bytes + 67108864L {
+    raise CliError("WAL disk max must exceed reserve by at least one segment")
+  }
   match data_dir {
     Some(path) =>
       match
@@ -1443,11 +1505,14 @@ async fn run_main() -> Unit {
     )
     print_resource_section_values(resources, "broker")
     println("[persistence]")
+    println("mode = " + quote(effective_persistence_mode))
     println("data_dir = " + quote(data_dir.unwrap_or("")))
     println("max_snapshot_bytes = " + max_snapshot_bytes.to_string())
     println("snapshot_debounce_ms = " + snapshot_debounce_ms.to_string())
     println("snapshot_max_delay_ms = " + snapshot_max_delay_ms.to_string())
     println("snapshot_retry_ms = " + snapshot_retry_ms.to_string())
+    println("wal_disk_max_bytes = " + wal_disk_max_bytes.to_string())
+    println("wal_disk_reserve_bytes = " + wal_disk_reserve_bytes.to_string())
     if listener_drafts.is_empty() {
       println("[tls]")
       println("cert = " + quote(tls_certificate_file.unwrap_or("")))
@@ -1634,6 +1699,121 @@ async fn run_main() -> Unit {
       let store = match @persistence.SnapshotStore::open(persistence_config) {
         Ok(value) => value
         Err(error) => raise CliError("persistence startup: " + error.category())
+      }
+      let manifest_path = store.data_dir() + "/broker.manifest"
+      let has_manifest = @fs.exists(manifest_path) catch {
+        _ => {
+          store.close()
+          raise CliError("cannot inspect persistence manifest")
+        }
+      }
+      if effective_persistence_mode == "snapshot" && has_manifest {
+        store.close()
+        raise CliError("strict WAL directory cannot start in snapshot mode")
+      }
+      if effective_persistence_mode == "strict" {
+        let limits = match
+          @persistence.SnapshotDecodeLimits::new(
+            broker_config,
+            config.max_packet_size(),
+            max_snapshot_bytes=max_snapshot_bytes.to_int(),
+          ) {
+          Ok(value) => value
+          Err(error) => {
+            store.close()
+            raise CliError("strict decode limits: " + error.category())
+          }
+        }
+        let (wal_store, initial_state, identities, committed_lsn) = if has_manifest {
+          let (wal_store, recovery) = match
+            @persistence.WalStore::recover(
+              store,
+              limits,
+              disk_max_bytes=wal_disk_max_bytes,
+              disk_reserve_bytes=wal_disk_reserve_bytes,
+            ) {
+            Ok(value) => value
+            Err(error) => {
+              store.close()
+              raise CliError("WAL recovery: " + error.category())
+            }
+          }
+          let restored = match recovery.restore_state(broker_config, limits) {
+            Ok(value) => value
+            Err(error) => {
+              wal_store.close()
+              raise CliError("WAL replay: " + error.category())
+            }
+          }
+          (
+            wal_store,
+            restored.state(),
+            restored.identities(),
+            restored.committed_lsn(),
+          )
+        } else {
+          let initial_state = match
+            store.load_state(broker_config, config.max_packet_size()) {
+            Ok(value) => value
+            Err(error) => {
+              store.close()
+              raise CliError("snapshot import: " + error.category())
+            }
+          }
+          let snapshot = initial_state.export_snapshot()
+          let identities : Array[@persistence.WalSessionIdentity] = []
+          for index in 0..<snapshot.sessions.length() {
+            identities.push({
+              client_id: snapshot.sessions[index].client_id,
+              generation: index.to_int64() + 1L,
+            })
+          }
+          let wal_store = match
+            @persistence.WalStore::bootstrap(
+              store,
+              { generation: 1L, lsn: 0L, identities, snapshot },
+              disk_max_bytes=wal_disk_max_bytes,
+              disk_reserve_bytes=wal_disk_reserve_bytes,
+            ) {
+            Ok(value) => value
+            Err(error) => {
+              store.close()
+              raise CliError("WAL bootstrap: " + error.category())
+            }
+          }
+          (wal_store, initial_state, identities, 0L)
+        }
+        let strict = match
+          @server.StrictPersistenceRuntime::new(
+            wal_store, initial_state, identities, committed_lsn,
+          ) {
+          Ok(value) => value
+          Err(error) => {
+            wal_store.close()
+            raise CliError("strict runtime: " + error.category())
+          }
+        }
+        logger.log(
+          @observability.LogRecord::new(
+            @async.now(),
+            @observability.Info,
+            "wal_restored",
+            message="strict WAL restored committed_lsn=" +
+              committed_lsn.to_string(),
+          ),
+        )
+        @server.run_listeners(
+          effective_listeners,
+          config,
+          initial_state,
+          strict~,
+          shutdown_requested~,
+          once~,
+          security~,
+          logger~,
+          management?,
+        )
+        return
       }
       let initial_state = match
         store.load_state(broker_config, config.max_packet_size()) {

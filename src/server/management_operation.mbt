@@ -5,6 +5,7 @@ priv struct ManagementKickWatch {
   mut terminal_seen : Bool
   mut unregistered : Bool
   mut timed_out : Bool
+  mut durable_done : Bool
 }
 
 ///|
@@ -88,6 +89,11 @@ fn RouterDriver::finish_management_kick(
       @budget.monotonic_ms(),
     ),
   )
+  if self.strict is Some(coordinator) {
+    ignore(
+      table.mark_durable_finish(watch.operation_id, coordinator.committed_lsn()),
+    )
+  }
   if active.audit is Some(ring) {
     ignore(
       ring.append({
@@ -130,6 +136,7 @@ fn RouterDriver::poll_management_kicks(self : RouterDriver) -> Unit {
     }
     if watch.terminal_seen &&
       watch.unregistered &&
+      (self.strict is None || watch.durable_done) &&
       !self.sinks.contains(id) &&
       !self.runtime.has_connection(id) {
       if self.auth_outstanding.get(id).unwrap_or(0) == 0 {
@@ -236,6 +243,7 @@ fn RouterDriver::run_management_kick(
     terminal_seen: !has_runtime,
     unregistered: !has_sink,
     timed_out: false,
+    durable_done: !has_runtime,
   }
   self.management_closing.set(id, watch)
   let started_at = @async.now()

@@ -103,6 +103,7 @@ async test "strict QoS1 ACK and fanout wait for WAL completion" {
         }
         CommitFencedResult(reason) => fail("WAL fenced: " + reason)
         NoCommitCompletion => @async.sleep(1)
+        _ => fail("unexpected checkpoint completion")
       }
     }
     let actions = result.unwrap()
@@ -141,6 +142,7 @@ async test "strict QoS1 ACK and fanout wait for WAL completion" {
         }
         CommitFencedResult(reason) => fail("WAL fenced: " + reason)
         NoCommitCompletion => @async.sleep(1)
+        _ => fail("unexpected checkpoint completion")
       }
     }
     assert_true(removed.unwrap()[0] is SendPacket({ packet: Unsuback(_), .. }))
@@ -171,6 +173,7 @@ async test "strict QoS1 ACK and fanout wait for WAL completion" {
         }
         CommitFencedResult(reason) => fail("WAL fenced: " + reason)
         NoCommitCompletion => @async.sleep(1)
+        _ => fail("unexpected checkpoint completion")
       }
     }
     assert_true(added.unwrap()[0] is SendPacket({ packet: Suback(_), .. }))
@@ -260,4 +263,82 @@ test "cancelled strict CONNECT releases reserved Will and session owner" {
   }
   assert_eq(rt.broker_state().resource_ledger().occupied(), occupied)
   assert_eq(rt.broker_state().session_count(), 0)
+}
+
+///|
+test "strict takeover closes old transport after durable activation and queues its Will" {
+  let broker_config = @router.BrokerConfig::new(4, 16, 4).unwrap()
+  let config = ServerConfig::new(4, 1024, 2048, 8, 32, 1000, 100, broker_config).unwrap()
+  let runtime = BrokerRuntime::new(
+    config,
+    @router.BrokerState::new(broker_config),
+  )
+  let old_id = ConnectionId::new(101L)
+  let new_id = ConnectionId::new(102L)
+  ignore(
+    runtime.apply(
+      TransportOpened({ connection_id: old_id, accepted_at_ms: 0L }),
+    ),
+  )
+  ignore(
+    runtime.apply(
+      PacketReceived({
+        connection_id: old_id,
+        received_at_ms: 1L,
+        packet: Connect({
+          client_id: "same",
+          username: None,
+          password: None,
+          keep_alive: 10,
+          clean_session: false,
+          will: Some({
+            topic: "will/topic",
+            payload: b"old",
+            qos: QoS1,
+            retain: true,
+          }),
+        }),
+      }),
+    ),
+  )
+  ignore(
+    runtime.apply(
+      TransportOpened({ connection_id: new_id, accepted_at_ms: 2L }),
+    ),
+  )
+  let client = @session.ClientId::new("same").unwrap()
+  let prepared = runtime.prepare_strict_connect_packet(
+    {
+      connection_id: new_id,
+      received_at_ms: 3L,
+      packet: Connect({
+        client_id: "same",
+        username: None,
+        password: None,
+        keep_alive: 10,
+        clean_session: false,
+        will: None,
+      }),
+    },
+    Map([(client, 1L)]),
+    2L,
+  )
+  let (plan, after) = match prepared {
+    StrictPrepared(plan, after) => (plan, after)
+    _ => fail("takeover must prepare")
+  }
+  assert_true(runtime.has_connection(old_id))
+  assert_eq(runtime.active_connection(client), Some(old_id))
+  runtime.broker_state().begin_action_scope()
+  let actions = after(plan.commit().unwrap())
+  runtime.broker_state().end_action_scope()
+  assert_false(runtime.has_connection(old_id))
+  assert_eq(runtime.active_connection(client), Some(new_id))
+  assert_true(
+    actions.any(action => action is StartDurableWill(id) && id == old_id),
+  )
+  let pending = runtime.take_strict_pending_will(old_id).unwrap()
+  assert_eq(pending.1.payload, b"old")
+  release_optional(pending.2)
+  assert_eq(runtime.check_invariants(), Ok(()))
 }

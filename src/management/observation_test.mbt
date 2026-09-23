@@ -42,6 +42,11 @@ fn sample_observation() -> ObservationSnapshot {
     persistence_mode: Off,
     persistence_state: Disabled,
     snapshot_committed_revision: None,
+    committed_lsn: None,
+    applied_lsn: None,
+    checkpoint_lsn: None,
+    wal_pending_transactions: 0L,
+    wal_pending_bytes: 0L,
     lifecycle: Serving,
     mqtt_listener_up: true,
     management_listener_up: true,
@@ -129,6 +134,11 @@ test "status JSON exposes precise string counters and no secret fields" {
     sessions_total: 12L,
     messages_sent: 9007199254740993L,
     snapshot_committed_revision: Some(7L),
+    committed_lsn: None,
+    applied_lsn: None,
+    checkpoint_lsn: None,
+    wal_pending_transactions: 0L,
+    wal_pending_bytes: 0L,
   }
   let json = @utf8.decode(encode_status(sample, 1500L, 5000L, 5000L)) catch {
     _ => fail("status was not UTF-8")
@@ -413,4 +423,27 @@ test "status advertises B availability without implying reload or durability" {
   assert_true(text.contains("\"operations\":true"))
   assert_true(text.contains("\"reload\":false"))
   assert_true(text.contains("\"completion_scope\":\"runtime\""))
+}
+
+///|
+test "strict fenced readiness ignores snapshot health override" {
+  let sample = {
+    ..sample_observation(),
+    persistence_mode: Strict,
+    persistence_state: Fenced,
+    committed_lsn: Some(10L),
+    applied_lsn: Some(9L),
+    checkpoint_lsn: Some(4L),
+    wal_pending_transactions: 1L,
+    wal_pending_bytes: 512L,
+    ready_require_snapshot_healthy: false,
+  }
+  let health = evaluate_health(sample, 1500L, 5000L, 5000L)
+  assert_true(health.live)
+  assert_false(health.ready)
+  assert_true(health.reasons.contains("durability_fenced"))
+  let body = @utf8.decode(encode_status(sample, 1500L, 5000L, 5000L))
+  assert_true(body.contains("\"strict\""))
+  assert_true(body.contains("\"committed_lsn\":\"10\""))
+  assert_true(body.contains("\"applied_lsn\":\"9\""))
 }

@@ -196,6 +196,12 @@ fn map_section(
       "broker.max_session_expirations_per_tick" =>
         add_integer(args, "--max-session-expirations-per-tick", entry, full_key)
       "persistence.data_dir" => add_string(args, "--data-dir", entry, full_key)
+      "persistence.mode" =>
+        add_string(args, "--persistence-mode", entry, full_key)
+      "persistence.wal_disk_max_bytes" =>
+        add_integer(args, "--wal-disk-max-bytes", entry, full_key)
+      "persistence.wal_disk_reserve_bytes" =>
+        add_integer(args, "--wal-disk-reserve-bytes", entry, full_key)
       "persistence.max_snapshot_bytes" =>
         add_integer(args, "--max-snapshot-bytes", entry, full_key)
       "persistence.snapshot_debounce_ms" =>

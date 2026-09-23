@@ -50,6 +50,7 @@ pub(all) struct OperationRecord {
   persistence_mode : String
   state_revision_after : Int64?
   snapshot_committed_revision_at_finish : Int64?
+  committed_lsn_at_finish : Int64?
   error_code : String?
   deadline_monotonic_ms : Int64
   terminal_expiry_ms : Int64?
@@ -210,6 +211,7 @@ pub fn OperationTable::insert(
     persistence_mode,
     state_revision_after: None,
     snapshot_committed_revision_at_finish: None,
+    committed_lsn_at_finish: None,
     error_code: None,
     deadline_monotonic_ms,
     terminal_expiry_ms: None,
@@ -299,6 +301,28 @@ pub fn OperationTable::finish(
         snapshot_committed_revision_at_finish,
         finished_at_ms: Some(now_ms),
         terminal_expiry_ms: Some(monotonic_ms + self.retention_ms),
+      })
+    _ => false
+  }
+}
+
+///|
+/// Called only after the strict coordinator has applied the matching WAL LSN.
+pub fn OperationTable::mark_durable_finish(
+  self : OperationTable,
+  id : String,
+  committed_lsn : Int64,
+) -> Bool {
+  if committed_lsn < 1L {
+    return false
+  }
+  match self.get_internal(id) {
+    Some(record) if record.state == Succeeded &&
+      record.persistence_mode == "strict" =>
+      self.replace({
+        ..record,
+        completion_scope: "durable",
+        committed_lsn_at_finish: Some(committed_lsn),
       })
     _ => false
   }
@@ -434,6 +458,10 @@ pub fn OperationRecord::to_json(self : OperationRecord) -> Json {
     (
       "snapshot_committed_revision_at_finish",
       optional_decimal_json(self.snapshot_committed_revision_at_finish),
+    ),
+    (
+      "committed_lsn_at_finish",
+      optional_decimal_json(self.committed_lsn_at_finish),
     ),
     ("error_code", optional_string_json(self.error_code)),
   ])

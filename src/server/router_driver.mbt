@@ -9,8 +9,14 @@ pub struct RouterDriver {
   priv strict_generations : Map[@session.ClientId, Int64]
   priv strict_held : @deque.Deque[(RuntimeEvent, @budget.Ticket?)]
   priv strict_held_connections : Map[ConnectionId, Int]
+  priv strict_management_held : @deque.Deque[ManagementCommandEvent]
   priv mut strict_pending_connection : ConnectionId?
   priv mut strict_fenced : Bool
+  priv mut strict_checkpoint_cursor : @router.SnapshotExportCursor?
+  priv mut strict_checkpoint_lsn : Int64
+  priv mut strict_checkpoint_inflight : Bool
+  priv mut strict_checkpoint_next_ms : Int64
+  priv mut strict_checkpoint_degraded : Bool
   priv auth_executor : @security.AuthExecutor?
   priv mut auth_infrastructure : @budget.Ticket?
   priv auth_cancels : Map[Int64, Bool]
@@ -81,8 +87,14 @@ pub fn RouterDriver::new(
     strict_generations,
     strict_held: @deque.Deque([]),
     strict_held_connections: Map([]),
+    strict_management_held: @deque.Deque([]),
     strict_pending_connection: None,
     strict_fenced: false,
+    strict_checkpoint_cursor: None,
+    strict_checkpoint_lsn: 0L,
+    strict_checkpoint_inflight: false,
+    strict_checkpoint_next_ms: @async.now() + 60000L,
+    strict_checkpoint_degraded: false,
     auth_executor,
     auth_infrastructure,
     auth_cancels: Map([]),
@@ -486,7 +498,9 @@ fn RouterDriver::dispatch(
               release_optional(ticket)
               self.runtime.map_broker_actions(broker_actions)
             })
-            if submitted is Err(_) {
+            if submitted is Ok(_) {
+              self.strict_pending_connection = Some(connection_id)
+            } else {
               self.strict_fence("will-submit")
             }
           }
@@ -592,7 +606,7 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
     ManagementQuery(query) => self.handle_management_query(query)
     ManagementCommand(command) =>
       if self.strict is Some(_) {
-        self.strict_fence("management-command-not-wired")
+        self.handle_strict_management_command(command)
       } else {
         self.handle_management_command(command)
       }
@@ -611,6 +625,8 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
   self.poll_authentication()
   if self.strict is Some(_) {
     self.poll_strict_completion()
+    self.poll_strict_checkpoint()
+    self.poll_management_kicks()
   } else {
     self.poll_management_kicks()
     ignore(self.poll_snapshot(@async.now()))

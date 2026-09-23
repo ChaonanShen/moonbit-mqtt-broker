@@ -49,6 +49,7 @@ async test "strict coordinator releases activation only after WAL completion" {
         }
         CommitFencedResult(reason) => fail("unexpected fence: " + reason)
         NoCommitCompletion => @async.sleep(1)
+        _ => fail("unexpected checkpoint completion")
       }
     }
     assert_true(completed)
