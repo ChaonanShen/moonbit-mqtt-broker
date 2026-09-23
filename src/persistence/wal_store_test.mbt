@@ -268,3 +268,49 @@ async test "WAL disk cap includes unreferenced sparse orphan files" {
     second.close()
   })
 }
+
+///|
+async test "streaming WAL recovery applies multiple segments without retaining history" {
+  with_wal_store_dir("stream-replay", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let lock = SnapshotStore::open(config).unwrap()
+    let wal = WalStore::bootstrap(lock, wal_store_empty_checkpoint()).unwrap()
+    for lsn in 1..<=4 {
+      let delta : @router.DurableDelta = {
+        session_puts: [],
+        session_deletes: [],
+        retained_puts: [
+          { topic: "value/" + lsn.to_string(), payload: b"x", qos: 1 },
+        ],
+        retained_deletes: [],
+      }
+      assert_eq(
+        wal.append_batch(
+          {
+            previous_lsn: lsn.to_int64() - 1L,
+            transactions: [
+              {
+                lsn: lsn.to_int64(),
+                delta: encode_durable_delta(delta).unwrap(),
+              },
+            ],
+          },
+          max_segment_bytes=512,
+        ),
+        Ok(lsn.to_int64()),
+      )
+    }
+    assert_true(wal.manifest().sealed_segments.length() > 0)
+    wal.close()
+    let second = SnapshotStore::open(config).unwrap()
+    let limits = wal_store_limits()
+    let (recovered, restored) = WalStore::recover_state(
+      second,
+      limits.broker_config(),
+      limits,
+    ).unwrap()
+    assert_eq(restored.committed_lsn(), 4L)
+    assert_eq(restored.state().retained_count(), 4)
+    recovered.close()
+  })
+}

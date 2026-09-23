@@ -108,21 +108,23 @@ fn RouterDriver::poll_strict_completion(self : RouterDriver) -> Unit {
         self.drain_strict_queues()
       }
     }
-    CommitReleased(actions, delta) => {
-      for deletion in delta.session_deletes {
-        let id = @session.ClientId::new(deletion.client_id).unwrap()
-        self.strict_generations.remove(id)
+    CommitReleased(actions, deltas, connections) => {
+      for index in 0..<deltas.length() {
+        let delta = deltas[index]
+        for deletion in delta.session_deletes {
+          let id = @session.ClientId::new(deletion.client_id).unwrap()
+          self.strict_generations.remove(id)
+        }
+        for put in delta.session_puts {
+          let id = @session.ClientId::new(put.session.client_id).unwrap()
+          self.strict_generations.set(id, put.generation)
+        }
+        if connections[index] is Some(connection_id) &&
+          self.management_closing.get(connection_id) is Some(watch) &&
+          !self.runtime.strict_pending_wills.contains(connection_id) {
+          watch.durable_done = true
+        }
       }
-      for put in delta.session_puts {
-        let id = @session.ClientId::new(put.session.client_id).unwrap()
-        self.strict_generations.set(id, put.generation)
-      }
-      if self.strict_pending_connection is Some(connection_id) &&
-        self.management_closing.get(connection_id) is Some(watch) &&
-        !self.runtime.strict_pending_wills.contains(connection_id) {
-        watch.durable_done = true
-      }
-      self.strict_pending_connection = None
       self.dispatch(actions)
       self.drain_strict_queues()
     }
@@ -135,7 +137,7 @@ fn RouterDriver::drain_strict_queues(self : RouterDriver) -> Unit {
     Some(value) => value
     None => return
   }
-  while !coordinator.has_pending() &&
+  while !coordinator.has_submitted() &&
         !self.strict_fenced &&
         !self.strict_checkpoint_inflight &&
         self.strict_checkpoint_cursor is None {
@@ -147,7 +149,7 @@ fn RouterDriver::drain_strict_queues(self : RouterDriver) -> Unit {
     self.strict_released_connection(event)
     self.handle_strict_runtime_event(event, ticket)
   }
-  while !coordinator.has_pending() &&
+  while !coordinator.has_submitted() &&
         !self.strict_fenced &&
         !self.strict_checkpoint_inflight &&
         self.strict_checkpoint_cursor is None {
@@ -163,22 +165,47 @@ fn RouterDriver::strict_submit_packet_plan(
   self : RouterDriver,
   connection_id : ConnectionId,
   plan : StrictPacketPlan,
-) -> Unit {
+) -> Bool {
   match plan {
-    StrictImmediate(actions) => self.dispatch(actions)
-    StrictClose(id, reason) =>
+    StrictImmediate(actions) => {
+      self.dispatch(actions)
+      true
+    }
+    StrictClose(id, reason) => {
       if self.sinks.get(id) is Some(sink) {
         sink.resolve_handshake(false)
         sink.try_close(reason)
       }
+      true
+    }
     StrictPrepared(mutation, after) => {
       let coordinator = self.strict.unwrap()
-      match coordinator.submit(mutation, after) {
-        Ok(_) => self.strict_pending_connection = Some(connection_id)
-        Err(_) => self.strict_fence("commit-submit")
+      match coordinator.submit(mutation, after, connection_id~) {
+        Ok(_) => true
+        Err(CommitBusy) => false
+        Err(_) => {
+          self.strict_fence("commit-submit")
+          true
+        }
       }
     }
   }
+}
+
+///|
+fn RouterDriver::enqueue_strict_event(
+  self : RouterDriver,
+  event : RuntimeEvent,
+  ticket : @budget.Ticket?,
+) -> Bool {
+  if self.strict_held.length() >=
+    self.runtime.config.max_runtime_events() +
+    self.runtime.config.max_connections() {
+    return false
+  }
+  self.strict_held_connection(event)
+  self.strict_held.push_back((event, ticket))
+  true
 }
 
 ///|
@@ -194,38 +221,53 @@ fn RouterDriver::handle_strict_runtime_event(
       return
     }
   }
+  let mut transferred = false
+  defer (if !transferred { release_optional(ticket) })
   if self.strict_fenced || coordinator.is_fenced() {
-    release_optional(ticket)
     self.strict_fence("writer-fenced")
     return
   }
-  if coordinator.has_pending() ||
-    self.strict_checkpoint_cursor is Some(_) ||
-    self.strict_checkpoint_inflight {
-    if event is PacketReceived(packet) &&
-      packet.packet is Pingreq &&
-      self.strict_pending_connection != Some(packet.connection_id) &&
-      self.strict_held_connections.get(packet.connection_id).unwrap_or(0) == 0 &&
-      self.runtime.connections.get(packet.connection_id)
-      is Some({ phase: Active(_), .. }) {
-      release_optional(ticket)
-      self.dispatch([
-        SendPacket({ connection_id: packet.connection_id, packet: Pingresp }),
-      ])
-      return
-    }
-    if self.strict_held.length() >=
-      self.runtime.config.max_runtime_events() +
-      self.runtime.config.max_connections() {
-      release_optional(ticket)
-      self.strict_fence("commit-queue-limit")
-      return
-    }
-    self.strict_held_connection(event)
-    self.strict_held.push_back((event, ticket))
+  if event is PacketReceived(packet) &&
+    packet.packet is Pingreq &&
+    !coordinator.contains_connection(packet.connection_id) &&
+    self.strict_held_connections.get(packet.connection_id).unwrap_or(0) == 0 &&
+    self.runtime.connections.get(packet.connection_id)
+    is Some({ phase: Active(_), .. }) {
+    self.dispatch([
+      SendPacket({ connection_id: packet.connection_id, packet: Pingresp }),
+    ])
     return
   }
-  defer release_optional(ticket)
+  let collecting_blocks = if coordinator.is_collecting() {
+    match event {
+      PacketReceived(packet) if !coordinator.contains_connection(
+          packet.connection_id,
+        ) =>
+        match packet.packet {
+          Publish(_) | Puback(_) | Pubrec(_) | Pubrel(_) | Pubcomp(_) => false
+          _ => true
+        }
+      AuthenticationPollDue(_) | EmitSystemMetrics(_) => false
+      _ => true
+    }
+  } else {
+    false
+  }
+  if coordinator.has_submitted() ||
+    collecting_blocks ||
+    self.strict_checkpoint_cursor is Some(_) ||
+    self.strict_checkpoint_inflight {
+    if coordinator.is_collecting() && !coordinator.flush() {
+      self.strict_fence("group-commit-submit")
+      return
+    }
+    if self.enqueue_strict_event(event, ticket) {
+      transferred = true
+    } else {
+      self.strict_fence("commit-queue-limit")
+    }
+    return
+  }
   match event {
     PacketReceived(packet) => {
       if packet.packet is Connect(_) &&
@@ -242,9 +284,11 @@ fn RouterDriver::handle_strict_runtime_event(
             .resources()
             .get("control_reserve_bytes"),
           ) {
-          self.strict_submit_packet_plan(
-            packet.connection_id,
-            StrictClose(packet.connection_id, ResourceExhausted),
+          ignore(
+            self.strict_submit_packet_plan(
+              packet.connection_id,
+              StrictClose(packet.connection_id, ResourceExhausted),
+            ),
           )
           return
         }
@@ -256,9 +300,11 @@ fn RouterDriver::handle_strict_runtime_event(
           control=control_packet(packet.packet),
         )
         is Err(_) {
-        self.strict_submit_packet_plan(
-          packet.connection_id,
-          StrictClose(packet.connection_id, ResourceExhausted),
+        ignore(
+          self.strict_submit_packet_plan(
+            packet.connection_id,
+            StrictClose(packet.connection_id, ResourceExhausted),
+          ),
         )
         return
       }
@@ -276,21 +322,31 @@ fn RouterDriver::handle_strict_runtime_event(
           )
         _ => StrictClose(packet.connection_id, ProtocolError)
       }
-      self.strict_submit_packet_plan(packet.connection_id, plan)
+      if !self.strict_submit_packet_plan(packet.connection_id, plan) {
+        if !coordinator.flush() {
+          self.strict_fence("group-commit-submit")
+        } else if self.enqueue_strict_event(event, ticket) {
+          transferred = true
+        } else {
+          self.strict_fence("commit-queue-limit")
+        }
+      }
     }
     AuthenticationCompleted(completed) => {
       let connection_id = self.runtime.auth_tasks
         .get(completed.request_id)
         .map(task => task.connection_id)
         .unwrap_or(ConnectionId::new(0L))
-      self.strict_submit_packet_plan(
-        connection_id,
-        self.runtime.prepare_strict_auth_completion(
-          completed,
-          self.strict_generations,
-          coordinator.committed_lsn() + 1L,
-        ),
-      )
+      if !self.strict_submit_packet_plan(
+          connection_id,
+          self.runtime.prepare_strict_auth_completion(
+            completed,
+            self.strict_generations,
+            coordinator.committed_lsn() + 1L,
+          ),
+        ) {
+        self.strict_fence("unexpected-commit-busy")
+      }
     }
     TransportOpened(_) | AuthenticationSubmitFailed(_) | EmitSystemMetrics(_) =>
       self.dispatch(self.runtime.apply(event))
@@ -299,10 +355,15 @@ fn RouterDriver::handle_strict_runtime_event(
       if self.management_closing.get(closed.connection_id) is Some(watch) {
         watch.terminal_seen = true
       }
-      self.strict_submit_packet_plan(
-        closed.connection_id,
-        self.runtime.prepare_strict_termination(closed, self.strict_generations),
-      )
+      if !self.strict_submit_packet_plan(
+          closed.connection_id,
+          self.runtime.prepare_strict_termination(
+            closed,
+            self.strict_generations,
+          ),
+        ) {
+        self.strict_fence("unexpected-commit-busy")
+      }
     }
     CheckDeadlines(now_ms) => {
       self.runtime.admission.cleanup_ips((self.runtime.admission.clock)())
@@ -331,19 +392,21 @@ fn RouterDriver::handle_strict_runtime_event(
                 return
               }
             }
-            self.strict_submit_packet_plan(
-              ConnectionId::new(0L),
-              StrictPrepared(Lifecycle(plan), actions => {
-                let mapped = self.runtime.map_broker_actions(actions)
-                if kind is @router.Delete {
-                  ignore(
-                    self.runtime.map_broker_actions([
-                      @router.SessionExpired(client_id),
-                    ]),
-                  )
-                }
-                mapped
-              }),
+            ignore(
+              self.strict_submit_packet_plan(
+                ConnectionId::new(0L),
+                StrictPrepared(Lifecycle(plan), actions => {
+                  let mapped = self.runtime.map_broker_actions(actions)
+                  if kind is @router.Delete {
+                    ignore(
+                      self.runtime.map_broker_actions([
+                        @router.SessionExpired(client_id),
+                      ]),
+                    )
+                  }
+                  mapped
+                }),
+              ),
             )
           }
         }
@@ -368,11 +431,13 @@ fn RouterDriver::handle_strict_runtime_event(
               Err(_) => None
             }
             if plan is Some(value) {
-              self.strict_submit_packet_plan(
-                ConnectionId::new(0L),
-                StrictPrepared(Ack(value), actions => {
-                  self.runtime.map_broker_actions(actions)
-                }),
+              ignore(
+                self.strict_submit_packet_plan(
+                  ConnectionId::new(0L),
+                  StrictPrepared(Ack(value), actions => {
+                    self.runtime.map_broker_actions(actions)
+                  }),
+                ),
               )
             }
           }
@@ -451,5 +516,46 @@ fn RouterDriver::poll_strict_checkpoint(self : RouterDriver) -> Unit {
     self.strict_checkpoint_degraded = true
     self.strict_checkpoint_next_ms = now_ms + 1000L
     self.drain_strict_queues()
+  }
+}
+
+///|
+pub async fn RouterDriver::shutdown_strict(self : RouterDriver) -> Unit {
+  let coordinator = match self.strict {
+    Some(value) => value
+    None => return
+  }
+  let ids : Array[ConnectionId] = []
+  for id, _ in self.runtime.connections {
+    ids.push(id)
+  }
+  for id in ids {
+    self.handle(
+      Runtime(
+        TransportClosed({
+          connection_id: id,
+          reason: ServerShutdown,
+          observed_at_ms: @async.now(),
+        }),
+      ),
+    )
+  }
+  for ;; {
+    if coordinator.is_collecting() && !coordinator.flush() {
+      self.strict_fence("shutdown-submit")
+    }
+    self.handle(WalCompletionDue)
+    if self.strict_fenced || coordinator.is_fenced() {
+      return
+    }
+    if !coordinator.has_pending() &&
+      self.strict_held.length() == 0 &&
+      self.strict_management_held.length() == 0 &&
+      self.runtime.connection_count() == 0 &&
+      !self.strict_checkpoint_inflight &&
+      self.strict_checkpoint_cursor is None {
+      return
+    }
+    @async.sleep(2)
   }
 }

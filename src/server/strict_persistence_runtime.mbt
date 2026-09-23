@@ -39,6 +39,7 @@ pub fn StrictPersistenceRuntime::new(
       1048576,
       1L,
       committed_lsn,
+      broker=initial_state,
     ) {
     Ok(value) => value
     Err(_) =>
@@ -87,7 +88,7 @@ pub fn StrictPersistenceRuntime::close(self : StrictPersistenceRuntime) -> Unit 
 async fn run_with_strict_writer(
   strict : StrictPersistenceRuntime?,
   driver : RouterDriver,
-  events : @async.Queue[DriverEvent],
+  bus : EventBus,
   body : async () -> Unit,
 ) -> Unit {
   match strict {
@@ -95,13 +96,17 @@ async fn run_with_strict_writer(
     Some(runtime) =>
       @async.with_task_group() <| group => {
         let writer_task = group.spawn(() => {
-          runtime.writer.run(() => {
-            ignore(events.try_put(WalCompletionDue)) catch {
-              _ => ()
-            }
-          })
+          runtime.writer.run(() => bus.post_wal_completion())
+        })
+        errdefer @async.protect_from_cancel(() => {
+          runtime.writer.close_requests()
+          writer_task.wait()
+          runtime.writer.close_store()
+          runtime.closed = true
         })
         body()
+        driver.shutdown_authentication()
+        driver.shutdown_strict()
         runtime.writer.close_requests()
         @async.protect_from_cancel(() => writer_task.wait())
         driver.handle(WalCompletionDue)
@@ -119,10 +124,10 @@ async fn run_with_persistence_writers(
   snapshot : PersistenceRuntime?,
   strict : StrictPersistenceRuntime?,
   driver : RouterDriver,
-  events : @async.Queue[DriverEvent],
+  bus : EventBus,
   body : async () -> Unit,
 ) -> Unit {
-  run_with_strict_writer(strict, driver, events, () => {
+  run_with_strict_writer(strict, driver, bus, () => {
     run_with_snapshot_writer(snapshot, driver, body)
   })
 }

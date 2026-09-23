@@ -10,7 +10,6 @@ pub struct RouterDriver {
   priv strict_held : @deque.Deque[(RuntimeEvent, @budget.Ticket?)]
   priv strict_held_connections : Map[ConnectionId, Int]
   priv strict_management_held : @deque.Deque[ManagementCommandEvent]
-  priv mut strict_pending_connection : ConnectionId?
   priv mut strict_fenced : Bool
   priv mut strict_checkpoint_cursor : @router.SnapshotExportCursor?
   priv mut strict_checkpoint_lsn : Int64
@@ -88,7 +87,6 @@ pub fn RouterDriver::new(
     strict_held: @deque.Deque([]),
     strict_held_connections: Map([]),
     strict_management_held: @deque.Deque([]),
-    strict_pending_connection: None,
     strict_fenced: false,
     strict_checkpoint_cursor: None,
     strict_checkpoint_lsn: 0L,
@@ -494,13 +492,15 @@ fn RouterDriver::dispatch(
             release_optional(ticket)
           }
           Some(value) => {
-            let submitted = coordinator.submit(PublishWithWill(value, ticket), broker_actions => {
-              release_optional(ticket)
-              self.runtime.map_broker_actions(broker_actions)
-            })
-            if submitted is Ok(_) {
-              self.strict_pending_connection = Some(connection_id)
-            } else {
+            let submitted = coordinator.submit(
+              PublishWithWill(value, ticket),
+              broker_actions => {
+                release_optional(ticket)
+                self.runtime.map_broker_actions(broker_actions)
+              },
+              connection_id~,
+            )
+            if submitted is Err(_) {
               self.strict_fence("will-submit")
             }
           }
@@ -563,6 +563,11 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
         self.handle_runtime_event(event)
       }
     RegisterTransport(register) => {
+      if self.strict_fenced {
+        register.sink.resolve_handshake(false)
+        register.sink.try_close(ServerShutdown)
+        return
+      }
       if self.sinks.get(register.connection_id) is Some(_) {
         return
       }
@@ -589,6 +594,12 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
         self.handle_runtime_event(event)
       }
     WalCompletionDue => ()
+    WalFlushDue =>
+      if self.strict is Some(coordinator) &&
+        coordinator.is_collecting() &&
+        !coordinator.flush() {
+        self.strict_fence("group-commit-submit")
+      }
     ObservationDue =>
       if self.management is Some(active) {
         let sampled_at = @budget.monotonic_ms()
@@ -625,6 +636,10 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
   self.poll_authentication()
   if self.strict is Some(_) {
     self.poll_strict_completion()
+    if self.strict is Some(coordinator) &&
+      coordinator.check_timeout(@async.now()) {
+      self.strict_fence("commit-timeout")
+    }
     self.poll_strict_checkpoint()
     self.poll_management_kicks()
   } else {

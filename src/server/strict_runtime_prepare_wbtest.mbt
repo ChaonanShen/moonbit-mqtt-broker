@@ -97,7 +97,7 @@ async test "strict QoS1 ACK and fanout wait for WAL completion" {
     let mut result : Array[RuntimeAction]? = None
     for _ in 0..<1000 {
       match coordinator.poll() {
-        CommitReleased(actions, _) => {
+        CommitReleased(actions, _, _) => {
           result = Some(actions)
           break
         }
@@ -136,7 +136,7 @@ async test "strict QoS1 ACK and fanout wait for WAL completion" {
     let mut removed : Array[RuntimeAction]? = None
     for _ in 0..<1000 {
       match coordinator.poll() {
-        CommitReleased(actions, _) => {
+        CommitReleased(actions, _, _) => {
           removed = Some(actions)
           break
         }
@@ -167,7 +167,7 @@ async test "strict QoS1 ACK and fanout wait for WAL completion" {
     let mut added : Array[RuntimeAction]? = None
     for _ in 0..<1000 {
       match coordinator.poll() {
-        CommitReleased(actions, _) => {
+        CommitReleased(actions, _, _) => {
           added = Some(actions)
           break
         }

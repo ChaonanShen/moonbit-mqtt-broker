@@ -24,6 +24,7 @@ async fn run_ticker(
   } else {
     interval
   }
+  let interval = if strict is Some(_) && interval > 2 { 2 } else { interval }
   let first_mono = @budget.monotonic_ms()
   let mut next_maintenance_at = first_mono + 20L
   let mut next_observation_at : Int64? = match observation_interval_ms {
@@ -41,6 +42,12 @@ async fn run_ticker(
   for ;; {
     @async.sleep(interval)
     let now_ms = @async.now()
+    if strict is Some(runtime) && runtime.coordinator().collecting_due() {
+      match bus {
+        Some(active) => active.post_wal_flush()
+        None => ignore(events.try_put(WalFlushDue)) catch { _ => () }
+      }
+    }
     if now_ms >= next_deadlines_at {
       match bus {
         Some(bus) => bus.post_tick(CheckDeadlines(now_ms))
@@ -275,7 +282,7 @@ pub async fn serve_listeners(
     driver.shutdown_authentication()
     driver.shutdown_management(bus)
   })
-  run_with_persistence_writers(persistence, strict, driver, events, () => {
+  run_with_persistence_writers(persistence, strict, driver, bus, () => {
     @async.with_task_group() <| group => {
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         driver.run_budgeted(bus)
@@ -425,7 +432,9 @@ pub async fn serve_listeners(
       }
     }
   })
-  driver.shutdown_authentication()
+  if strict is None {
+    driver.shutdown_authentication()
+  }
 }
 
 ///|
@@ -528,7 +537,7 @@ pub async fn serve_once(
       )
   }
   errdefer @async.protect_from_cancel(() => driver.shutdown_authentication())
-  run_with_persistence_writers(persistence, strict, driver, events, () => {
+  run_with_persistence_writers(persistence, strict, driver, bus, () => {
     @async.with_task_group() <| group => {
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         driver.run_budgeted(bus)
@@ -616,7 +625,9 @@ pub async fn serve_once(
       )
     }
   })
-  driver.shutdown_authentication()
+  if strict is None {
+    driver.shutdown_authentication()
+  }
   driver.shutdown_management(bus)
 }
 
