@@ -12,6 +12,7 @@ pub struct ManagementHttp {
   config : @management.ManagementConfig
   tokens : @management.TokenDatabase
   cache : @management.ObservationCache
+  budget : @management.ManagementBudget
   rejections : @management.ManagementRejections
   connection_bucket : @budget.Bucket
   request_bucket : @budget.Bucket
@@ -24,6 +25,7 @@ pub fn ManagementHttp::new(
   config : @management.ManagementConfig,
   tokens : @management.TokenDatabase,
   cache : @management.ObservationCache,
+  budget : @management.ManagementBudget,
   rejections : @management.ManagementRejections,
   boot_id : String,
   now_monotonic_ms : Int64,
@@ -53,6 +55,7 @@ pub fn ManagementHttp::new(
     config,
     tokens,
     cache,
+    budget,
     rejections,
     connection_bucket,
     request_bucket,
