@@ -456,6 +456,9 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
     self.last_progress_monotonic_ms = completed
     if self.management is Some(active) {
       active.cache.update_driver_progress(completed)
+      active.availability.details_available = active.config.details_enabled() &&
+        self.runtime.broker_state().management_index_available() &&
+        self.management_connection_index_available()
     }
   }
   defer self.runtime.broker_state().end_action_scope()

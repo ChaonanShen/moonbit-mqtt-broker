@@ -12,6 +12,13 @@ pub(all) enum ManagementStartupError {
 } derive(Eq, Debug)
 
 ///|
+pub struct ManagementAvailability {
+  mut details_available : Bool
+}
+
+///|
+
+///|
 /// Created only after both mandatory listeners are bound. Shutdown cancels
 /// and waits for the acceptor and its handlers before close() releases the
 /// cache and parent ledger ticket.
@@ -21,6 +28,7 @@ pub struct ManagementRuntime {
   budget : @management.ManagementBudget
   cache : @management.ObservationCache
   http : ManagementHttp
+  availability : ManagementAvailability
   query_mailbox : ManagementQueryMailbox?
   command_mailbox : ManagementCommandMailbox?
   operations : @management.OperationTable?
@@ -99,6 +107,7 @@ pub fn ManagementRuntime::new(
   } else {
     None
   }
+  let availability : ManagementAvailability = { details_available: false }
   let http = match
     ManagementHttp::new(
       startup.config,
@@ -110,6 +119,7 @@ pub fn ManagementRuntime::new(
       started_at,
       query_mailbox?,
       command_mailbox?,
+      availability~,
     ) {
     Ok(value) => value
     Err(_) => {
@@ -125,6 +135,7 @@ pub fn ManagementRuntime::new(
     budget,
     cache,
     http,
+    availability,
     query_mailbox,
     command_mailbox,
     operations,
@@ -172,6 +183,7 @@ pub fn ManagementRuntime::mark_stopping(self : ManagementRuntime) -> Unit {
 pub fn ManagementRuntime::close(self : ManagementRuntime) -> Unit {
   if !self.closed {
     self.closed = true
+    self.availability.details_available = false
     self.cache.close()
     ignore(self.budget.close())
     self.budget.release_b_tables()

@@ -233,6 +233,11 @@ pub async fn serve(
     ignore(driver.enable_management_connection_index(config.max_connections()))
   }
   if management is Some(active) {
+    active.availability.details_available = active.config.details_enabled() &&
+      initial_state.management_index_available() &&
+      driver.management_connection_index_available()
+  }
+  if management is Some(active) {
     let sample = driver.capture_observation(
       @budget.monotonic_ms(),
       @async.now(),

@@ -163,3 +163,38 @@ async test "typed query reads session detail and bounded page from driver" {
   management.close()
   assert_eq(state.resource_ledger().occupied(), baseline)
 }
+
+///|
+test "retained metadata preflight rejects escape expansion before JSON copy" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  assert_true(state.enable_management_index())
+  let name = @utf8.decode(Bytes::make(33000, 34))
+  let topic = @topic.TopicName::new(name).unwrap()
+  ignore(
+    state
+    .apply(
+      @router.Publish({
+        origin: @router.PublishOrigin::Internal,
+        topic,
+        payload: b"x",
+        qos: @session.QoS0,
+        retain: true,
+      }),
+    )
+    .unwrap(),
+  )
+  let driver = RouterDriver::new(BrokerRuntime::new(config, state))
+  assert_true(
+    management_row_key_too_large(
+      @management.Retained,
+      name,
+      state,
+      driver,
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      65536,
+    ),
+  )
+  assert_eq(state.retained_count(), 1)
+  assert_eq(state.admin_retained_view(name).unwrap().payload_bytes, 1L)
+}

@@ -395,3 +395,22 @@ test "shutdown withdraws ready before releasing cache ownership" {
   cache.close()
   assert_true(budget.close())
 }
+
+///|
+test "status advertises B availability without implying reload or durability" {
+  let body = encode_status(
+    sample_observation(),
+    1500L,
+    5000L,
+    5000L,
+    details_enabled=true,
+    operations_enabled=true,
+    details_available=true,
+  )
+  let text = @utf8.decode(body)
+  assert_true(text.contains("\"details_available\":true"))
+  assert_true(text.contains("\"details\":true"))
+  assert_true(text.contains("\"operations\":true"))
+  assert_true(text.contains("\"reload\":false"))
+  assert_true(text.contains("\"completion_scope\":\"runtime\""))
+}

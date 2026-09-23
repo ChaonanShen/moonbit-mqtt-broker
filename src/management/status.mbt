@@ -47,6 +47,9 @@ pub fn encode_status(
   snapshot_max_age_ms : Int64,
   driver_max_age_ms : Int64,
   driver_progress_override? : Int64,
+  details_enabled? : Bool = false,
+  operations_enabled? : Bool = false,
+  details_available? : Bool = false,
 ) -> Bytes {
   let health = evaluate_health(
     sample,
@@ -118,6 +121,12 @@ pub fn encode_status(
     ("acl_denials", json_decimal(sample.acl_denials)),
     ("tls_handshake_failures", json_decimal(sample.tls_handshake_failures)),
   ])
+  let capabilities : Map[String, Json] = Map([
+    ("details", details_enabled.to_json()),
+    ("operations", operations_enabled.to_json()),
+    ("reload", false.to_json()),
+    ("completion_scope", "runtime".to_json()),
+  ])
   let root : Map[String, Json] = Map([
     ("api_version", @json.to_json("1")),
     ("boot_id", @json.to_json(sample.boot_id)),
@@ -132,6 +141,8 @@ pub fn encode_status(
     ("persistence", @json.to_json(persistence)),
     ("resources", @json.to_json(resources)),
     ("counters", @json.to_json(counters)),
+    ("capabilities", capabilities.to_json()),
+    ("details_available", details_available.to_json()),
   ])
   @utf8.encode(@json.to_json(root).stringify())
 }

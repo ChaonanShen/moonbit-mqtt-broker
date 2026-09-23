@@ -58,7 +58,17 @@ fn RouterDriver::finish_management_kick(
     None => return
   }
   let revision = Some(self.runtime.broker_state().snapshot_revision())
-  let committed = active.persistence.map(value => value.committed_revision())
+  let committed = match active.persistence {
+    Some(value) => {
+      let revision = value.committed_revision()
+      if revision >= 0L {
+        Some(revision)
+      } else {
+        None
+      }
+    }
+    None => None
+  }
   let now_wall = @async.now()
   ignore(
     table.finish(

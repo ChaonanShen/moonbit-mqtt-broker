@@ -119,3 +119,43 @@ test "capacity failure is atomic and terminal reap frees a slot" {
   assert_true(second.id != first.id)
   assert_true(table.check_invariants())
 }
+
+///|
+test "ten thousand operation expiry cycles reuse slots without ID or key leaks" {
+  let table = OperationTable::new("boot", 16, 1000L)
+  for number in 0..<10000 {
+    let now = number.to_int64() * 2000L
+    let record = table
+      .insert(
+        "actor",
+        DeleteSession,
+        "1",
+        "DELETE:1:etag",
+        "Key_0123456789abc",
+        "off",
+        now,
+        now + 1000L,
+      )
+      .unwrap()
+    assert_true(
+      table.finish(
+        record.id,
+        true,
+        true,
+        false,
+        false,
+        None,
+        Some(number.to_int64()),
+        None,
+        now + 1L,
+        now,
+      ),
+    )
+    assert_eq(table.cleanup(now + 1000L, 16), 1)
+    assert_eq(table.live_count(), 0)
+    if number % 100 == 0 {
+      assert_true(table.check_invariants())
+    }
+  }
+  assert_true(table.check_invariants())
+}

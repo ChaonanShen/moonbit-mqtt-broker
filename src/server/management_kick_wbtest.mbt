@@ -367,3 +367,143 @@ async test "DISCONNECT before kick terminal suppresses historical Will" {
   sink.close()
   management.close()
 }
+
+///|
+async test "running kick timeout keeps supervision until true terminal" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  assert_true(state.enable_management_index())
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let config_b = @management.ManagementConfig::new(
+    enabled=true,
+    token_file="/fixture/tokens",
+    details_enabled=true,
+    operations_enabled=true,
+    max_bytes_total=33554432L,
+    operation_timeout_ms=1000,
+  ).unwrap()
+  let tokens = command_tokens()
+  let management = ManagementRuntime::new(
+    listener,
+    { config: config_b, tokens },
+    state.resource_ledger(),
+  ).unwrap()
+  let driver = RouterDriver::new(BrokerRuntime::new(config, state), management~)
+  assert_true(
+    driver.enable_management_connection_index(config.max_connections()),
+  )
+  let id = ConnectionId::new(61L)
+  let sink = TransportSink::new(2)
+  driver.handle(
+    RegisterTransport({ connection_id: id, sink, accepted_at_ms: 0L }),
+  )
+  let actor = command_actor(tokens)
+  let spec = @management.parse_command(
+    "POST",
+    "/v1/connections/61/disconnect",
+    @management.connection_etag(management.context.boot_id, 61L),
+    "Key_0123456789abc",
+    actor.token_id(),
+  ).unwrap()
+  let mailbox = management.command_mailbox.unwrap()
+  let ticket = mailbox.submit(spec, actor).unwrap()
+  driver.handle(ManagementCommand(mailbox.take().unwrap()))
+  assert_eq(mailbox.wait(ticket).unwrap().status, @http_transport.Accepted)
+  mailbox.release(ticket)
+  driver.handle(ManagementCommand(mailbox.take().unwrap()))
+  let table = management.operations.unwrap()
+  let record = match
+    table.lookup_key(actor.token_id(), spec.idempotency_key, spec.normalized()) {
+    @management.KeyMatch(value) => value
+    _ => fail("missing operation")
+  }
+  ignore(
+    table.replace({
+      ..record,
+      deadline_monotonic_ms: @budget.monotonic_ms() - 1L,
+    }),
+  )
+  driver.poll_management_kicks()
+  let timed = table.get_internal(record.id).unwrap()
+  assert_eq(timed.state, @management.Running)
+  assert_true(timed.timed_out)
+  assert_eq(driver.management_closing.length(), 1)
+  driver.handle(
+    Runtime(
+      TransportClosed({
+        connection_id: id,
+        reason: AdminKick,
+        observed_at_ms: 1L,
+      }),
+    ),
+  )
+  driver.handle(UnregisterTransport(id))
+  let completed = table.get_internal(record.id).unwrap()
+  assert_eq(completed.state, @management.Succeeded)
+  assert_true(completed.timed_out)
+  sink.close()
+  management.close()
+}
+
+///|
+async test "shutdown leaves started kick terminal with uncertain effect" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  assert_true(state.enable_management_index())
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let config_b = @management.ManagementConfig::new(
+    enabled=true,
+    token_file="/fixture/tokens",
+    details_enabled=true,
+    operations_enabled=true,
+    max_bytes_total=33554432L,
+  ).unwrap()
+  let tokens = command_tokens()
+  let management = ManagementRuntime::new(
+    listener,
+    { config: config_b, tokens },
+    state.resource_ledger(),
+  ).unwrap()
+  let driver = RouterDriver::new(BrokerRuntime::new(config, state), management~)
+  assert_true(
+    driver.enable_management_connection_index(config.max_connections()),
+  )
+  let id = ConnectionId::new(71L)
+  let sink = TransportSink::new(2)
+  driver.handle(
+    RegisterTransport({ connection_id: id, sink, accepted_at_ms: 0L }),
+  )
+  let actor = command_actor(tokens)
+  let spec = @management.parse_command(
+    "POST",
+    "/v1/connections/71/disconnect",
+    @management.connection_etag(management.context.boot_id, 71L),
+    "Key_0123456789abc",
+    actor.token_id(),
+  ).unwrap()
+  let mailbox = management.command_mailbox.unwrap()
+  let ticket = mailbox.submit(spec, actor).unwrap()
+  driver.handle(ManagementCommand(mailbox.take().unwrap()))
+  assert_eq(mailbox.wait(ticket).unwrap().status, @http_transport.Accepted)
+  mailbox.release(ticket)
+  driver.handle(ManagementCommand(mailbox.take().unwrap()))
+  let record = match
+    management.operations
+    .unwrap()
+    .lookup_key(actor.token_id(), spec.idempotency_key, spec.normalized()) {
+    @management.KeyMatch(value) => value
+    _ => fail("missing operation")
+  }
+  let data : @async.Queue[DriverEvent] = @async.Queue(kind=Blocking(16))
+  let bus = EventBus::new(config, state.resource_ledger(), data).unwrap()
+  bus.attach_management_commands(mailbox)
+  driver.shutdown_management(bus)
+  let terminal = management.operations.unwrap().get_internal(record.id).unwrap()
+  assert_eq(terminal.state, @management.Failed)
+  assert_eq(terminal.error_code, Some("shutdown_effect_uncertain"))
+  assert_true(terminal.timed_out)
+  assert_false(terminal.transport_closed)
+  bus.close()
+  sink.close()
+  management.close()
+}
