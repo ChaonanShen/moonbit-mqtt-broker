@@ -117,65 +117,84 @@ pub fn BrokerMetrics::uptime_seconds(
 }
 
 ///|
+fn saturating_counter_increment(value : Int64) -> Int64 {
+  if value == 9223372036854775807L {
+    value
+  } else {
+    value + 1L
+  }
+}
+
+///|
 fn BrokerMetrics::record_received(self : BrokerMetrics) -> Unit {
-  self.messages_received = self.messages_received + 1L
+  self.messages_received = saturating_counter_increment(self.messages_received)
 }
 
 ///|
 fn BrokerMetrics::record_sent(self : BrokerMetrics) -> Unit {
-  self.messages_sent = self.messages_sent + 1L
+  self.messages_sent = saturating_counter_increment(self.messages_sent)
 }
 
 ///|
 fn BrokerMetrics::record_dropped(self : BrokerMetrics) -> Unit {
-  self.messages_dropped = self.messages_dropped + 1L
+  self.messages_dropped = saturating_counter_increment(self.messages_dropped)
 }
 
 ///|
 fn BrokerMetrics::record_auth_request(self : BrokerMetrics) -> Unit {
-  self.auth_requests += 1L
+  self.auth_requests = saturating_counter_increment(self.auth_requests)
 }
 
 ///|
 fn BrokerMetrics::record_auth_success(self : BrokerMetrics) -> Unit {
-  self.auth_successes += 1L
+  self.auth_successes = saturating_counter_increment(self.auth_successes)
 }
 
 ///|
 fn BrokerMetrics::record_auth_bad_credentials(self : BrokerMetrics) -> Unit {
-  self.auth_bad_credentials += 1L
+  self.auth_bad_credentials = saturating_counter_increment(
+    self.auth_bad_credentials,
+  )
 }
 
 ///|
 fn BrokerMetrics::record_auth_resource_rejection(self : BrokerMetrics) -> Unit {
-  self.auth_resource_rejections += 1L
+  self.auth_resource_rejections = saturating_counter_increment(
+    self.auth_resource_rejections,
+  )
 }
 
 ///|
 fn BrokerMetrics::record_auth_deadline_rejection(self : BrokerMetrics) -> Unit {
-  self.auth_deadline_rejections += 1L
+  self.auth_deadline_rejections = saturating_counter_increment(
+    self.auth_deadline_rejections,
+  )
 }
 
 ///|
 fn BrokerMetrics::record_auth_late_result(self : BrokerMetrics) -> Unit {
-  self.auth_late_results += 1L
+  self.auth_late_results = saturating_counter_increment(self.auth_late_results)
 }
 
 ///|
 fn BrokerMetrics::record_authentication_failure(self : BrokerMetrics) -> Unit {
-  self.authentication_failures = self.authentication_failures + 1L
+  self.authentication_failures = saturating_counter_increment(
+    self.authentication_failures,
+  )
 }
 
 ///|
 fn BrokerMetrics::record_acl_denial(self : BrokerMetrics) -> Unit {
-  self.acl_denials = self.acl_denials + 1L
+  self.acl_denials = saturating_counter_increment(self.acl_denials)
 }
 
 ///|
 pub fn BrokerMetrics::record_tls_handshake_failure(
   self : BrokerMetrics,
 ) -> Unit {
-  self.tls_handshake_failures = self.tls_handshake_failures + 1L
+  self.tls_handshake_failures = saturating_counter_increment(
+    self.tls_handshake_failures,
+  )
 }
 
 ///|
@@ -195,13 +214,13 @@ pub fn BrokerMetrics::qos2_rejected(self : BrokerMetrics) -> Int64 {
 
 ///|
 fn BrokerMetrics::record_qos2(self : BrokerMetrics, duplicate~ : Bool) -> Unit {
-  self.qos2_received += 1L
+  self.qos2_received = saturating_counter_increment(self.qos2_received)
   if duplicate {
-    self.qos2_duplicates += 1L
+    self.qos2_duplicates = saturating_counter_increment(self.qos2_duplicates)
   }
 }
 
 ///|
 fn BrokerMetrics::record_qos2_rejection(self : BrokerMetrics) -> Unit {
-  self.qos2_rejected += 1L
+  self.qos2_rejected = saturating_counter_increment(self.qos2_rejected)
 }
