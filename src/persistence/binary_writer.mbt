@@ -131,3 +131,16 @@ fn BinaryWriter::require_capacity(
     )
   }
 }
+
+///|
+fn BinaryWriter::write_positive_i64(
+  self : BinaryWriter,
+  value : Int64,
+  field : String,
+) -> Unit raise PersistenceError {
+  if value < 0L {
+    raise InvalidValue(field~, offset=self.bytes.length())
+  }
+  self.write_u32_bits((value >> 32).to_int().reinterpret_as_uint())
+  self.write_u32_bits(value.to_int().reinterpret_as_uint())
+}

@@ -138,3 +138,17 @@ fn BinaryReader::read_bytes(
   }
   self.read_raw(length)
 }
+
+///|
+fn BinaryReader::read_positive_i64(
+  self : BinaryReader,
+  field : String,
+) -> Int64 raise PersistenceError {
+  let start = self.offset
+  let high = self.read_u32_bits()
+  let low = self.read_u32_bits()
+  if high > 0x7fffffffU {
+    raise InvalidValue(field~, offset=start)
+  }
+  (high.to_int64() << 32) | low.to_int64()
+}
