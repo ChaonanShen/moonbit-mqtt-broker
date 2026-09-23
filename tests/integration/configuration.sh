@@ -132,7 +132,7 @@ if "${BROKER_EXECUTABLE}" --management-enabled true --management-token-file "${W
   echo 'unimplemented management listener unexpectedly validated' >&2
   exit 1
 fi
-grep -qF 'management listener backend is not available yet' "${WORK_DIR}/management-unavailable.log"
+grep -qF 'management token file is unavailable' "${WORK_DIR}/management-unavailable.log"
 if "${BROKER_EXECUTABLE}" --management-enabled true --management-token-file "${WORK_DIR}/absent-management.tokens" \
     --once --check-config >"${WORK_DIR}/management-once.log" 2>&1; then
   echo 'management and once were accepted together' >&2
