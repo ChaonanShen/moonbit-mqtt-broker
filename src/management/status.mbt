@@ -46,9 +46,14 @@ pub fn encode_status(
   now_monotonic_ms : Int64,
   snapshot_max_age_ms : Int64,
   driver_max_age_ms : Int64,
+  driver_progress_override? : Int64,
 ) -> Bytes {
   let health = evaluate_health(
-    sample, now_monotonic_ms, snapshot_max_age_ms, driver_max_age_ms,
+    sample,
+    now_monotonic_ms,
+    snapshot_max_age_ms,
+    driver_max_age_ms,
+    driver_progress_override?,
   )
   let observed_age : Int64? = if now_monotonic_ms >=
     sample.captured_monotonic_ms &&

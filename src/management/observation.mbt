@@ -105,7 +105,11 @@ pub fn evaluate_health(
   now_monotonic_ms : Int64,
   snapshot_max_age_ms : Int64,
   driver_max_age_ms : Int64,
+  driver_progress_override? : Int64,
 ) -> HealthDecision {
+  let driver_progress_ms = driver_progress_override.unwrap_or(
+    sample.driver_progress_monotonic_ms,
+  )
   let reasons : Array[String] = []
   let mut live = true
   let mut ready = true
@@ -120,9 +124,9 @@ pub fn evaluate_health(
   }
   if now_monotonic_ms < 0L ||
     sample.captured_monotonic_ms < 0L ||
-    sample.driver_progress_monotonic_ms < 0L ||
+    driver_progress_ms < 0L ||
     now_monotonic_ms < sample.captured_monotonic_ms ||
-    now_monotonic_ms < sample.driver_progress_monotonic_ms ||
+    now_monotonic_ms < driver_progress_ms ||
     snapshot_max_age_ms < 0L ||
     driver_max_age_ms < 0L {
     live = false
@@ -130,7 +134,7 @@ pub fn evaluate_health(
     reasons.push("clock_unavailable")
     return { live, ready, reasons }
   }
-  if now_monotonic_ms - sample.driver_progress_monotonic_ms > driver_max_age_ms {
+  if now_monotonic_ms - driver_progress_ms > driver_max_age_ms {
     live = false
     ready = false
     reasons.push("driver_stale")

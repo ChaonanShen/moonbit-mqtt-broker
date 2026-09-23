@@ -158,3 +158,86 @@ test "health JSON is deliberately minimal" {
   assert_eq(encode_health_live(stale), b"{\"status\":\"unavailable\"}")
   assert_eq(encode_health_ready(stale), b"{\"status\":\"unavailable\"}")
 }
+
+///|
+test "observation cache retains old generation after rejected replacement" {
+  let config = ManagementConfig::new(enabled=true, token_file="/tmp/tokens").unwrap()
+  let ledger = @budget.Ledger::new(config.required_bytes() + 1024L, 0L).unwrap()
+  let budget = ManagementBudget::new(config, ledger).unwrap()
+  let cache = ObservationCache::new(budget).unwrap()
+  let first = sample_observation()
+  assert_true(cache.publish(first, metrics_body=b"metric 1\n"))
+  assert_eq(cache.captured_at(), Some(1000L))
+  let old_metrics = cache.metrics_body(1500L).unwrap()
+  assert_eq(old_metrics, b"metric 1\n")
+  let oversized = {
+    ..first,
+    boot_id: "x".repeat(70000),
+    captured_monotonic_ms: 2000L,
+  }
+  assert_false(cache.publish(oversized, metrics_body=b"metric 2\n"))
+  assert_false(
+    cache.publish(first, metrics_body=Bytes::from_array(Array::make(65537, 65))),
+  )
+  assert_false(cache.publish({ ..first, captured_monotonic_ms: 999L }))
+  assert_false(cache.publish({ ..first, boot_id: "different-boot" }))
+  assert_false(cache.publish({ ..first, driver_progress_monotonic_ms: 2000L }))
+
+  assert_eq(cache.captured_at(), Some(1000L))
+  assert_eq(cache.metrics_body(1500L), Ok(b"metric 1\n"))
+  assert_true(
+    cache.publish(
+      { ..first, captured_monotonic_ms: 1700L },
+      metrics_body=b"metric 3\n",
+    ),
+  )
+  assert_eq(old_metrics, b"metric 1\n")
+  assert_eq(cache.metrics_body(1800L), Ok(b"metric 3\n"))
+  cache.close()
+  assert_true(budget.close())
+  assert_eq(ledger.occupied(), 0L)
+}
+
+///|
+test "cache age and driver heartbeat control status separately" {
+  let config = ManagementConfig::new(enabled=true, token_file="/tmp/tokens").unwrap()
+  let ledger = @budget.Ledger::new(config.required_bytes() + 1024L, 0L).unwrap()
+  let budget = ManagementBudget::new(config, ledger).unwrap()
+  let cache = ObservationCache::new(budget).unwrap()
+  assert_true(cache.publish(sample_observation()))
+  let fresh_body = @utf8.decode(cache.status_body(1500L).unwrap()) catch {
+    _ => fail("cached status was not UTF-8")
+  }
+  assert_true(fresh_body.contains("\"observation_age_ms\":\"500\""))
+  assert_true(cache.metrics_body(1500L) is Err(Unavailable))
+  cache.update_driver_progress(6500L)
+  assert_true(cache.status_body(7000L) is Err(Stale))
+  assert_true(cache.health(7000L).unwrap().live)
+  let fresh = {
+    ..sample_observation(),
+    captured_monotonic_ms: 7000L,
+    driver_progress_monotonic_ms: 6500L,
+  }
+  assert_true(cache.publish(fresh))
+  assert_true(cache.status_body(7500L) is Ok(_))
+  assert_true(cache.status_body(12000L) is Err(Stale))
+  assert_false(cache.health(12000L).unwrap().live)
+  cache.close()
+  assert_true(budget.close())
+}
+
+///|
+test "cache owner prevents an early parent release while a writer holds a slot" {
+  let config = ManagementConfig::new(enabled=true, token_file="/tmp/tokens").unwrap()
+  let ledger = @budget.Ledger::new(config.required_bytes() + 1024L, 0L).unwrap()
+  let budget = ManagementBudget::new(config, ledger).unwrap()
+  let cache = ObservationCache::new(budget).unwrap()
+  let writer = budget.acquire().unwrap()
+  assert_false(budget.close())
+  assert_eq(ledger.committed(), config.required_bytes())
+  cache.close()
+  assert_false(budget.is_closed())
+  assert_true(writer.release())
+  assert_true(budget.is_closed())
+  assert_eq(ledger.live_tickets(), 0)
+}
