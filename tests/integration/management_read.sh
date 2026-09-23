@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "management gate failed at line $LINENO" >&2' ERR
 ulimit -c 0
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
@@ -7,7 +8,12 @@ moon build --target native
 readonly BROKER="${ROOT}/_build/native/debug/build/cmd/broker/broker.exe"
 WORK_DIR="$(mktemp -d)"
 BROKER_PID=""
+SLOW_PID=""
 cleanup() {
+  if [[ -n "${SLOW_PID}" ]] && kill -0 "${SLOW_PID}" 2>/dev/null; then
+    kill "${SLOW_PID}" 2>/dev/null || true
+    wait "${SLOW_PID}" 2>/dev/null || true
+  fi
   if [[ -n "${BROKER_PID}" ]] && kill -0 "${BROKER_PID}" 2>/dev/null; then
     kill -TERM "${BROKER_PID}" 2>/dev/null || true
     wait "${BROKER_PID}" 2>/dev/null || true
@@ -84,7 +90,41 @@ grep -qF '"version":"0.2.0"' "${WORK_DIR}/status"
 ! grep -qF "${WORK_DIR}/tokens" "${WORK_DIR}/status"
 ! grep -qF "${METRICS_TOKEN}" "${WORK_DIR}/broker.log"
 ! grep -qF "${READ_TOKEN}" "${WORK_DIR}/broker.log"
+# Keep one partial HTTP request blocked in read while SIGTERM drains it.
+node -e '
+const net=require("net"),fs=require("fs");
+const socket=net.connect(Number(process.argv[1]),"127.0.0.1",()=>{
+  socket.write("GET /health/live HTTP/1.1\r\nHost: ");
+  fs.writeFileSync(process.argv[2],"ready");
+});
+socket.on("error",()=>process.exit(2));
+setInterval(()=>{},1000);
+' "${admin_port}" "${WORK_DIR}/slow-ready" >"${WORK_DIR}/slow.log" 2>&1 &
+SLOW_PID="$!"
+for _ in $(seq 1 100); do
+  test -e "${WORK_DIR}/slow-ready" && break
+  if ! kill -0 "${SLOW_PID}" 2>/dev/null; then
+    cat "${WORK_DIR}/slow.log" >&2
+    exit 1
+  fi
+  sleep 0.01
+done
+test -e "${WORK_DIR}/slow-ready"
+sleep 0.05
 kill -TERM "${BROKER_PID}"
+for _ in $(seq 1 100); do
+  state="$(ps -o stat= -p "${BROKER_PID}" 2>/dev/null | tr -d ' ' || true)"
+  [[ -z "${state}" || "${state}" = Z* ]] && break
+  sleep 0.05
+done
+state="$(ps -o stat= -p "${BROKER_PID}" 2>/dev/null | tr -d ' ' || true)"
+if [[ -n "${state}" && "${state}" != Z* ]]; then
+  echo 'management shutdown retained a slow HTTP reader' >&2
+  exit 1
+fi
 wait "${BROKER_PID}"
 BROKER_PID=""
-echo 'MANAGEMENT live, ready, scopes, status, metrics and MQTT QoS1 passed'
+kill "${SLOW_PID}" 2>/dev/null || true
+wait "${SLOW_PID}" 2>/dev/null || true
+SLOW_PID=""
+echo 'MANAGEMENT live, ready, scopes, status, metrics, MQTT QoS1 and slow-read shutdown passed'
