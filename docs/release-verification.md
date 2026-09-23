@@ -293,3 +293,14 @@ These checks use the same committed candidate and executable as the existing
 matrix. Preserve `runtime-*-management.log` alongside the original runtime
 logs. The outer exit code, source SHA, four PASS records and artifact hashes
 remain mandatory.
+
+The separate `scripts/verify-management-performance.sh` runs three paired
+10-second warmup/60-second measurement rounds with 20 MQTT connections and
+QoS 0/1/2, followed by a 60-second overload run. It limits each Broker
+container to 2 CPUs, 256 MiB and 64 processes. Each managed round must keep
+at least 90% of baseline publish throughput; PING and QoS 1 PUBACK P99 must
+stay within the larger of twice baseline or baseline plus 20 ms. Every
+five-second overload window must include a successful PING. Raw samples and
+the threshold summary are retained under `.local/p1-03a-execution/`.
+This performance check is run separately from the distribution soak so the
+two loads do not contaminate each other's measurements.
