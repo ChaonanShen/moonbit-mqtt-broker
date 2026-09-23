@@ -98,3 +98,45 @@ test "native budget clock is nonnegative and monotonic" {
   let after = monotonic_ms()
   assert_true(before >= 0L && after >= before)
 }
+
+///|
+test "deferred replacement reserves growth and detects a changed owner" {
+  let ledger = Ledger::new(100L, 0L).unwrap()
+  let pool = ledger.pool(Inflight, 100L).unwrap()
+  let ticket = ledger.reserve([pool.allocation(40L)]).unwrap()
+  ticket.commit().unwrap()
+  let prepared = ledger
+    .prepare_deferred_replacement([(ticket, [pool.allocation(90L)])])
+    .unwrap()
+  assert_eq(ledger.committed(), 40L)
+  assert_eq(ledger.reserved(), 50L)
+  // The deferred reservation does not lock the old owner. An accidental
+  // mutation is caught before any replacement charge is installed.
+  ticket.release().unwrap()
+  assert_eq(prepared.commit(), Err(InvalidTicketState))
+  prepared.rollback().unwrap()
+  assert_eq(ledger.occupied(), 0L)
+}
+
+///|
+test "deferred replacement installs a prechecked multiowner swap" {
+  let ledger = Ledger::new(100L, 0L).unwrap()
+  let pending = ledger.pool(Pending, 60L).unwrap()
+  let inflight = ledger.pool(Inflight, 40L).unwrap()
+  let first = ledger.reserve([pending.allocation(60L)]).unwrap()
+  let second = ledger.reserve([inflight.allocation(40L)]).unwrap()
+  first.commit().unwrap()
+  second.commit().unwrap()
+  let prepared = ledger
+    .prepare_deferred_replacement([
+      (first, [inflight.allocation(40L)]),
+      (second, [pending.allocation(60L)]),
+    ])
+    .unwrap()
+  assert_eq(ledger.reserved(), 0L)
+  prepared.commit().unwrap()
+  assert_eq(ledger.committed(), 100L)
+  first.release().unwrap()
+  second.release().unwrap()
+  assert_eq(ledger.occupied(), 0L)
+}

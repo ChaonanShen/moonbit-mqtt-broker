@@ -88,6 +88,7 @@ pub struct Ticket {
   priv mut charges : Array[Charge]
   priv mut state : TicketState
   priv mut busy : Bool
+  priv mut revision : Int64
 }
 
 ///|
@@ -357,7 +358,7 @@ pub fn Ledger::reserve(
     charge.account.reserved += charge.bytes
   }
   self.live_tickets += 1
-  Ok({ ledger: self, charges, state: Reserved, busy: false })
+  Ok({ ledger: self, charges, state: Reserved, busy: false, revision: 0L })
 }
 
 ///|
@@ -365,11 +366,15 @@ pub fn Ticket::commit(self : Ticket) -> Result[Unit, BudgetError] {
   if self.state != Reserved || self.busy {
     return Err(InvalidTicketState)
   }
+  if self.revision == 9223372036854775807L {
+    return Err(Overflow)
+  }
   for charge in self.charges {
     charge.account.reserved -= charge.bytes
     charge.account.committed += charge.bytes
   }
   self.state = Committed
+  self.revision += 1L
   Ok(())
 }
 
@@ -381,6 +386,9 @@ pub fn Ticket::replace(
 ) -> Result[Unit, BudgetError] {
   if self.state == Released || self.busy {
     return Err(InvalidTicketState)
+  }
+  if self.revision == 9223372036854775807L {
+    return Err(Overflow)
   }
   let charges = match self.ledger.aggregate(allocations) {
     Ok(c) => c
@@ -405,6 +413,7 @@ pub fn Ticket::replace(
     }
   }
   self.charges = charges
+  self.revision += 1L
   Ok(())
 }
 
@@ -414,6 +423,9 @@ pub fn Ticket::release(self : Ticket) -> Result[Unit, BudgetError] {
   if self.state == Released || self.busy {
     return Err(InvalidTicketState)
   }
+  if self.revision == 9223372036854775807L {
+    return Err(Overflow)
+  }
   for charge in self.charges {
     if self.state == Reserved {
       charge.account.reserved -= charge.bytes
@@ -422,6 +434,7 @@ pub fn Ticket::release(self : Ticket) -> Result[Unit, BudgetError] {
     }
   }
   self.state = Released
+  self.revision += 1L
   self.charges = []
   self.ledger.live_tickets -= 1
   Ok(())

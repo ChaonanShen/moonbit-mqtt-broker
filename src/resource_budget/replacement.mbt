@@ -2,6 +2,7 @@
 priv struct ReplacementEntry {
   ticket : Ticket
   charges : Array[Charge]
+  revision : Int64
 }
 
 ///|
@@ -9,6 +10,7 @@ pub struct Replacement {
   priv entries : Array[ReplacementEntry]
   priv extra : Array[Charge]
   priv mut finished : Bool
+  priv deferred : Bool
 }
 
 ///|
@@ -17,6 +19,26 @@ pub struct Replacement {
 pub fn Ledger::prepare_replacement(
   self : Ledger,
   requests : Array[(Ticket, Array[Allocation])],
+) -> Result[Replacement, BudgetError] {
+  self.prepare_replacement_internal(requests, false)
+}
+
+///|
+/// Reserve positive deltas without making the existing tickets busy. The
+/// coordinator must prevent mutations of these tickets until commit/cancel;
+/// commit rechecks their revisions before changing any charge.
+pub fn Ledger::prepare_deferred_replacement(
+  self : Ledger,
+  requests : Array[(Ticket, Array[Allocation])],
+) -> Result[Replacement, BudgetError] {
+  self.prepare_replacement_internal(requests, true)
+}
+
+///|
+fn Ledger::prepare_replacement_internal(
+  self : Ledger,
+  requests : Array[(Ticket, Array[Allocation])],
+  deferred : Bool,
 ) -> Result[Replacement, BudgetError] {
   if requests.length() > 65536 {
     return Err(InvalidConfiguration)
@@ -60,7 +82,7 @@ pub fn Ledger::prepare_replacement(
           }
       }
     }
-    entries.push({ ticket, charges })
+    entries.push({ ticket, charges, revision: ticket.revision })
   }
   let extra : Array[Charge] = []
   for id, charge in new_sums {
@@ -87,16 +109,26 @@ pub fn Ledger::prepare_replacement(
   for charge in extra {
     charge.account.reserved += charge.bytes
   }
-  for entry in entries {
-    entry.ticket.busy = true
+  if !deferred {
+    for entry in entries {
+      entry.ticket.busy = true
+    }
   }
-  Ok({ entries, extra, finished: false })
+  Ok({ entries, extra, finished: false, deferred })
 }
 
 ///|
 pub fn Replacement::commit(self : Replacement) -> Result[Unit, BudgetError] {
   if self.finished {
     return Err(InvalidTicketState)
+  }
+  for entry in self.entries {
+    if entry.ticket.state != Committed ||
+      entry.ticket.busy == self.deferred ||
+      entry.ticket.revision != entry.revision ||
+      entry.ticket.revision == 9223372036854775807L {
+      return Err(InvalidTicketState)
+    }
   }
   // Remove every old charge before adding any new charge: category swaps at
   // full capacity must not transiently overdraw an account.
@@ -114,6 +146,7 @@ pub fn Replacement::commit(self : Replacement) -> Result[Unit, BudgetError] {
     }
     entry.ticket.charges = entry.charges
     entry.ticket.busy = false
+    entry.ticket.revision += 1L
   }
   self.finished = true
   Ok(())
@@ -127,8 +160,10 @@ pub fn Replacement::rollback(self : Replacement) -> Result[Unit, BudgetError] {
   for charge in self.extra {
     charge.account.reserved -= charge.bytes
   }
-  for entry in self.entries {
-    entry.ticket.busy = false
+  if !self.deferred {
+    for entry in self.entries {
+      entry.ticket.busy = false
+    }
   }
   self.finished = true
   Ok(())
