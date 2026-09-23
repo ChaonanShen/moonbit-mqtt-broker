@@ -6,6 +6,7 @@ pub struct BrokerState {
   priv resources : RouterResources
   config : BrokerConfig
   priv sessions : Map[@session.ClientId, @session.ClientSession]
+  priv mut admin_sessions : AdminSessionIndex?
   priv subscriptions : SubscriptionIndex
   priv retained : RetainedStore
   priv mut inflight_total : Int
@@ -62,6 +63,7 @@ pub fn BrokerState::new(
     promotion_cursor: 0,
     resources: RouterResources::new(config.resources, ledger?),
     sessions: Map([]),
+    admin_sessions: None,
     subscriptions: SubscriptionIndex::new(),
     retained: RetainedStore::new(),
     inflight_total: 0,
@@ -261,6 +263,9 @@ fn BrokerState::create_session(
       owner=request.owner,
     ),
   )
+  if self.admin_sessions is Some(index) {
+    index.register(request.client_id)
+  }
   if request.mode == @session.SessionMode::Persistent {
     self.mark_snapshot_dirty()
   }
@@ -281,6 +286,9 @@ fn BrokerState::remove_session(
   self.pending_qos1_total = self.pending_qos1_total - session.pending_count()
   ignore(self.subscriptions.remove_all(client_id))
   self.sessions.remove(client_id)
+  if self.admin_sessions is Some(index) {
+    index.remove(client_id)
+  }
   if session.mode() == @session.SessionMode::Persistent {
     self.mark_snapshot_dirty()
   }
@@ -690,6 +698,9 @@ fn BrokerState::attach_session(
     ) {
     self.mark_snapshot_dirty()
   }
+  if self.admin_sessions is Some(index) {
+    index.bump(client_id)
+  }
   let actions : Array[BrokerAction] = [SessionAttached(client_id)]
   for delivery in deliveries {
     if delivery.message is None {
@@ -792,6 +803,9 @@ fn BrokerState::apply_event(
         return Err(InvalidSessionState(client_id))
       }
       session.detach()
+      if self.admin_sessions is Some(index) {
+        index.bump(client_id)
+      }
       Ok([SessionDetached(client_id)])
     }
     DetachSessionAt(request) => {
@@ -803,6 +817,9 @@ fn BrokerState::apply_event(
         return Err(InvalidSessionState(request.client_id))
       }
       session.detach(detached_at_ms=request.detached_at_ms)
+      if self.admin_sessions is Some(index) {
+        index.bump(request.client_id)
+      }
       if session.mode() == @session.SessionMode::Persistent {
         self.mark_snapshot_dirty()
       }

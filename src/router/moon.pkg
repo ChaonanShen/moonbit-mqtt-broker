@@ -2,7 +2,9 @@ import {
   "ChaonanShen/moonbit-mqtt-broker/resource_budget" @budget,
   "ChaonanShen/moonbit-mqtt-broker/security",
   "ChaonanShen/moonbit-mqtt-broker/session",
+  "ChaonanShen/moonbit-mqtt-broker/slot_index",
   "ChaonanShen/moonbit-mqtt-broker/topic",
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/cmp",
+  "moonbitlang/core/string",
 }
