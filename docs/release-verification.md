@@ -155,10 +155,11 @@ This reads evidence; it does not run omitted stages or publish anything. An earl
 | `linked-libraries.txt`, `libraries-*.txt` | Linked and runtime-loaded library inventories | Yes |
 | `missing-*.log`, `runtime-*.log` | Negative/positive runtime outcomes; possibly `runtime-failure.log` | Yes |
 | `package.zip`, `artifacts.sha256` | Tested package and package/executable digests | Yes |
-| `source.tar`, `runtime/broker` | Committed source and exported executable | No |
+| `source.tar` | Committed source archive | No |
+| `runtime/broker` | Exported executable for hash verification | Yes |
 | Temporary runtime certificates, key and password file | Per-run test fixtures | No |
 
-CI uses artifact name `distribution-evidence` with seven-day retention. Since it does not upload `runtime/broker`, check the uploaded package from the corresponding run directory with `awk '$2 == "package.zip" { print }' artifacts.sha256 | sha256sum --check -`. Missing non-uploaded executable files do not imply a corrupt package.
+CI uploads artifact `distribution-evidence` with 30-day retention, including `package.zip`, `artifacts.sha256`, and `runtime/broker`. Verify both files from the artifact directory with `sha256sum --check artifacts.sha256`. Archive required evidence to remote `.local/ci-evidence/<SHA>/<run-id>/` before expiry and record run/job URLs.
 
 Keep results on the remote workspace according to project policy. Record the directory, commit, package hash and CI run, and preserve permitted evidence before CI expiry if needed for a release. Do not copy temporary private keys into source, distributables or acceptance submissions; test fixtures are not production credentials.
 
