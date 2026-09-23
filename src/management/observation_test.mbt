@@ -241,3 +241,130 @@ test "cache owner prevents an early parent release while a writer holds a slot" 
   assert_true(budget.is_closed())
   assert_eq(ledger.live_tickets(), 0)
 }
+
+///|
+test "Prometheus text has fixed metrics, units and nonzero ages" {
+  let sample = {
+    ..sample_observation(),
+    messages_sent: 9223372036854775807L,
+    resources: [
+      {
+        name: "auth_request",
+        committed_bytes: 5L,
+        reserved_bytes: 2L,
+        limit_bytes: 100L,
+      },
+    ],
+    persistence_state: Healthy,
+  }
+  let rejected = ManagementRejections::new()
+  rejected.record(RejectedAuth)
+  let value = @utf8.decode(
+    render_prometheus(sample, 2500L, 2000L, rejected).unwrap(),
+  ) catch {
+    _ => fail("metrics were not UTF-8")
+  }
+  assert_true(
+    value.has_prefix(
+      "# HELP moonbit_mqtt_broker_build_info Broker build information\n",
+    ),
+  )
+  assert_true(
+    value.contains(
+      "moonbit_mqtt_broker_publish_actions_total 9223372036854775807",
+    ),
+  )
+  assert_true(
+    value.contains(
+      "moonbit_mqtt_broker_resource_committed_bytes{resource=\"auth_request\"} 5",
+    ),
+  )
+  assert_true(
+    value.contains("moonbit_mqtt_broker_snapshot_state{state=\"healthy\"} 1"),
+  )
+  assert_true(
+    value.contains(
+      "moonbit_mqtt_broker_management_rejected_total{reason=\"auth\"} 1",
+    ),
+  )
+  assert_true(
+    value.contains("moonbit_mqtt_broker_observation_age_seconds 1.500"),
+  )
+  assert_true(
+    value.contains("moonbit_mqtt_broker_driver_progress_age_seconds 0.500"),
+  )
+  assert_true(value.has_suffix("\n"))
+  let mut series = 0
+  for line in value.split("\n") {
+    if line.has_prefix("moonbit_mqtt_broker_") {
+      series += 1
+    }
+  }
+  assert_true(series <= 256)
+  assert_false(value.contains("fixture-boot"))
+  assert_false(value.contains("client_id"))
+  assert_false(value.contains("topic="))
+}
+
+///|
+test "Prometheus build label escapes quote, backslash and newline" {
+  let weird = "v" + "\"" + "\\" + "\n"
+  let sample = { ..sample_observation(), version: weird }
+  let output = @utf8.decode(
+    render_prometheus(sample, 2000L, 1000L, ManagementRejections::new()).unwrap(),
+  ) catch {
+    _ => fail("metrics were not UTF-8")
+  }
+  let expected = @utf8.decode(
+    Bytes::from_array([
+      118, 101, 114, 115, 105, 111, 110, 61, 34, 118, 92, 34, 92, 92, 92, 110, 34,
+      44, 116, 97, 114, 103, 101, 116, 61, 34, 110, 97, 116, 105, 118, 101, 34,
+    ]),
+  ) catch {
+    _ => fail("expected ASCII was invalid")
+  }
+  assert_true(output.contains(expected))
+}
+
+///|
+test "Prometheus rejects untrusted categories, duplicates and bad clocks" {
+  let reject = ManagementRejections::new()
+  let fake = {
+    ..sample_observation(),
+    resources: [
+      {
+        name: "client_123",
+        committed_bytes: 1L,
+        reserved_bytes: 0L,
+        limit_bytes: 2L,
+      },
+    ],
+  }
+  assert_true(
+    render_prometheus(fake, 2000L, 1000L, reject) is Err(InvalidResource),
+  )
+  let duplicate = {
+    ..sample_observation(),
+    resources: [
+      {
+        name: "auth_request",
+        committed_bytes: 1L,
+        reserved_bytes: 0L,
+        limit_bytes: 2L,
+      },
+      {
+        name: "auth_request",
+        committed_bytes: 2L,
+        reserved_bytes: 0L,
+        limit_bytes: 2L,
+      },
+    ],
+  }
+  assert_true(
+    render_prometheus(duplicate, 2000L, 1000L, reject) is Err(InvalidResource),
+  )
+  assert_true(
+    render_prometheus(sample_observation(), 900L, 900L, reject)
+    is Err(InvalidClock),
+  )
+}
