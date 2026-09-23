@@ -83,11 +83,10 @@ fn OwnerResources::allocations(
 }
 
 ///|
-fn RouterResources::add_owner(
+fn RouterResources::prepare_owner(
   self : RouterResources,
-  id : @session.ClientId,
   usage : ResourceUsage,
-) -> Result[Unit, RouterError] {
+) -> Result[OwnerResources, RouterError] {
   let combined = self.ledger
     .account(
       Session,
@@ -113,21 +112,32 @@ fn RouterResources::add_owner(
       .unwrap()
   }
   let ticket = match self.ledger.reserve([]) {
-    Ok(t) => t
-    Err(e) => return Err(ByteResourceLimit(e))
+    Ok(value) => value
+    Err(error) => return Err(ByteResourceLimit(error))
   }
-  ticket.commit().unwrap()
   let owner = OwnerResources::{ pools, ticket, usage }
   match ticket.replace(owner.allocations(usage)) {
-    Err(e) => {
+    Ok(_) => Ok(owner)
+    Err(error) => {
       ticket.release().unwrap()
-      Err(ByteResourceLimit(e))
-    }
-    Ok(_) => {
-      self.owners.set(id, owner)
-      Ok(())
+      Err(ByteResourceLimit(error))
     }
   }
+}
+
+///|
+fn RouterResources::add_owner(
+  self : RouterResources,
+  id : @session.ClientId,
+  usage : ResourceUsage,
+) -> Result[Unit, RouterError] {
+  let owner = match self.prepare_owner(usage) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  owner.ticket.commit().unwrap()
+  self.owners.set(id, owner)
+  Ok(())
 }
 
 ///|
