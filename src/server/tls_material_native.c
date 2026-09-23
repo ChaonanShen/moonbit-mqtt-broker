@@ -63,6 +63,20 @@ static int open_source(
 }
 
 MOONBIT_FFI_EXPORT
+int32_t moonbit_mqtt_tls_material_preflight(
+  moonbit_bytes_t cert, int32_t cert_length,
+  moonbit_bytes_t key, int32_t key_length
+) {
+  int cert_fd = open_source(cert, cert_length, 0);
+  if (cert_fd < 0) return -1;
+  int key_fd = open_source(key, key_length, 1);
+  close(cert_fd);
+  if (key_fd < 0) return -2;
+  close(key_fd);
+  return 0;
+}
+
+MOONBIT_FFI_EXPORT
 int32_t moonbit_mqtt_tls_material_capture(
   moonbit_bytes_t cert, int32_t cert_length,
   moonbit_bytes_t key, int32_t key_length,

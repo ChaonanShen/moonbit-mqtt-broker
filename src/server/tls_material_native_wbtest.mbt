@@ -15,9 +15,12 @@ async test "TLS material snapshot survives original replacement and is private" 
     create_mode=CreateNew,
     permission=0o600,
   )
-  let lease = TlsMaterialLease::capture(
-    TlsServerConfig::new(cert, key).unwrap(),
-  )
+  let original = TlsServerConfig::new(cert, key).unwrap()
+  assert_true(tls_material_preflight(original))
+  @fs.chmod(key, 0o644)
+  assert_false(tls_material_preflight(original))
+  @fs.chmod(key, 0o600)
+  let lease = TlsMaterialLease::capture(original)
   assert_eq(
     @fs.read_file(lease.config.certificate_file()).text(),
     "certificate-v1",
