@@ -113,6 +113,69 @@ fn session_message_from_snapshot(
 }
 
 ///|
+fn BrokerState::snapshot_session_candidate(
+  self : BrokerState,
+  client_id : @session.ClientId,
+  session : @session.ClientSession,
+) -> SnapshotSessionV3 {
+  let subscriptions : Array[SnapshotSubscriptionV3] = []
+  for record in self.subscriptions.records_for(client_id) {
+    subscriptions.push({
+      filter: record.filter.value(),
+      qos: snapshot_qos(record.qos),
+    })
+  }
+  let inflight = session
+    .inflight()
+    .map(item => {
+      packet_id: item.packet_id.value(),
+      phase: match item.phase {
+        AwaitPuback => 1
+        AwaitPubrec => 2
+        AwaitPubcomp => 3
+      },
+      message: item.message.map(snapshot_message),
+    })
+  let pending = session.pending().map(snapshot_message)
+  {
+    client_id: client_id.value(),
+    owner_principal: session.owner().storage_value(),
+    detached_at_ms: session.detached_at_ms().unwrap_or(0L),
+    next_packet_id: session.next_packet_id(),
+    subscriptions,
+    inbound_qos2: session.inbound_qos2().map(id => id.value()),
+    inflight,
+    pending,
+  }
+}
+
+///|
+pub fn BrokerState::export_session_snapshot(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> SnapshotSessionV3? {
+  match self.sessions.get(client_id) {
+    Some(session) if session.mode() == @session.SessionMode::Persistent =>
+      Some(self.snapshot_session_candidate(client_id, session))
+    _ => None
+  }
+}
+
+///|
+pub fn BrokerState::export_retained_snapshot(
+  self : BrokerState,
+  topic : @topic.TopicName,
+) -> SnapshotRetainedV3? {
+  self.retained
+  .peek(topic)
+  .map(message => {
+    topic: topic.value(),
+    payload: copy_router_bytes(message.payload),
+    qos: snapshot_qos(message.qos),
+  })
+}
+
+///|
 pub fn BrokerState::export_snapshot(self : BrokerState) -> BrokerSnapshotV3 {
   let client_ids : Array[@session.ClientId] = []
   for client_id, session in self.sessions {
@@ -125,36 +188,12 @@ pub fn BrokerState::export_snapshot(self : BrokerState) -> BrokerSnapshotV3 {
   })
   let sessions : Array[SnapshotSessionV3] = []
   for client_id in client_ids {
-    let session = self.sessions.get(client_id).unwrap()
-    let subscriptions : Array[SnapshotSubscriptionV3] = []
-    for record in self.subscriptions.records_for(client_id) {
-      subscriptions.push({
-        filter: record.filter.value(),
-        qos: snapshot_qos(record.qos),
-      })
-    }
-    let inflight = session
-      .inflight()
-      .map(item => {
-        packet_id: item.packet_id.value(),
-        phase: match item.phase {
-          AwaitPuback => 1
-          AwaitPubrec => 2
-          AwaitPubcomp => 3
-        },
-        message: item.message.map(snapshot_message),
-      })
-    let pending = session.pending().map(snapshot_message)
-    sessions.push({
-      client_id: client_id.value(),
-      owner_principal: session.owner().storage_value(),
-      detached_at_ms: session.detached_at_ms().unwrap_or(0L),
-      next_packet_id: session.next_packet_id(),
-      subscriptions,
-      inbound_qos2: session.inbound_qos2().map(id => id.value()),
-      inflight,
-      pending,
-    })
+    sessions.push(
+      self.snapshot_session_candidate(
+        client_id,
+        self.sessions.get(client_id).unwrap(),
+      ),
+    )
   }
   let retained : Array[SnapshotRetainedV3] = []
   for message in self.retained.all_messages() {
