@@ -214,10 +214,11 @@ Ubuntu 基础镜像可能自带 OpenSSL，而且基础工具需要同一软件�
 | `missing-*.log`、`runtime-*.log` | 缺库场景和运行场景的结果；故障时可能有 `runtime-failure.log` | 是 |
 | `package.zip` | 本次测试的 Mooncakes 候选包 | 是 |
 | `artifacts.sha256` | `package.zip` 和 `runtime/broker` 的哈希 | 是 |
-| `source.tar`、`runtime/broker` | HEAD 源码归档、从包中源码构建的 Release 程序 | 否 |
+| `source.tar` | HEAD 源码归档 | 否 |
+| `runtime/broker` | 从包中源码构建的 Release 程序，用于哈希核验 | 是 |
 | `runtime/server.key`、证书、测试密码文件 | 本次运行专用的临时测试材料 | 否 |
 
-CI artifact 名称是 `distribution-evidence`，默认保留 7 天。CI 不上传 `runtime/broker`，所以下载 CI artifact 后可单独核对候选包：在对应运行目录执行 `awk '$2 == "package.zip" { print }' artifacts.sha256 | sha256sum --check -`。不要因缺少未上传的可执行文件而误认为包哈希损坏。
+CI 上传的 `distribution-evidence` artifact 保留 30 天，包含 `package.zip`、`artifacts.sha256` 和 `runtime/broker`。在 artifact 对应目录执行 `sha256sum --check artifacts.sha256` 核对两份文件。agent 须在过期前把所需证据归档到远端 `.local/ci-evidence/<SHA>/<run-id>/`，并记录 run/job URL。
 
 原始结果按项目约定留在远端，不把整个结果目录同步到 Windows。保存发布记录时引用结果目录、提交号、候选包哈希和 CI run；需要长期保留时，应在 CI 过期前留存允许保存的证据。测试私钥也不应混入源码、正式包或交付给评审的材料；测试数据不能替代生产凭据。
 

@@ -11,10 +11,14 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: ci-${{ github.event_name == 'workflow_dispatch' && format('formal-{0}', github.run_id) || (github.head_ref || github.ref_name) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
 jobs:
   release-native:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - name: Build pinned Linux x86_64 toolchain
@@ -36,5 +40,6 @@ jobs:
             test-results/distribution/**/runtime-reference.json
             test-results/distribution/**/artifacts.sha256
             test-results/distribution/**/package.zip
+            test-results/distribution/**/runtime/broker
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 30
