@@ -86,8 +86,17 @@ pub fn BrokerState::prepare_durable_activation(
   let (candidate, deliveries) = if restoring {
     let candidate = old.unwrap().copy()
     candidate.detach()
+    let global_free_slots = self.config.max_inflight_total() -
+      self.inflight_total +
+      old.unwrap().inflight_count()
+    let max_inflight = if global_free_slots <
+      self.config.max_inflight_per_session() {
+      global_free_slots
+    } else {
+      self.config.max_inflight_per_session()
+    }
     let deliveries = match
-      candidate.attach(self.session_limits(max_inflight=0)) {
+      candidate.attach(self.session_limits(max_inflight~)) {
       Ok(value) => value
       Err(error) => {
         scratch.release().unwrap()
@@ -97,6 +106,16 @@ pub fn BrokerState::prepare_durable_activation(
     (candidate, deliveries)
   } else {
     (@session.ClientSession::new(id, mode~, attached=true, owner~), [])
+  }
+  let desired : ResourceUsage = if restoring {
+    {
+      ..desired,
+      inflight: candidate.inflight_bytes(),
+      pending: candidate.pending_bytes(),
+      inbound: candidate.inbound_qos2_count().to_int64() * 64L,
+    }
+  } else {
+    desired
   }
   let replay : Array[BrokerAction] = []
   for delivery in deliveries {
@@ -114,7 +133,7 @@ pub fn BrokerState::prepare_durable_activation(
             qos: message.qos,
             retain: message.retain,
             packet_id: Some(delivery.packet_id),
-            dup: true,
+            dup: delivery.dup,
           }),
         )
     }

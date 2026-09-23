@@ -29,6 +29,7 @@ pub fn byte_limit_specs() -> Array[(String, String, Int64)] {
     ("server", "max_connection_metadata_bytes_total", 1048576L),
     ("resources", "max_limiter_metadata_bytes_total", 2097152L),
     ("resources", "max_routing_scratch_bytes", 16777216L),
+    ("resources", "max_wal_pending_bytes_total", 33554432L),
     ("resources", "max_snapshot_work_bytes", 100663296L),
     ("resources", "max_auth_request_bytes_total", 2097152L),
     ("resources", "max_auth_workspace_bytes_total", 134217728L),
