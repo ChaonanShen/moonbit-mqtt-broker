@@ -210,6 +210,14 @@ test "cache age and driver heartbeat control status separately" {
   }
   assert_true(fresh_body.contains("\"observation_age_ms\":\"500\""))
   assert_true(cache.metrics_body(1500L) is Err(Unavailable))
+  let rendered = @utf8.decode(
+    cache.render_metrics(1500L, ManagementRejections::new()).unwrap(),
+  ) catch {
+    _ => fail("metrics were not UTF-8")
+  }
+  assert_true(
+    rendered.contains("moonbit_mqtt_broker_observation_age_seconds 0.500"),
+  )
   cache.update_driver_progress(6500L)
   assert_true(cache.status_body(7000L) is Err(Stale))
   assert_true(cache.health(7000L).unwrap().live)

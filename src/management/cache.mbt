@@ -183,6 +183,34 @@ pub fn ObservationCache::metrics_body(
 }
 
 ///|
+/// Render ages at request time from the cached scalar snapshot and the
+/// separately advanced driver heartbeat. No broker Map or payload is read.
+pub fn ObservationCache::render_metrics(
+  self : ObservationCache,
+  now_monotonic_ms : Int64,
+  rejections : ManagementRejections,
+) -> Result[Bytes, CacheError] {
+  let entry = match self.readable(now_monotonic_ms) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let body = match
+    render_prometheus(
+      entry.sample,
+      now_monotonic_ms,
+      self.latest_driver_progress_ms,
+      rejections,
+    ) {
+    Ok(value) => value
+    Err(_) => return Err(Stale)
+  }
+  if body.length() > self.config.max_response_bytes() {
+    return Err(ResponseTooLarge)
+  }
+  Ok(body)
+}
+
+///|
 pub fn ObservationCache::close(self : ObservationCache) -> Unit {
   if !self.closed {
     self.closed = true
