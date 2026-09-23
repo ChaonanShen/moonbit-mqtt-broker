@@ -151,3 +151,171 @@ test "management index exhaustion fails closed without changing MQTT state" {
   assert_false(state.management_index_available())
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "subscription and retained metadata slots follow committed mutations" {
+  let state = managed_state()
+  let id = managed_client("metadata")
+  ignore(
+    state
+    .apply(
+      CreateSessionWith({
+        client_id: id,
+        mode: @session.Persistent,
+        attached: false,
+      }),
+    )
+    .unwrap(),
+  )
+  let filter = @topic.TopicFilter::new("sensor/#").unwrap()
+  let topic = @topic.TopicName::new("sensor/value").unwrap()
+  ignore(
+    state
+    .apply(
+      Subscribe({ client_id: id, entries: [{ filter, qos: @session.QoS1 }] }),
+    )
+    .unwrap(),
+  )
+  ignore(
+    state
+    .apply(
+      Publish({
+        origin: PublishOrigin::Internal,
+        topic,
+        payload: b"payload",
+        qos: @session.QoS1,
+        retain: true,
+      }),
+    )
+    .unwrap(),
+  )
+  assert_true(state.enable_management_index())
+  let index = state.management_index().unwrap()
+  assert_eq(index.subscription_live_count(), 1)
+  assert_eq(index.retained_live_count(), 1)
+  assert_eq(index.subscription_page(id, 0, 256, 50).keys.length(), 1)
+  assert_eq(index.retained_page(0, 256, 50).keys, ["sensor/value"])
+  assert_true(index.check_invariants())
+  ignore(
+    state
+    .apply(
+      Publish({
+        origin: PublishOrigin::Internal,
+        topic,
+        payload: b"new",
+        qos: @session.QoS0,
+        retain: true,
+      }),
+    )
+    .unwrap(),
+  )
+  assert_eq(index.retained_live_count(), 1)
+  ignore(
+    state.apply(Unsubscribe({ client_id: id, filters: [filter] })).unwrap(),
+  )
+  assert_eq(index.subscription_live_count(), 0)
+  ignore(
+    state
+    .apply(
+      Publish({
+        origin: PublishOrigin::Internal,
+        topic,
+        payload: b"",
+        qos: @session.QoS0,
+        retain: true,
+      }),
+    )
+    .unwrap(),
+  )
+  assert_eq(index.retained_live_count(), 0)
+  assert_true(index.check_invariants())
+}
+
+///|
+test "successful subscribe and clean replacement clear metadata without payload copy" {
+  let state = managed_state()
+  assert_true(state.enable_management_index())
+  let id = managed_client("replace")
+  ignore(
+    state
+    .apply(
+      CreateSessionWith({
+        client_id: id,
+        mode: @session.Persistent,
+        attached: false,
+      }),
+    )
+    .unwrap(),
+  )
+  let filter = @topic.TopicFilter::new("a/#").unwrap()
+  ignore(
+    state
+    .apply(
+      Subscribe({ client_id: id, entries: [{ filter, qos: @session.QoS1 }] }),
+    )
+    .unwrap(),
+  )
+  let index = state.management_index().unwrap()
+  assert_eq(index.subscription_live_count(), 1)
+  let previous = managed_identity(state, id)
+  let replacement = state
+    .prepare_activation(id, @session.Clean, @security.Anonymous)
+    .unwrap()
+  ignore(state.commit_activation(replacement).unwrap())
+  assert_eq(index.subscription_live_count(), 0)
+  assert_true(managed_identity(state, id).handle != previous.handle)
+  assert_true(index.check_invariants())
+}
+
+///|
+test "metadata view reads counts and payload length without exporting payload" {
+  let state = managed_state()
+  assert_true(state.enable_management_index())
+  let id = managed_client("large")
+  ignore(
+    state
+    .apply(
+      CreateSessionWith({
+        client_id: id,
+        mode: @session.Persistent,
+        attached: false,
+      }),
+    )
+    .unwrap(),
+  )
+  let topic = @topic.TopicName::new("large/topic").unwrap()
+  let filter = @topic.TopicFilter::new("large/#").unwrap()
+  ignore(
+    state
+    .apply(
+      Subscribe({ client_id: id, entries: [{ filter, qos: @session.QoS1 }] }),
+    )
+    .unwrap(),
+  )
+  let payload = Bytes::make(4096, 65)
+  ignore(
+    state
+    .apply(
+      Publish({
+        origin: PublishOrigin::Internal,
+        topic,
+        payload,
+        qos: @session.QoS1,
+        retain: true,
+      }),
+    )
+    .unwrap(),
+  )
+  let index = state.management_index().unwrap()
+  let identity = managed_identity(state, id)
+  let session = state.admin_session_view(identity.handle).unwrap()
+  assert_eq(session.client_id, "large")
+  assert_eq(session.pending_count, 1)
+  assert_eq(session.subscription_count, 1)
+  assert_true(session.pending_bytes > 4096L)
+  let subkey = index.subscription_page(id, 0, 256, 50).keys[0]
+  assert_eq(state.admin_subscription_view(subkey).unwrap().filter, "large/#")
+  let retained = state.admin_retained_view("large/topic").unwrap()
+  assert_eq(retained.payload_bytes, 4096L)
+  assert_eq(retained.topic, "large/topic")
+}
