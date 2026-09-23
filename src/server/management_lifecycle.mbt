@@ -93,18 +93,18 @@ pub fn ManagementRuntime::new(
 
 ///|
 pub async fn ManagementRuntime::run_acceptor(self : ManagementRuntime) -> Unit {
-  @async.with_task_group() <| group => {
-    for ;; {
-      let (connection, _) = self.listener.accept()
-      group.spawn_bg(allow_failure=true) <| () => {
-        self.http.serve_connection(connection)
-      }
-    }
-  }
+  // The fixed async runtime takes a semaphore before accept, so a TCP flood
+  // cannot create unbounded handler tasks ahead of our budget slots.
+  self.listener.run_forever(
+    max_connections=self.config.max_connections(),
+    allow_failure=true,
+    (connection, _) => self.http.serve_connection(connection),
+  )
 }
 
 ///|
 pub fn ManagementRuntime::mark_stopping(self : ManagementRuntime) -> Unit {
+  self.cache.mark_stopping()
   self.context = {
     ..self.context,
     lifecycle: @management.ServiceLifecycle::Stopping,

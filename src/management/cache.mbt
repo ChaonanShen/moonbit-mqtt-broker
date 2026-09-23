@@ -21,6 +21,7 @@ pub struct ObservationCache {
   owner : ManagementBudget
   mut current : CachedObservation?
   mut latest_driver_progress_ms : Int64
+  mut stopping : Bool
   mut closed : Bool
 }
 
@@ -36,6 +37,7 @@ pub fn ObservationCache::new(
     owner,
     current: None,
     latest_driver_progress_ms: -1L,
+    stopping: false,
     closed: false,
   })
 }
@@ -48,6 +50,7 @@ pub fn ObservationCache::publish(
   metrics_body? : Bytes,
 ) -> Bool {
   if self.closed ||
+    self.stopping ||
     sample.captured_monotonic_ms < 0L ||
     sample.driver_progress_monotonic_ms < 0L ||
     sample.driver_progress_monotonic_ms > sample.captured_monotonic_ms {
@@ -111,15 +114,22 @@ pub fn ObservationCache::health(
     Some(value) => value
     None => return Err(Unavailable)
   }
-  Ok(
-    evaluate_health(
-      entry.sample,
-      now_monotonic_ms,
-      self.config.snapshot_max_age_ms().to_int64(),
-      self.config.snapshot_max_age_ms().to_int64(),
-      driver_progress_override=self.latest_driver_progress_ms,
-    ),
+  let decision = evaluate_health(
+    entry.sample,
+    now_monotonic_ms,
+    self.config.snapshot_max_age_ms().to_int64(),
+    self.config.snapshot_max_age_ms().to_int64(),
+    driver_progress_override=self.latest_driver_progress_ms,
   )
+  if self.stopping {
+    let reasons = decision.reasons.copy()
+    if !reasons.contains("stopping") {
+      reasons.push("stopping")
+    }
+    Ok({ ..decision, ready: false, reasons })
+  } else {
+    Ok(decision)
+  }
 }
 
 ///|
@@ -129,6 +139,9 @@ fn ObservationCache::readable(
 ) -> Result[CachedObservation, CacheError] {
   if self.closed {
     return Err(Closed)
+  }
+  if self.stopping {
+    return Err(Stale)
   }
   let entry = match self.current {
     Some(value) => value
@@ -208,6 +221,13 @@ pub fn ObservationCache::render_metrics(
     return Err(ResponseTooLarge)
   }
   Ok(body)
+}
+
+///|
+/// Withdraw readiness before the acceptor is cancelled. Existing health
+/// requests can still report live while no new work is admitted.
+pub fn ObservationCache::mark_stopping(self : ObservationCache) -> Unit {
+  self.stopping = true
 }
 
 ///|

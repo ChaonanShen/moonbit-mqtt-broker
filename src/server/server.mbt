@@ -157,6 +157,7 @@ pub async fn serve(
   tls? : TlsServerConfig,
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
   logger? : @observability.Logger = @observability.Logger::silent(),
+  management? : ManagementRuntime,
 ) -> Unit {
   let events = @async.Queue(kind=Blocking(config.max_runtime_events()))
   let bus = match
@@ -196,8 +197,27 @@ pub async fn serve(
         snapshot=value.driver_config(),
         auth_executor?,
         auth_infrastructure?,
+        management?,
       )
-    None => RouterDriver::new(runtime, auth_executor?, auth_infrastructure?)
+    None =>
+      RouterDriver::new(
+        runtime,
+        auth_executor?,
+        auth_infrastructure?,
+        management?,
+      )
+  }
+  if management is Some(active) {
+    let sample = driver.capture_observation(
+      @budget.monotonic_ms(),
+      @async.now(),
+      active.context,
+      persistence?,
+    )
+    if !active.cache.publish(sample) {
+      driver.shutdown_authentication()
+      raise ResourceStartupFailure("management initial observation failed")
+    }
   }
   let allocator = ConnectionIdAllocator::new()
   run_with_snapshot_writer(persistence, driver, () => {
@@ -206,7 +226,14 @@ pub async fn serve(
         driver.run_budgeted(bus)
       }
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
-        run_ticker(config, events, persistence, bus~)
+        let observation_interval_ms = management.map(active => {
+          active.config.snapshot_interval_ms()
+        })
+        run_ticker(config, events, persistence, bus~, observation_interval_ms?)
+      }
+      let management_task = match management {
+        Some(active) => Some(group.spawn(() => active.run_acceptor()))
+        None => None
       }
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         wait_for_shutdown(
@@ -221,6 +248,14 @@ pub async fn serve(
             message="broker shutdown requested",
           ),
         )
+        if management is Some(active) {
+          active.mark_stopping()
+          if management_task is Some(task) {
+            task.cancel()
+            @async.protect_from_cancel(() => task.wait() catch { _ => () })
+          }
+          active.listener.close()
+        }
         listener.close()
         group.return_immediately(())
       }
@@ -269,6 +304,9 @@ pub async fn serve(
         },
       ) catch {
         error => if !shutdown_requested() { raise error }
+      }
+      if !shutdown_requested() {
+        raise ResourceStartupFailure("MQTT listener stopped unexpectedly")
       }
     }
   })
@@ -401,13 +439,47 @@ pub async fn run(
   tls? : TlsServerConfig,
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
   logger? : @observability.Logger = @observability.Logger::new(),
+  management? : ManagementStartup,
 ) -> Unit {
   defer (match persistence {
     Some(runtime) => runtime.close()
     None => ()
   })
+  if once && management is Some(_) {
+    raise ResourceStartupFailure(
+      "management listener is incompatible with --once",
+    )
+  }
   let listener = @socket.TcpServer(@socket.Addr::parse(listen), reuse_addr=true)
   defer listener.close()
+  let management_runtime = match management {
+    None => None
+    Some(startup) => {
+      let management_listener = @socket.TcpServer(
+        @socket.Addr::parse(startup.config.listen()),
+        reuse_addr=true,
+      ) catch {
+        _ => raise ResourceStartupFailure("management listener bind failed")
+      }
+      match
+        ManagementRuntime::new(
+          management_listener,
+          startup,
+          initial_state.resource_ledger(),
+          persistence?,
+        ) {
+        Ok(value) => Some(value)
+        Err(_) => {
+          management_listener.close()
+          raise ResourceStartupFailure(
+            "management listener resources unavailable",
+          )
+        }
+      }
+    }
+  }
+  defer (if management_runtime is Some(active) { active.close() })
+  let management = management_runtime
   logger.log(
     @observability.LogRecord::new(
       @async.now(),
@@ -468,6 +540,7 @@ pub async fn run(
         tls=tls_config,
         security~,
         logger~,
+        management?,
       )
     (false, Some(runtime), None) =>
       serve(
@@ -478,6 +551,7 @@ pub async fn run(
         shutdown_requested~,
         security~,
         logger~,
+        management?,
       )
     (false, None, Some(tls_config)) =>
       serve(
@@ -488,6 +562,7 @@ pub async fn run(
         tls=tls_config,
         security~,
         logger~,
+        management?,
       )
     (false, None, None) =>
       serve(
@@ -497,6 +572,7 @@ pub async fn run(
         shutdown_requested~,
         security~,
         logger~,
+        management?,
       )
   }
 }
