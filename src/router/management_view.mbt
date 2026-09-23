@@ -132,3 +132,44 @@ pub fn BrokerState::admin_retained_view(
     None => None
   }
 }
+
+///|
+pub(all) enum AdminDeleteError {
+  AdminDetailsUnavailable
+  AdminNotFound
+  AdminPreconditionFailed
+  AdminSessionActive
+  AdminInvariantViolation
+} derive(Eq, Debug)
+
+///|
+/// The caller is the driver single writer and owns the action scope. No await
+/// occurs between identity/lifecycle checks and BrokerState.apply.
+pub fn BrokerState::admin_delete_offline(
+  self : BrokerState,
+  handle : Int64,
+  expected_lifecycle_version : Int64,
+) -> Result[Array[BrokerAction], AdminDeleteError] {
+  let index = match self.admin_sessions {
+    Some(value) if value.available() => value
+    _ => return Err(AdminDetailsUnavailable)
+  }
+  let identity = match index.identity_for_handle(handle) {
+    Some(value) => value
+    None => return Err(AdminNotFound)
+  }
+  if identity.lifecycle_version != expected_lifecycle_version {
+    return Err(AdminPreconditionFailed)
+  }
+  let session = match self.sessions.get(identity.client_id) {
+    Some(value) => value
+    None => return Err(AdminInvariantViolation)
+  }
+  if session.mode() != @session.Persistent || session.is_attached() {
+    return Err(AdminSessionActive)
+  }
+  match self.apply(RemoveSession(identity.client_id)) {
+    Ok(actions) => Ok(actions)
+    Err(_) => Err(AdminInvariantViolation)
+  }
+}
