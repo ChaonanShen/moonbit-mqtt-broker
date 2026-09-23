@@ -81,3 +81,51 @@ test "authentication executor TOML maps to CLI bounds" {
   )
   assert_true(config_rejected("[security]\nauth_workers = \"two\"\n"))
 }
+
+///|
+test "all management TOML fields use the fixed CLI spellings" {
+  let args = parse_config_file(
+    (
+      #|[management]
+      #|enabled = false
+      #|listen = "127.0.0.1:9191"
+      #|token_file = "/missing/management.tokens"
+      #|max_connections = 8
+      #|max_header_bytes = 8192
+      #|max_header_count = 16
+      #|max_response_bytes = 32768
+      #|request_timeout_ms = 9000
+      #|write_timeout_ms = 3000
+      #|snapshot_interval_ms = 2000
+      #|snapshot_max_age_ms = 9000
+      #|ready_require_snapshot_healthy = true
+      #|request_rate = 40
+      #|request_burst = 80
+      #|connection_rate = 30
+      #|connection_burst = 60
+      #|max_bytes_total = 16777216
+      #|
+    ),
+  )
+  assert_eq(args, [
+    "--management-enabled", "false", "--management-listen", "127.0.0.1:9191", "--management-token-file",
+    "/missing/management.tokens", "--management-max-connections", "8", "--management-max-header-bytes",
+    "8192", "--management-max-header-count", "16", "--management-max-response-bytes",
+    "32768", "--management-request-timeout-ms", "9000", "--management-write-timeout-ms",
+    "3000", "--management-snapshot-interval-ms", "2000", "--management-snapshot-max-age-ms",
+    "9000", "--management-ready-require-snapshot-healthy", "true", "--management-request-rate",
+    "40", "--management-request-burst", "80", "--management-connection-rate", "30",
+    "--management-connection-burst", "60", "--management-max-bytes-total", "16777216",
+  ])
+}
+
+///|
+test "management TOML rejects wrong types, unknown keys, and duplicates" {
+  assert_true(config_rejected("[management]\nenabled = 1\n"))
+  assert_true(config_rejected("[management]\nmax_connections = \"many\"\n"))
+  assert_true(config_rejected("[management]\ntoken_file = 42\n"))
+  assert_true(config_rejected("[management]\nunknown = 1\n"))
+  assert_true(
+    config_rejected("[management]\nenabled = true\nenabled = false\n"),
+  )
+}

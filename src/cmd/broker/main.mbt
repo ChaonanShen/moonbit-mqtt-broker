@@ -28,6 +28,25 @@ fn print_help() -> Unit {
   println(
     "  --once                             Serve one connection, for smoke tests",
   )
+  println("  --management-enabled true|false  Default false")
+  println("  --management-listen VALUE  Default 127.0.0.1:9091")
+  println("  --management-token-file VALUE  Default unset")
+  println("  --management-max-connections N  Default 16")
+  println("  --management-max-header-bytes N  Default 4096")
+  println("  --management-max-header-count N  Default 32")
+  println("  --management-max-response-bytes N  Default 65536")
+  println("  --management-request-timeout-ms N  Default 5000")
+  println("  --management-write-timeout-ms N  Default 2000")
+  println("  --management-snapshot-interval-ms N  Default 1000")
+  println("  --management-snapshot-max-age-ms N  Default 5000")
+  println(
+    "  --management-ready-require-snapshot-healthy true|false  Default false",
+  )
+  println("  --management-request-rate N  Default 50")
+  println("  --management-request-burst N  Default 100")
+  println("  --management-connection-rate N  Default 100")
+  println("  --management-connection-burst N  Default 200")
+  println("  --management-max-bytes-total N  Default 8388608")
   println("  --max-connections N                Default 128")
   println("  --max-packet-size N                Default 1048576")
   println("  --max-receive-buffer-size N        Default 1048576")
@@ -86,6 +105,22 @@ fn print_help() -> Unit {
   println(
     "  --per-ip-limits-enabled true|false Default true; NAT clients share an IP",
   )
+}
+
+///|
+fn parse_bool_option(
+  args : Array[String],
+  index : Int,
+  name : String,
+) -> Bool raise CliError {
+  if index + 1 >= args.length() {
+    raise CliError(name + " requires true or false")
+  }
+  match args[index + 1] {
+    "true" => true
+    "false" => false
+    _ => raise CliError(name + " requires true or false")
+  }
 }
 
 ///|
@@ -282,6 +317,23 @@ async fn run_main() -> Unit {
   let mut max_session_expirations_per_tick = 128
   let mut log_format = @observability.Text
   let mut log_level = @observability.Info
+  let mut management_enabled = false
+  let mut management_listen = "127.0.0.1:9091"
+  let mut management_token_file = ""
+  let mut management_max_connections = 16
+  let mut management_max_header_bytes = 4096
+  let mut management_max_header_count = 32
+  let mut management_max_response_bytes = 65536
+  let mut management_request_timeout_ms = 5000
+  let mut management_write_timeout_ms = 2000
+  let mut management_snapshot_interval_ms = 1000
+  let mut management_snapshot_max_age_ms = 5000
+  let mut management_ready_require_snapshot_healthy = false
+  let mut management_request_rate = 50
+  let mut management_request_burst = 100
+  let mut management_connection_rate = 100
+  let mut management_connection_burst = 200
+  let mut management_max_bytes_total = 8388608L
   let mut once = false
   let mut index = 1
   while index < args.length() {
@@ -554,6 +606,110 @@ async fn run_main() -> Unit {
         )
         index = index + 2
       }
+      "--management-enabled" => {
+        management_enabled = parse_bool_option(
+          args, index, "--management-enabled",
+        )
+        index += 2
+      }
+      "--management-listen" => {
+        if index + 1 >= args.length() {
+          raise CliError("--management-listen requires a value")
+        }
+        management_listen = args[index + 1]
+        index += 2
+      }
+      "--management-token-file" => {
+        if index + 1 >= args.length() {
+          raise CliError("--management-token-file requires a value")
+        }
+        management_token_file = args[index + 1]
+        index += 2
+      }
+      "--management-max-connections" => {
+        management_max_connections = parse_bounded_int(
+          args, index, "--management-max-connections", 1,
+        )
+        index += 2
+      }
+      "--management-max-header-bytes" => {
+        management_max_header_bytes = parse_bounded_int(
+          args, index, "--management-max-header-bytes", 1,
+        )
+        index += 2
+      }
+      "--management-max-header-count" => {
+        management_max_header_count = parse_bounded_int(
+          args, index, "--management-max-header-count", 1,
+        )
+        index += 2
+      }
+      "--management-max-response-bytes" => {
+        management_max_response_bytes = parse_bounded_int(
+          args, index, "--management-max-response-bytes", 1,
+        )
+        index += 2
+      }
+      "--management-request-timeout-ms" => {
+        management_request_timeout_ms = parse_bounded_int(
+          args, index, "--management-request-timeout-ms", 1,
+        )
+        index += 2
+      }
+      "--management-write-timeout-ms" => {
+        management_write_timeout_ms = parse_bounded_int(
+          args, index, "--management-write-timeout-ms", 1,
+        )
+        index += 2
+      }
+      "--management-snapshot-interval-ms" => {
+        management_snapshot_interval_ms = parse_bounded_int(
+          args, index, "--management-snapshot-interval-ms", 1,
+        )
+        index += 2
+      }
+      "--management-snapshot-max-age-ms" => {
+        management_snapshot_max_age_ms = parse_bounded_int(
+          args, index, "--management-snapshot-max-age-ms", 1,
+        )
+        index += 2
+      }
+      "--management-ready-require-snapshot-healthy" => {
+        management_ready_require_snapshot_healthy = parse_bool_option(
+          args, index, "--management-ready-require-snapshot-healthy",
+        )
+        index += 2
+      }
+      "--management-request-rate" => {
+        management_request_rate = parse_bounded_int(
+          args, index, "--management-request-rate", 1,
+        )
+        index += 2
+      }
+      "--management-request-burst" => {
+        management_request_burst = parse_bounded_int(
+          args, index, "--management-request-burst", 1,
+        )
+        index += 2
+      }
+      "--management-connection-rate" => {
+        management_connection_rate = parse_bounded_int(
+          args, index, "--management-connection-rate", 1,
+        )
+        index += 2
+      }
+      "--management-connection-burst" => {
+        management_connection_burst = parse_bounded_int(
+          args, index, "--management-connection-burst", 1,
+        )
+        index += 2
+      }
+      "--management-max-bytes-total" => {
+        management_max_bytes_total = parse_bounded_int64(
+          args, index, "--management-max-bytes-total", 1L,
+        )
+        index += 2
+      }
       "--once" => {
         once = true
         index = index + 1
@@ -658,6 +814,33 @@ async fn run_main() -> Unit {
     ) {
     Ok(value) => value
     Err(_) => raise CliError("invalid server configuration")
+  }
+  let management_config = match
+    @management.ManagementConfig::new(
+      enabled=management_enabled,
+      listen=management_listen,
+      token_file=management_token_file,
+      max_connections=management_max_connections,
+      max_header_bytes=management_max_header_bytes,
+      max_header_count=management_max_header_count,
+      max_response_bytes=management_max_response_bytes,
+      request_timeout_ms=management_request_timeout_ms,
+      write_timeout_ms=management_write_timeout_ms,
+      snapshot_interval_ms=management_snapshot_interval_ms,
+      snapshot_max_age_ms=management_snapshot_max_age_ms,
+      ready_require_snapshot_healthy=management_ready_require_snapshot_healthy,
+      request_rate=management_request_rate,
+      request_burst=management_request_burst,
+      connection_rate=management_connection_rate,
+      connection_burst=management_connection_burst,
+      max_bytes_total=management_max_bytes_total,
+    ) {
+    Ok(value) => value
+    Err(@management.ManagementConfigError::Invalid(field)) =>
+      raise CliError("invalid management." + field)
+  }
+  if once && management_config.enabled() {
+    raise CliError("--once cannot be combined with management.enabled")
   }
   let tls = match (tls_certificate_file, tls_private_key_file) {
     (None, None) => {
@@ -883,6 +1066,34 @@ async fn run_main() -> Unit {
     }
     println("log_format = " + quote(effective_log_format))
     println("log_level = " + quote(effective_log_level))
+    println("[management]")
+    println("enabled = " + management_enabled.to_string())
+    println("listen = " + quote(management_listen))
+    println(
+      "token_file = " +
+      quote(if management_token_file == "" { "" } else { "<redacted>" }),
+    )
+    println("max_connections = " + management_max_connections.to_string())
+    println("max_header_bytes = " + management_max_header_bytes.to_string())
+    println("max_header_count = " + management_max_header_count.to_string())
+    println("max_response_bytes = " + management_max_response_bytes.to_string())
+    println("request_timeout_ms = " + management_request_timeout_ms.to_string())
+    println("write_timeout_ms = " + management_write_timeout_ms.to_string())
+    println(
+      "snapshot_interval_ms = " + management_snapshot_interval_ms.to_string(),
+    )
+    println(
+      "snapshot_max_age_ms = " + management_snapshot_max_age_ms.to_string(),
+    )
+    println(
+      "ready_require_snapshot_healthy = " +
+      management_ready_require_snapshot_healthy.to_string(),
+    )
+    println("request_rate = " + management_request_rate.to_string())
+    println("request_burst = " + management_request_burst.to_string())
+    println("connection_rate = " + management_connection_rate.to_string())
+    println("connection_burst = " + management_connection_burst.to_string())
+    println("max_bytes_total = " + management_max_bytes_total.to_string())
     println("[resources]")
     print_resource_section_values(resources, "resources")
     println("[limits]")
@@ -890,6 +1101,9 @@ async fn run_main() -> Unit {
     println("per_ip_enabled = " + resources.per_ip_enabled().to_string())
     print_resource_section_values(resources, "limits")
     return
+  }
+  if management_config.enabled() {
+    raise CliError("management listener backend is not available yet")
   }
   if check_config {
     println("configuration valid")

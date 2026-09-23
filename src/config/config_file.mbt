@@ -72,6 +72,42 @@ fn map_section(
   for key, entry in table {
     let full_key = section_name + "." + key
     match full_key {
+      "management.enabled" =>
+        add_boolean(args, "--management-enabled", entry, full_key)
+      "management.listen" =>
+        add_string(args, "--management-listen", entry, full_key)
+      "management.token_file" =>
+        add_string(args, "--management-token-file", entry, full_key)
+      "management.max_connections" =>
+        add_integer(args, "--management-max-connections", entry, full_key)
+      "management.max_header_bytes" =>
+        add_integer(args, "--management-max-header-bytes", entry, full_key)
+      "management.max_header_count" =>
+        add_integer(args, "--management-max-header-count", entry, full_key)
+      "management.max_response_bytes" =>
+        add_integer(args, "--management-max-response-bytes", entry, full_key)
+      "management.request_timeout_ms" =>
+        add_integer(args, "--management-request-timeout-ms", entry, full_key)
+      "management.write_timeout_ms" =>
+        add_integer(args, "--management-write-timeout-ms", entry, full_key)
+      "management.snapshot_interval_ms" =>
+        add_integer(args, "--management-snapshot-interval-ms", entry, full_key)
+      "management.snapshot_max_age_ms" =>
+        add_integer(args, "--management-snapshot-max-age-ms", entry, full_key)
+      "management.ready_require_snapshot_healthy" =>
+        add_boolean(
+          args, "--management-ready-require-snapshot-healthy", entry, full_key,
+        )
+      "management.request_rate" =>
+        add_integer(args, "--management-request-rate", entry, full_key)
+      "management.request_burst" =>
+        add_integer(args, "--management-request-burst", entry, full_key)
+      "management.connection_rate" =>
+        add_integer(args, "--management-connection-rate", entry, full_key)
+      "management.connection_burst" =>
+        add_integer(args, "--management-connection-burst", entry, full_key)
+      "management.max_bytes_total" =>
+        add_integer(args, "--management-max-bytes-total", entry, full_key)
       "limits.enabled" =>
         add_boolean(args, "--rate-limits-enabled", entry, full_key)
       "limits.per_ip_enabled" =>
@@ -199,7 +235,7 @@ pub fn parse_config_file(
   let args : Array[String] = []
   let sections = [
     "server", "broker", "persistence", "tls", "security", "observability", "resources",
-    "limits",
+    "limits", "management",
   ]
   for section in sections {
     match root.get(section) {

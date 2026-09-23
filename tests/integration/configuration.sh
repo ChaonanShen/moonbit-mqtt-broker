@@ -2,6 +2,7 @@
 # Gates: maintained TOML parser, unknown/duplicate rejection, CLI precedence,
 # side-effect-free validation, redacted output, and a real TLS/auth startup.
 set -euo pipefail
+trap 'echo "configuration gate failed at line $LINENO" >&2' ERR
 ulimit -c 0
 
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -92,6 +93,63 @@ grep -qxF 'auth_shutdown_grace_ms = 8000' "${effective}"
 ! grep -qF "${WORK_DIR}/server.key" "${effective}"
 ! grep -qF "${WORK_DIR}/passwords" "${effective}"
 test ! -e "${WORK_DIR}/data"
+
+# Management is default-off. Configuration validation must not read the
+# token file or bind a management port until the backend is implemented.
+management_config="${WORK_DIR}/management.toml"
+cat >"${management_config}" <<EOF
+[management]
+enabled = false
+listen = "127.0.0.1:9191"
+token_file = "${WORK_DIR}/absent-management.tokens"
+max_connections = 8
+max_header_bytes = 8192
+max_header_count = 16
+max_response_bytes = 32768
+request_timeout_ms = 9000
+write_timeout_ms = 3000
+snapshot_interval_ms = 2000
+snapshot_max_age_ms = 9000
+ready_require_snapshot_healthy = true
+request_rate = 40
+request_burst = 80
+connection_rate = 30
+connection_burst = 60
+max_bytes_total = 16777216
+EOF
+test ! -e "${WORK_DIR}/absent-management.tokens"
+"${BROKER_EXECUTABLE}" --config "${management_config}" --check-config | grep -qxF 'configuration valid'
+"${BROKER_EXECUTABLE}" --config "${management_config}" \
+  --management-max-connections 9 --print-effective-config >"${WORK_DIR}/management-effective.toml"
+grep -qxF 'max_connections = 9' "${WORK_DIR}/management-effective.toml"
+grep -qxF 'listen = "127.0.0.1:9191"' "${WORK_DIR}/management-effective.toml"
+grep -qxF 'max_bytes_total = 16777216' "${WORK_DIR}/management-effective.toml"
+grep -qxF 'token_file = "<redacted>"' "${WORK_DIR}/management-effective.toml"
+! grep -qF "${WORK_DIR}/absent-management.tokens" "${WORK_DIR}/management-effective.toml"
+test ! -e "${WORK_DIR}/absent-management.tokens"
+if "${BROKER_EXECUTABLE}" --management-enabled true --management-token-file "${WORK_DIR}/absent-management.tokens" \
+    --check-config >"${WORK_DIR}/management-unavailable.log" 2>&1; then
+  echo 'unimplemented management listener unexpectedly validated' >&2
+  exit 1
+fi
+grep -qF 'management listener backend is not available yet' "${WORK_DIR}/management-unavailable.log"
+if "${BROKER_EXECUTABLE}" --management-enabled true --management-token-file "${WORK_DIR}/absent-management.tokens" \
+    --once --check-config >"${WORK_DIR}/management-once.log" 2>&1; then
+  echo 'management and once were accepted together' >&2
+  exit 1
+fi
+grep -qF -- '--once cannot be combined with management.enabled' "${WORK_DIR}/management-once.log"
+for bad_args in \
+  '--management-listen 0.0.0.0:9091' \
+  '--management-max-header-bytes 1023' \
+  '--management-max-response-bytes 262145' \
+  '--management-enabled yes'; do
+  read -r -a fields <<<"${bad_args}"
+  if "${BROKER_EXECUTABLE}" "${fields[@]}" --check-config >/dev/null 2>&1; then
+    echo "invalid management setting accepted: ${bad_args}" >&2
+    exit 1
+  fi
+done
 
 printf '[server]\nunknown = 1\n' >"${WORK_DIR}/unknown.toml"
 if "${BROKER_EXECUTABLE}" --config "${WORK_DIR}/unknown.toml" --check-config >/dev/null 2>&1; then
