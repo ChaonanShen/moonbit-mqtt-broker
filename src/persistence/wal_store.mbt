@@ -15,6 +15,61 @@ fn wal_segment_name(segment_id : Int64) -> String {
 }
 
 ///|
+async fn wal_disk_usage(dir : String) -> Int64 raise PersistenceError {
+  let directory = @fs.opendir(dir) catch {
+    _ => raise FileSystem(operation="wal-list-data-dir", path=dir)
+  }
+  defer directory.close()
+  let mut total = 0L
+  for ;; {
+    let entry = directory.next(include_hidden=true) catch {
+      _ => raise FileSystem(operation="wal-list-data-dir", path=dir)
+    }
+    let item = match entry {
+      Some(value) => value
+      None => break
+    }
+    let path = dir + "/" + item.name
+    let kind = @fs.kind(path, follow_symlink=false) catch {
+      _ => raise FileSystem(operation="wal-inspect-disk-usage", path~)
+    }
+    if kind != Regular {
+      raise FileSystem(operation="wal-nonregular-data-entry", path~)
+    }
+    let file = @fs.open(path, mode=ReadOnly, create_mode=OpenExisting) catch {
+      _ => raise FileSystem(operation="wal-open-disk-usage", path~)
+    }
+    let size = file.size() catch {
+      _ => {
+        file.close()
+        raise FileSystem(operation="wal-stat-disk-usage", path~)
+      }
+    }
+    file.close()
+    if size < 0L || size > 9223372036854775807L - total {
+      raise LimitExceeded(
+        resource="wal-disk-bytes",
+        actual=size,
+        limit=9223372036854775807L,
+      )
+    }
+    total += size
+  }
+  total
+}
+
+///|
+fn valid_wal_disk_limits(
+  disk_max_bytes : Int64,
+  disk_reserve_bytes : Int64,
+) -> Bool {
+  disk_reserve_bytes >= 268435456L &&
+  disk_reserve_bytes <= 9223372036854775807L - 67108864L &&
+  disk_max_bytes >= disk_reserve_bytes + 67108864L &&
+  disk_max_bytes <= 9223372036854775807L
+}
+
+///|
 pub struct WalRecovery {
   checkpoint : WalCheckpoint
   batches : Array[WalBatch]
@@ -49,6 +104,10 @@ pub struct WalStore {
   mut active_file : @fs.File
   mut active_path : String
   mut active_bytes : Int64
+  mut disk_bytes : Int64
+  disk_max_bytes : Int64
+  disk_reserve_bytes : Int64
+  mut disk_dirty : Bool
   mut committed_lsn : Int64
   mut fenced : Bool
   mut closed : Bool
@@ -130,8 +189,13 @@ pub fn WalStore::close(self : WalStore) -> Unit {
 pub async fn WalStore::bootstrap(
   snapshot_store : SnapshotStore,
   checkpoint : WalCheckpoint,
+  disk_max_bytes? : Int64 = 1073741824L,
+  disk_reserve_bytes? : Int64 = 268435456L,
 ) -> Result[WalStore, PersistenceError] {
   let dir = snapshot_store.data_dir()
+  if !valid_wal_disk_limits(disk_max_bytes, disk_reserve_bytes) {
+    return Err(InvalidConfiguration("invalid WAL disk capacity"))
+  }
   let manifest_path = dir + "/" + wal_manifest_name
   let checkpoint_path = dir + "/" + wal_checkpoint_name(checkpoint.generation)
   let active_path = dir + "/" + wal_segment_name(1L)
@@ -189,12 +253,25 @@ pub async fn WalStore::bootstrap(
     ) catch {
       _ => raise FileSystem(operation="wal-open-active", path=active_path)
     }
+    let disk_bytes = wal_disk_usage(dir)
+    if disk_bytes > disk_max_bytes - disk_reserve_bytes {
+      active_file.close()
+      raise LimitExceeded(
+        resource="wal-disk-bytes",
+        actual=disk_bytes,
+        limit=disk_max_bytes - disk_reserve_bytes,
+      )
+    }
     Ok({
       snapshot_store,
       manifest,
       active_file,
       active_path,
       active_bytes: 40L,
+      disk_bytes,
+      disk_max_bytes,
+      disk_reserve_bytes,
+      disk_dirty: false,
       committed_lsn: 0L,
       fenced: false,
       closed: false,
@@ -209,8 +286,13 @@ pub async fn WalStore::recover(
   snapshot_store : SnapshotStore,
   limits : SnapshotDecodeLimits,
   max_segment_bytes? : Int = 67108864,
+  disk_max_bytes? : Int64 = 1073741824L,
+  disk_reserve_bytes? : Int64 = 268435456L,
 ) -> Result[(WalStore, WalRecovery), PersistenceError] {
   let dir = snapshot_store.data_dir()
+  if !valid_wal_disk_limits(disk_max_bytes, disk_reserve_bytes) {
+    return Err(InvalidConfiguration("invalid WAL disk capacity"))
+  }
   let manifest_path = dir + "/" + wal_manifest_name
   try {
     let encoded_manifest = bounded_read_regular(manifest_path, 32768)
@@ -283,6 +365,15 @@ pub async fn WalStore::recover(
     ) catch {
       _ => raise FileSystem(operation="wal-open-active", path=active_path)
     }
+    let disk_bytes = wal_disk_usage(dir)
+    if disk_bytes > disk_max_bytes - disk_reserve_bytes {
+      active_file.close()
+      raise LimitExceeded(
+        resource="wal-disk-bytes",
+        actual=disk_bytes,
+        limit=disk_max_bytes - disk_reserve_bytes,
+      )
+    }
     let recovery = {
       checkpoint,
       batches,
@@ -297,6 +388,10 @@ pub async fn WalStore::recover(
           active_file,
           active_path,
           active_bytes: scan.committed_bytes.to_int64(),
+          disk_bytes,
+          disk_max_bytes,
+          disk_reserve_bytes,
+          disk_dirty: false,
           committed_lsn: scan.committed_lsn,
           fenced: false,
           closed: false,
@@ -326,6 +421,17 @@ async fn WalStore::rotate(self : WalStore) -> Result[Unit, PersistenceError] {
   let temp_path = dir + "/" + wal_manifest_temp_name
   let manifest_path = dir + "/" + wal_manifest_name
   try {
+    if self.disk_dirty {
+      self.disk_bytes = wal_disk_usage(dir)
+      self.disk_dirty = false
+    }
+    if self.disk_bytes > self.disk_max_bytes - self.disk_reserve_bytes - 32808L {
+      raise LimitExceeded(
+        resource="wal-disk-bytes",
+        actual=self.disk_bytes + 32808L,
+        limit=self.disk_max_bytes - self.disk_reserve_bytes,
+      )
+    }
     if wal_exists(next_path) || wal_exists(temp_path) {
       raise InvalidConfiguration("WAL rotation found an orphan file")
     }
@@ -376,9 +482,11 @@ async fn WalStore::rotate(self : WalStore) -> Result[Unit, PersistenceError] {
     self.active_path = next_path
     self.active_bytes = 40L
     self.manifest = next_manifest
+    self.disk_bytes = wal_disk_usage(dir)
     Ok(())
   } catch {
     error => {
+      self.disk_dirty = true
       self.fenced = true
       Err(error)
     }
@@ -408,6 +516,27 @@ pub async fn WalStore::append_batch(
       ),
     )
   }
+  if self.disk_dirty {
+    self.disk_bytes = wal_disk_usage(self.snapshot_store.data_dir()) catch {
+      _ => {
+        self.fenced = true
+        return Err(
+          FileSystem(operation="wal-disk-usage", path=self.active_path),
+        )
+      }
+    }
+    self.disk_dirty = false
+  }
+  if self.disk_bytes >
+    self.disk_max_bytes - self.disk_reserve_bytes - encoded.length().to_int64() {
+    return Err(
+      LimitExceeded(
+        resource="wal-disk-bytes",
+        actual=self.disk_bytes + encoded.length().to_int64(),
+        limit=self.disk_max_bytes - self.disk_reserve_bytes,
+      ),
+    )
+  }
   if self.active_bytes >
     max_segment_bytes.to_int64() - encoded.length().to_int64() {
     match self.rotate() {
@@ -421,6 +550,7 @@ pub async fn WalStore::append_batch(
       _ => raise FileSystem(operation="wal-sync-active", path=self.active_path)
     }
     self.active_bytes += encoded.length().to_int64()
+    self.disk_bytes += encoded.length().to_int64()
     self.committed_lsn = batch.transactions[batch.transactions.length() - 1].lsn
     Ok(self.committed_lsn)
   } catch {
@@ -428,5 +558,107 @@ pub async fn WalStore::append_batch(
       self.fenced = true
       Err(error)
     }
+  }
+}
+
+///|
+/// Publish a checkpoint only after the driver has applied the selected LSN.
+/// The active segment is rotated first, so every segment removed after
+/// manifest publication ends at or before the checkpoint LSN.
+pub async fn WalStore::publish_checkpoint(
+  self : WalStore,
+  checkpoint : WalCheckpoint,
+) -> Result[Unit, PersistenceError] {
+  if self.closed ||
+    self.fenced ||
+    checkpoint.lsn != self.committed_lsn ||
+    self.manifest.checkpoint_generation == 9223372036854775807L ||
+    self.manifest.generation == 9223372036854775807L ||
+    checkpoint.generation != self.manifest.checkpoint_generation + 1L {
+    return Err(InvalidConfiguration("invalid WAL checkpoint publication"))
+  }
+  if self.manifest.active_start_lsn <= checkpoint.lsn {
+    match self.rotate() {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+  }
+  let dir = self.snapshot_store.data_dir()
+  let final_path = dir + "/" + wal_checkpoint_name(checkpoint.generation)
+  let temp_path = final_path + ".tmp"
+  let manifest_temp = dir + "/" + wal_manifest_temp_name
+  let manifest_path = dir + "/" + wal_manifest_name
+  let old = self.manifest
+  let mut manifest_renamed = false
+  try {
+    if wal_exists(final_path) ||
+      wal_exists(temp_path) ||
+      wal_exists(manifest_temp) {
+      raise InvalidConfiguration("checkpoint publication found an orphan file")
+    }
+    let encoded = match encode_wal_checkpoint(checkpoint) {
+      Ok(value) => value
+      Err(error) => raise error
+    }
+    if self.disk_bytes >
+      self.disk_max_bytes - encoded.length().to_int64() - 32768L {
+      raise LimitExceeded(
+        resource="wal-disk-bytes",
+        actual=self.disk_bytes + encoded.length().to_int64() + 32768L,
+        limit=self.disk_max_bytes,
+      )
+    }
+    wal_write_synced_new(temp_path, encoded)
+    @fs.rename(temp_path, final_path, replace=false) catch {
+      _ => raise FileSystem(operation="wal-checkpoint-rename", path=final_path)
+    }
+    sync_directory(dir)
+    let next_manifest : WalManifest = {
+      ..old,
+      generation: old.generation + 1L,
+      checkpoint_generation: checkpoint.generation,
+      checkpoint_lsn: checkpoint.lsn,
+      sealed_segments: [],
+    }
+    let manifest_bytes = match encode_wal_manifest(next_manifest) {
+      Ok(value) => value
+      Err(error) => raise error
+    }
+    wal_write_synced_new(manifest_temp, manifest_bytes)
+    @fs.rename(manifest_temp, manifest_path, replace=true) catch {
+      _ =>
+        raise FileSystem(
+          operation="wal-checkpoint-manifest",
+          path=manifest_path,
+        )
+    }
+    manifest_renamed = true
+    sync_directory(dir)
+    self.manifest = next_manifest
+    // GC is safe only after the new manifest's directory entry is synced.
+    let old_checkpoint = dir +
+      "/" +
+      wal_checkpoint_name(old.checkpoint_generation)
+    @fs.remove(old_checkpoint) catch {
+      _ => ()
+    }
+    for segment in old.sealed_segments {
+      let old_segment = dir + "/" + wal_segment_name(segment.segment_id)
+      @fs.remove(old_segment) catch {
+        _ => ()
+      }
+    }
+    sync_directory(dir) catch {
+      _ => ()
+    }
+    Ok(())
+  } catch {
+    error =>
+      if manifest_renamed {
+        self.fenced = true
+        Err(DurabilityUncertain(manifest_path))
+      } else {
+        Err(error)
+      }
   }
 }

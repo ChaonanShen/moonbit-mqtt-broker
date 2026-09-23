@@ -3,6 +3,7 @@ async fn run_ticker(
   config : ServerConfig,
   events : @async.Queue[DriverEvent],
   persistence : PersistenceRuntime?,
+  strict : StrictPersistenceRuntime?,
   bus? : EventBus,
   observation_interval_ms? : Int,
   management_maintenance? : Bool = false,
@@ -61,9 +62,13 @@ async fn run_ticker(
       next_auth_poll_at = now_ms + auth_interval.to_int64()
     }
     if now_ms >= next_metrics_at {
-      let persistence_state = match persistence {
+      let persistence_state = match strict {
         Some(runtime) => runtime.state()
-        None => "disabled"
+        None =>
+          match persistence {
+            Some(runtime) => runtime.state()
+            None => "disabled"
+          }
       }
       match bus {
         Some(bus) =>
@@ -169,11 +174,15 @@ pub async fn serve_listeners(
   config : ServerConfig,
   initial_state : @router.BrokerState,
   persistence? : PersistenceRuntime,
+  strict? : StrictPersistenceRuntime,
   shutdown_requested? : () -> Bool = () => false,
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
   logger? : @observability.Logger = @observability.Logger::silent(),
   management? : ManagementRuntime,
 ) -> Unit {
+  if persistence is Some(_) && strict is Some(_) {
+    raise ResourceStartupFailure("snapshot and strict cannot run together")
+  }
   for entry in listeners {
     if entry.config.websocket is Some(_) && !websocket_crypto_ready() {
       raise ResourceStartupFailure("WS/WSS requires libcrypto.so.3")
@@ -216,6 +225,10 @@ pub async fn serve_listeners(
     logger~,
     async_auth=auth_executor is Some(_),
   )
+  let strict_coordinator = strict.map(value => value.coordinator())
+  let strict_generations = strict
+    .map(value => value.generations())
+    .unwrap_or(Map([]))
   let driver = match persistence {
     Some(value) =>
       RouterDriver::new(
@@ -224,6 +237,8 @@ pub async fn serve_listeners(
         auth_executor?,
         auth_infrastructure?,
         management?,
+        strict?=strict_coordinator,
+        strict_generations~,
       )
     None =>
       RouterDriver::new(
@@ -231,6 +246,8 @@ pub async fn serve_listeners(
         auth_executor?,
         auth_infrastructure?,
         management?,
+        strict?=strict_coordinator,
+        strict_generations~,
       )
   }
   if management is Some(active) && active.config.details_enabled() {
@@ -258,7 +275,7 @@ pub async fn serve_listeners(
     driver.shutdown_authentication()
     driver.shutdown_management(bus)
   })
-  run_with_snapshot_writer(persistence, driver, () => {
+  run_with_persistence_writers(persistence, strict, driver, events, () => {
     @async.with_task_group() <| group => {
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         driver.run_budgeted(bus)
@@ -273,6 +290,7 @@ pub async fn serve_listeners(
           config,
           events,
           persistence,
+          strict,
           bus~,
           observation_interval_ms?,
           management_maintenance=maintenance,
@@ -416,6 +434,7 @@ pub async fn serve(
   config : ServerConfig,
   initial_state : @router.BrokerState,
   persistence? : PersistenceRuntime,
+  strict? : StrictPersistenceRuntime,
   shutdown_requested? : () -> Bool = () => false,
   tls? : TlsServerConfig,
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
@@ -433,6 +452,7 @@ pub async fn serve(
     config,
     initial_state,
     persistence?,
+    strict?,
     shutdown_requested~,
     security~,
     logger~,
@@ -446,6 +466,7 @@ pub async fn serve_once(
   config : ServerConfig,
   initial_state : @router.BrokerState,
   persistence? : PersistenceRuntime,
+  strict? : StrictPersistenceRuntime,
   shutdown_requested? : () -> Bool = () => false,
   tls? : TlsServerConfig,
   websocket? : WebSocketPolicy,
@@ -483,6 +504,10 @@ pub async fn serve_once(
     logger~,
     async_auth=auth_executor is Some(_),
   )
+  let strict_coordinator = strict.map(value => value.coordinator())
+  let strict_generations = strict
+    .map(value => value.generations())
+    .unwrap_or(Map([]))
   let driver = match persistence {
     Some(value) =>
       RouterDriver::new(
@@ -490,17 +515,26 @@ pub async fn serve_once(
         snapshot=value.driver_config(),
         auth_executor?,
         auth_infrastructure?,
+        strict?=strict_coordinator,
+        strict_generations~,
       )
-    None => RouterDriver::new(runtime, auth_executor?, auth_infrastructure?)
+    None =>
+      RouterDriver::new(
+        runtime,
+        auth_executor?,
+        auth_infrastructure?,
+        strict?=strict_coordinator,
+        strict_generations~,
+      )
   }
   errdefer @async.protect_from_cancel(() => driver.shutdown_authentication())
-  run_with_snapshot_writer(persistence, driver, () => {
+  run_with_persistence_writers(persistence, strict, driver, events, () => {
     @async.with_task_group() <| group => {
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         driver.run_budgeted(bus)
       }
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
-        run_ticker(config, events, persistence, bus~)
+        run_ticker(config, events, persistence, strict, bus~)
       }
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         wait_for_shutdown(
@@ -592,6 +626,7 @@ pub async fn run_listeners(
   config : ServerConfig,
   initial_state : @router.BrokerState,
   persistence? : PersistenceRuntime,
+  strict? : StrictPersistenceRuntime,
   shutdown_requested? : () -> Bool = () => false,
   once? : Bool = false,
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
@@ -602,6 +637,7 @@ pub async fn run_listeners(
     Some(runtime) => runtime.close()
     None => ()
   })
+  defer (if strict is Some(runtime) { runtime.close() })
   if once && management is Some(_) {
     raise ResourceStartupFailure(
       "management listener is incompatible with --once",
@@ -759,6 +795,7 @@ pub async fn run_listeners(
       config,
       initial_state,
       persistence?,
+      strict?,
       shutdown_requested~,
       tls?=first.config.tls,
       websocket?=first.config.websocket,
@@ -771,6 +808,7 @@ pub async fn run_listeners(
       config,
       initial_state,
       persistence?,
+      strict?,
       shutdown_requested~,
       security~,
       logger~,
@@ -785,6 +823,7 @@ pub async fn run(
   config : ServerConfig,
   initial_state : @router.BrokerState,
   persistence? : PersistenceRuntime,
+  strict? : StrictPersistenceRuntime,
   shutdown_requested? : () -> Bool = () => false,
   once? : Bool = false,
   tls? : TlsServerConfig,
@@ -803,6 +842,7 @@ pub async fn run(
     config,
     initial_state,
     persistence?,
+    strict?,
     shutdown_requested~,
     once~,
     security~,

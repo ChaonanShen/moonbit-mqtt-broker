@@ -29,11 +29,9 @@ pub fn BrokerRuntime::prepare_strict_accepted_connect(
         self.reject_connect(connection_id, IdentifierRejected),
       )
   }
-  if self.active_by_client.get(client_id) is Some(old_id) &&
-    old_id != connection_id {
-    return StrictImmediate(
-      self.reject_connect(connection_id, ServerUnavailable),
-    )
+  let takeover_id = match self.active_by_client.get(client_id) {
+    Some(old_id) if old_id != connection_id => Some(old_id)
+    _ => None
   }
   match self.broker_state.session_owner(client_id) {
     Some(owner) => {
@@ -156,12 +154,22 @@ pub fn BrokerRuntime::prepare_strict_accepted_connect(
         snapshot_revision=self.broker_state.snapshot_revision().to_string(),
       ),
     )
-    let actions : Array[RuntimeAction] = [
+    let actions : Array[RuntimeAction] = []
+    if takeover_id is Some(old_id) {
+      actions.append(
+        self.finish_strict_transport_close({
+          connection_id: old_id,
+          reason: ClientTakeover,
+          observed_at_ms: received_at_ms,
+        }),
+      )
+    }
+    actions.push(
       SendPacket({
         connection_id,
         packet: accepted_connack_packet(session_present),
       }),
-    ]
+    )
     actions.append(self.map_broker_actions(broker_actions))
     actions
   })

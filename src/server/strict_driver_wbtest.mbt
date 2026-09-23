@@ -89,6 +89,19 @@ async test "strict driver holds CONNECT state until its WAL completion" {
     }
     assert_true(will_committed)
     assert_eq(broker.retained_count(), 1)
+    driver.strict_checkpoint_next_ms = @async.now() - 1L
+    let mut checkpointed = false
+    for _ in 0..<1000 {
+      driver.handle(WalCompletionDue)
+      if coordinator.checkpoint_lsn() == 3L &&
+        !driver.strict_checkpoint_inflight {
+        checkpointed = true
+        break
+      }
+      @async.sleep(1)
+    }
+    assert_true(checkpointed)
+    assert_false(driver.strict_checkpoint_degraded)
     assert_eq(
       broker.session_attached(
         @session.ClientId::new("strict-driver-client").unwrap(),
@@ -100,6 +113,21 @@ async test "strict driver holds CONNECT state until its WAL completion" {
     task.wait()
     writer.close_store()
   }
+  let lock = @persistence.SnapshotStore::open(
+    @persistence.PersistenceConfig::new(path).unwrap(),
+  ).unwrap()
+  let limits = @persistence.SnapshotDecodeLimits::new(broker_config, 1024).unwrap()
+  let (recovered_store, replay) = @persistence.WalStore::recover(lock, limits).unwrap()
+  assert_eq(replay.checkpoint().lsn, 3L)
+  let restored = replay.restore_state(broker_config, limits).unwrap()
+  assert_eq(restored.state().retained_count(), 1)
+  assert_eq(
+    restored
+    .state()
+    .session_attached(@session.ClientId::new("strict-driver-client").unwrap()),
+    Some(false),
+  )
+  recovered_store.close()
   if @fs.exists(path) {
     @fs.rmdir(path, recursive=true)
   }

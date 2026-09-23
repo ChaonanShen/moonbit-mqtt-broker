@@ -2,6 +2,7 @@
 pub(all) enum PersistenceMode {
   Off
   Snapshot
+  Strict
 } derive(Eq, Debug)
 
 ///|
@@ -9,6 +10,8 @@ pub(all) enum PersistenceState {
   Disabled
   Healthy
   Degraded
+  Recovering
+  Fenced
 } derive(Eq, Debug)
 
 ///|
@@ -70,6 +73,11 @@ pub(all) struct ObservationSnapshot {
   persistence_state : PersistenceState
   state_revision : Int64
   snapshot_committed_revision : Int64?
+  committed_lsn : Int64?
+  applied_lsn : Int64?
+  checkpoint_lsn : Int64?
+  wal_pending_transactions : Int64
+  wal_pending_bytes : Int64
   snapshot_dirty_age_ms : Int64
   snapshot_budget_deferred : Int64
   lifecycle : ServiceLifecycle
@@ -147,7 +155,16 @@ pub fn evaluate_health(
     ready = false
     reasons.push("listener_down")
   }
-  if sample.persistence_state == Degraded &&
+  if sample.persistence_mode == Strict && sample.persistence_state == Fenced {
+    ready = false
+    reasons.push("durability_fenced")
+  }
+  if sample.persistence_mode == Strict && sample.persistence_state == Recovering {
+    ready = false
+    reasons.push("durability_recovering")
+  }
+  if sample.persistence_mode == Snapshot &&
+    sample.persistence_state == Degraded &&
     sample.ready_require_snapshot_healthy {
     ready = false
     reasons.push("snapshot_degraded")

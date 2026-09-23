@@ -8,12 +8,20 @@ pub(all) struct WalSubmission {
 pub(all) enum WalCompletion {
   Committed(Int64, Int64, Int64)
   Failed(Int64, String)
+  CheckpointPublished(Int64, Int64)
+  CheckpointFailed(String, Bool)
 } derive(Eq, Debug)
+
+///|
+pub(all) enum WalWork {
+  WriteBatch(WalSubmission)
+  WriteCheckpoint(WalCheckpoint)
+}
 
 ///|
 pub struct WalWriter {
   store : WalStore
-  requests : @async.Queue[WalSubmission]
+  requests : @async.Queue[WalWork]
   completions : @async.Queue[WalCompletion]
   mut closed : Bool
   mut stopped : Bool
@@ -42,7 +50,20 @@ pub fn WalWriter::submit(self : WalWriter, submission : WalSubmission) -> Bool {
     submission.batch.transactions.is_empty() {
     return false
   }
-  self.requests.try_put(submission) catch {
+  self.requests.try_put(WriteBatch(submission)) catch {
+    _ => false
+  }
+}
+
+///|
+pub fn WalWriter::submit_checkpoint(
+  self : WalWriter,
+  checkpoint : WalCheckpoint,
+) -> Bool {
+  if self.closed || self.fenced || self.stopped {
+    return false
+  }
+  self.requests.try_put(WriteCheckpoint(checkpoint)) catch {
     _ => false
   }
 }
@@ -57,6 +78,16 @@ pub fn WalWriter::poll(self : WalWriter) -> WalCompletion? {
 ///|
 pub fn WalWriter::committed_lsn(self : WalWriter) -> Int64 {
   self.store.committed_lsn()
+}
+
+///|
+pub fn WalWriter::checkpoint_lsn(self : WalWriter) -> Int64 {
+  self.store.manifest().checkpoint_lsn
+}
+
+///|
+pub fn WalWriter::checkpoint_generation(self : WalWriter) -> Int64 {
+  self.store.manifest().checkpoint_generation
 }
 
 ///|
@@ -81,23 +112,41 @@ pub fn WalWriter::close_store(self : WalWriter) -> Unit {
 ///|
 pub async fn WalWriter::run(self : WalWriter, wake : () -> Unit) -> Unit {
   for ;; {
-    let submission = self.requests.get() catch { _ => break }
-    let first = submission.batch.previous_lsn + 1L
-    let last = submission.batch.transactions[submission.batch.transactions.length() -
-      1].lsn
-    let result = @async.protect_from_cancel(() => {
-      self.store.append_batch(submission.batch)
-    })
-    let completion = match result {
-      Ok(committed_lsn) if committed_lsn == last =>
-        Committed(submission.writer_epoch, first, last)
-      Ok(_) => {
-        self.fenced = true
-        Failed(submission.writer_epoch, "completion-range")
+    let work = self.requests.get() catch { _ => break }
+    let completion = match work {
+      WriteBatch(submission) => {
+        let first = submission.batch.previous_lsn + 1L
+        let last = submission.batch.transactions[submission.batch.transactions.length() -
+          1].lsn
+        let result = @async.protect_from_cancel(() => {
+          self.store.append_batch(submission.batch)
+        })
+        match result {
+          Ok(committed_lsn) if committed_lsn == last =>
+            Committed(submission.writer_epoch, first, last)
+          Ok(_) => {
+            self.fenced = true
+            Failed(submission.writer_epoch, "completion-range")
+          }
+          Err(error) => {
+            self.fenced = true
+            Failed(submission.writer_epoch, error.category())
+          }
+        }
       }
-      Err(error) => {
-        self.fenced = true
-        Failed(submission.writer_epoch, error.category())
+      WriteCheckpoint(checkpoint) => {
+        let result = @async.protect_from_cancel(() => {
+          self.store.publish_checkpoint(checkpoint)
+        })
+        match result {
+          Ok(_) => CheckpointPublished(checkpoint.lsn, checkpoint.generation)
+          Err(error) => {
+            if self.store.is_fenced() {
+              self.fenced = true
+            }
+            CheckpointFailed(error.category(), self.fenced)
+          }
+        }
       }
     }
     self.completions.put(completion) catch {

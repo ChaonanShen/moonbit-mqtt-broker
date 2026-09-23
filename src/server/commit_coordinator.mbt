@@ -81,6 +81,8 @@ pub enum CommitPollResult {
   NoCommitCompletion
   CommitReleased(Array[RuntimeAction], @router.DurableDelta)
   CommitFencedResult(String)
+  CommitCheckpointPublished(Int64, Int64)
+  CommitCheckpointFailed(String, Bool)
 }
 
 ///|
@@ -90,6 +92,7 @@ pub struct PendingCommit {
   delta : @router.DurableDelta
   after_commit : (Array[@router.BrokerAction]) -> Array[RuntimeAction]
   ticket : @budget.Ticket
+  pending_bytes : Int64
 }
 
 ///|
@@ -160,6 +163,28 @@ pub fn CommitCoordinator::has_pending(self : CommitCoordinator) -> Bool {
 }
 
 ///|
+pub fn CommitCoordinator::applied_lsn(self : CommitCoordinator) -> Int64 {
+  self.last_released_lsn
+}
+
+///|
+pub fn CommitCoordinator::checkpoint_lsn(self : CommitCoordinator) -> Int64 {
+  self.writer.checkpoint_lsn()
+}
+
+///|
+pub fn CommitCoordinator::checkpoint_generation(
+  self : CommitCoordinator,
+) -> Int64 {
+  self.writer.checkpoint_generation()
+}
+
+///|
+pub fn CommitCoordinator::pending_bytes(self : CommitCoordinator) -> Int64 {
+  self.pending.map(item => item.pending_bytes).unwrap_or(0L)
+}
+
+///|
 pub fn CommitCoordinator::submit(
   self : CommitCoordinator,
   plan : PreparedBrokerMutation,
@@ -205,8 +230,28 @@ pub fn CommitCoordinator::submit(
     self.fenced = true
     return Err(CommitWriterUnavailable)
   }
-  self.pending = Some({ lsn, plan, delta, after_commit, ticket })
+  self.pending = Some({
+    lsn,
+    plan,
+    delta,
+    after_commit,
+    ticket,
+    pending_bytes: encoded.length().to_int64() + 128L,
+  })
   Ok(lsn)
+}
+
+///|
+pub fn CommitCoordinator::submit_checkpoint(
+  self : CommitCoordinator,
+  checkpoint : @persistence.WalCheckpoint,
+) -> Bool {
+  if self.is_fenced() ||
+    self.has_pending() ||
+    checkpoint.lsn != self.last_released_lsn {
+    return false
+  }
+  self.writer.submit_checkpoint(checkpoint)
 }
 
 ///|
@@ -214,6 +259,22 @@ pub fn CommitCoordinator::poll(self : CommitCoordinator) -> CommitPollResult {
   let completion = match self.writer.poll() {
     Some(value) => value
     None => return NoCommitCompletion
+  }
+  match completion {
+    @persistence.CheckpointPublished(lsn, generation) => {
+      if lsn > self.last_released_lsn || generation < 1L {
+        self.fenced = true
+        return CommitFencedResult("checkpoint-completion-range")
+      }
+      return CommitCheckpointPublished(lsn, generation)
+    }
+    @persistence.CheckpointFailed(reason, fatal) => {
+      if fatal {
+        self.fenced = true
+      }
+      return CommitCheckpointFailed(reason, fatal)
+    }
+    _ => ()
   }
   let pending = match self.pending {
     Some(value) => value
