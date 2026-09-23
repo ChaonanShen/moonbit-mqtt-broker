@@ -161,3 +161,11 @@ fn RetainedStore::matching_for_router(
 fn RetainedStore::topic_keys(self : RetainedStore) -> Array[@topic.TopicName] {
   self.messages.keys().collect()
 }
+
+///|
+pub fn BrokerState::has_retained(
+  self : BrokerState,
+  topic : @topic.TopicName,
+) -> Bool {
+  self.retained.peek(topic) is Some(_)
+}

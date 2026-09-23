@@ -1725,9 +1725,10 @@ async fn run_main() -> Unit {
           }
         }
         let (wal_store, initial_state, identities, committed_lsn) = if has_manifest {
-          let (wal_store, recovery) = match
-            @persistence.WalStore::recover(
+          let (wal_store, restored) = match
+            @persistence.WalStore::recover_state(
               store,
+              broker_config,
               limits,
               disk_max_bytes=wal_disk_max_bytes,
               disk_reserve_bytes=wal_disk_reserve_bytes,
@@ -1736,13 +1737,6 @@ async fn run_main() -> Unit {
             Err(error) => {
               store.close()
               raise CliError("WAL recovery: " + error.category())
-            }
-          }
-          let restored = match recovery.restore_state(broker_config, limits) {
-            Ok(value) => value
-            Err(error) => {
-              wal_store.close()
-              raise CliError("WAL replay: " + error.category())
             }
           }
           (

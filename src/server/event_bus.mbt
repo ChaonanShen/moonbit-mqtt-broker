@@ -34,6 +34,8 @@ priv struct EventBus {
   infrastructure : @budget.Ticket
   mut tick : RuntimeEvent?
   mut auth_poll : RuntimeEvent?
+  mut wal_completion_due : Bool
+  mut wal_flush_due : Bool
   mut metrics : RuntimeEvent?
   mut observation_due : Bool
   mut observation_wait_events : Int
@@ -81,6 +83,8 @@ fn EventBus::new(
     slots: Map([]),
     infrastructure,
     auth_poll: None,
+    wal_completion_due: false,
+    wal_flush_due: false,
     tick: None,
     metrics: None,
     observation_due: false,
@@ -363,6 +367,22 @@ fn EventBus::post_tick(self : EventBus, event : RuntimeEvent) -> Unit {
 }
 
 ///|
+fn EventBus::post_wal_completion(self : EventBus) -> Unit {
+  if !self.closed {
+    self.wal_completion_due = true
+    self.signal()
+  }
+}
+
+///|
+fn EventBus::post_wal_flush(self : EventBus) -> Unit {
+  if !self.closed {
+    self.wal_flush_due = true
+    self.signal()
+  }
+}
+
+///|
 fn EventBus::post_management_maintenance(self : EventBus) -> Unit {
   if !self.closed {
     self.maintenance_due = true
@@ -408,6 +428,14 @@ fn EventBus::take_observation(self : EventBus) -> DriverEvent {
 
 ///|
 fn EventBus::take_control(self : EventBus) -> DriverEvent? {
+  if self.wal_completion_due {
+    self.wal_completion_due = false
+    return Some(WalCompletionDue)
+  }
+  if self.wal_flush_due {
+    self.wal_flush_due = false
+    return Some(WalFlushDue)
+  }
   if self.tick is Some(tick) {
     self.tick = None
     return Some(Runtime(tick))

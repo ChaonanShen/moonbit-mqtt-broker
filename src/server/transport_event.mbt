@@ -12,6 +12,7 @@ pub(all) enum DriverEvent {
   Runtime(RuntimeEvent)
   ObservationDue
   WalCompletionDue
+  WalFlushDue
   ManagementQuery(ManagementQueryEvent)
   ManagementCommand(ManagementCommandEvent)
   ManagementMaintenance

@@ -70,6 +70,23 @@ fn valid_wal_disk_limits(
 }
 
 ///|
+pub(all) enum WalFaultPoint {
+  AppendBeforeWrite
+  AppendPartialTransaction
+  AppendAfterTransactions
+  AppendAfterCommitFrame
+  AppendBeforeSync
+  AppendAfterSync
+  RotateBeforeCreate
+  RotateBeforeManifest
+  RotateAfterManifestRename
+  CheckpointBeforeCreate
+  CheckpointAfterFileSync
+  CheckpointAfterManifestRename
+  CheckpointBeforeGc
+} derive(Eq, Debug)
+
+///|
 pub struct WalRecovery {
   checkpoint : WalCheckpoint
   batches : Array[WalBatch]
@@ -108,9 +125,34 @@ pub struct WalStore {
   disk_max_bytes : Int64
   disk_reserve_bytes : Int64
   mut disk_dirty : Bool
+  mut fault : WalFaultPoint?
   mut committed_lsn : Int64
   mut fenced : Bool
   mut closed : Bool
+}
+
+///|
+async fn wal_write_range(
+  file : @fs.File,
+  path : String,
+  data : Bytes,
+  start : Int,
+  count : Int,
+) -> Unit raise PersistenceError {
+  if start < 0 || count < 0 || count > data.length() - start {
+    raise FileSystem(operation="wal-invalid-write-range", path~)
+  }
+  let end = start + count
+  let mut offset = start
+  while offset < end {
+    let written = file.write_once(data, offset~, len=end - offset) catch {
+      _ => raise FileSystem(operation="wal-write", path~)
+    }
+    if written <= 0 || written > end - offset {
+      raise FileSystem(operation="wal-short-write", path~)
+    }
+    offset += written
+  }
 }
 
 ///|
@@ -119,16 +161,7 @@ async fn wal_write_all(
   path : String,
   data : Bytes,
 ) -> Unit raise PersistenceError {
-  let mut offset = 0
-  while offset < data.length() {
-    let count = file.write_once(data, offset~, len=data.length() - offset) catch {
-      _ => raise FileSystem(operation="wal-write", path~)
-    }
-    if count <= 0 || count > data.length() - offset {
-      raise FileSystem(operation="wal-short-write", path~)
-    }
-    offset += count
-  }
+  wal_write_range(file, path, data, 0, data.length())
 }
 
 ///|
@@ -162,6 +195,18 @@ async fn wal_write_synced_new(
 }
 
 ///|
+fn WalStore::fail_if(
+  self : WalStore,
+  point : WalFaultPoint,
+  operation : String,
+  path : String,
+) -> Unit raise PersistenceError {
+  if self.fault == Some(point) {
+    raise FileSystem(operation~, path~)
+  }
+}
+
+///|
 pub fn WalStore::manifest(self : WalStore) -> WalManifest {
   self.manifest
 }
@@ -180,6 +225,7 @@ pub fn WalStore::is_fenced(self : WalStore) -> Bool {
 pub fn WalStore::close(self : WalStore) -> Unit {
   if !self.closed {
     self.closed = true
+    self.fault = None
     self.active_file.close()
     self.snapshot_store.close()
   }
@@ -272,6 +318,7 @@ pub async fn WalStore::bootstrap(
       disk_max_bytes,
       disk_reserve_bytes,
       disk_dirty: false,
+      fault: None,
       committed_lsn: 0L,
       fenced: false,
       closed: false,
@@ -392,6 +439,7 @@ pub async fn WalStore::recover(
           disk_max_bytes,
           disk_reserve_bytes,
           disk_dirty: false,
+          fault: None,
           committed_lsn: scan.committed_lsn,
           fenced: false,
           closed: false,
@@ -445,6 +493,7 @@ async fn WalStore::rotate(self : WalStore) -> Result[Unit, PersistenceError] {
       Ok(value) => value
       Err(error) => raise error
     }
+    self.fail_if(RotateBeforeCreate, "wal-rotate-create", next_path)
     wal_write_synced_new(next_path, next_header)
     sync_directory(dir)
     let sealed_segments = current.sealed_segments.copy()
@@ -464,10 +513,16 @@ async fn WalStore::rotate(self : WalStore) -> Result[Unit, PersistenceError] {
       Ok(value) => value
       Err(error) => raise error
     }
+    self.fail_if(RotateBeforeManifest, "wal-rotate-manifest", temp_path)
     wal_write_synced_new(temp_path, encoded)
     @fs.rename(temp_path, manifest_path, replace=true) catch {
       _ => raise FileSystem(operation="wal-rotate-manifest", path=manifest_path)
     }
+    self.fail_if(
+      RotateAfterManifestRename,
+      "wal-rotate-after-manifest-rename",
+      manifest_path,
+    )
     sync_directory(dir)
     let next_file = @fs.open(
       next_path,
@@ -545,10 +600,56 @@ pub async fn WalStore::append_batch(
     }
   }
   try {
-    wal_write_all(self.active_file, self.active_path, encoded)
+    self.fail_if(AppendBeforeWrite, "wal-append-before-write", self.active_path)
+    let commit_offset = encoded.length() - 41
+    if commit_offset < 0 {
+      raise FileSystem(
+        operation="wal-invalid-batch-frame",
+        path=self.active_path,
+      )
+    }
+    if self.fault == Some(AppendPartialTransaction) {
+      wal_write_range(
+        self.active_file,
+        self.active_path,
+        encoded,
+        0,
+        if commit_offset > 1 {
+          commit_offset / 2
+        } else {
+          1
+        },
+      )
+      raise FileSystem(
+        operation="wal-partial-transaction",
+        path=self.active_path,
+      )
+    }
+    wal_write_range(
+      self.active_file,
+      self.active_path,
+      encoded,
+      0,
+      commit_offset,
+    )
+    self.fail_if(
+      AppendAfterTransactions,
+      "wal-after-transactions",
+      self.active_path,
+    )
+    wal_write_range(
+      self.active_file,
+      self.active_path,
+      encoded,
+      commit_offset,
+      41,
+    )
+    self.fail_if(AppendAfterCommitFrame, "wal-after-commit", self.active_path)
+    self.fail_if(AppendBeforeSync, "wal-before-sync", self.active_path)
     self.active_file.sync(only_data=false) catch {
       _ => raise FileSystem(operation="wal-sync-active", path=self.active_path)
     }
+    self.fail_if(AppendAfterSync, "wal-after-sync", self.active_path)
     self.active_bytes += encoded.length().to_int64()
     self.disk_bytes += encoded.length().to_int64()
     self.committed_lsn = batch.transactions[batch.transactions.length() - 1].lsn
@@ -590,6 +691,7 @@ pub async fn WalStore::publish_checkpoint(
   let manifest_path = dir + "/" + wal_manifest_name
   let old = self.manifest
   let mut manifest_renamed = false
+  let mut manifest_synced = false
   try {
     if wal_exists(final_path) ||
       wal_exists(temp_path) ||
@@ -608,7 +710,9 @@ pub async fn WalStore::publish_checkpoint(
         limit=self.disk_max_bytes,
       )
     }
+    self.fail_if(CheckpointBeforeCreate, "wal-checkpoint-create", temp_path)
     wal_write_synced_new(temp_path, encoded)
+    self.fail_if(CheckpointAfterFileSync, "wal-checkpoint-file-sync", temp_path)
     @fs.rename(temp_path, final_path, replace=false) catch {
       _ => raise FileSystem(operation="wal-checkpoint-rename", path=final_path)
     }
@@ -633,8 +737,15 @@ pub async fn WalStore::publish_checkpoint(
         )
     }
     manifest_renamed = true
+    self.fail_if(
+      CheckpointAfterManifestRename,
+      "wal-checkpoint-after-manifest-rename",
+      manifest_path,
+    )
     sync_directory(dir)
+    manifest_synced = true
     self.manifest = next_manifest
+    self.fail_if(CheckpointBeforeGc, "wal-checkpoint-before-gc", manifest_path)
     // GC is safe only after the new manifest's directory entry is synced.
     let old_checkpoint = dir +
       "/" +
@@ -654,7 +765,7 @@ pub async fn WalStore::publish_checkpoint(
     Ok(())
   } catch {
     error =>
-      if manifest_renamed {
+      if manifest_renamed && !manifest_synced {
         self.fenced = true
         Err(DurabilityUncertain(manifest_path))
       } else {
