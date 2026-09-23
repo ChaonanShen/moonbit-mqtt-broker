@@ -107,6 +107,11 @@ static int wait_result(
 }
 
 int main(void) {
+  moonbit_mqtt_auth_executor_test_fail_create_at(0);
+  assert(moonbit_mqtt_auth_executor_create(1, 1) == NULL);
+  moonbit_mqtt_auth_executor_test_fail_create_at(1);
+  assert(moonbit_mqtt_auth_executor_create(2, 1) == NULL);
+  moonbit_mqtt_auth_executor_test_fail_create_at(-1);
   moonbit_mqtt_auth_executor *executor =
     moonbit_mqtt_auth_executor_create(1, 1);
   assert(executor != NULL);
