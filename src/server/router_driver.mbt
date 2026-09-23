@@ -2,6 +2,8 @@
 pub struct RouterDriver {
   runtime : BrokerRuntime
   sinks : Map[ConnectionId, TransportSink]
+  priv mut management_connections : @slot_index.SlotIndex?
+  priv mut management_connections_available : Bool
   priv snapshot : SnapshotDriverState?
   priv auth_executor : @security.AuthExecutor?
   priv mut auth_infrastructure : @budget.Ticket?
@@ -61,6 +63,8 @@ pub fn RouterDriver::new(
   {
     runtime,
     sinks: Map([]),
+    management_connections: None,
+    management_connections_available: true,
     snapshot,
     auth_executor,
     auth_infrastructure,
@@ -436,6 +440,12 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
         return
       }
       self.sinks.set(register.connection_id, register.sink)
+      if self.management_connections is Some(index) {
+        if index.put(register.connection_id.value().to_string())
+          is @slot_index.Full {
+          self.management_connections_available = false
+        }
+      }
       self.dispatch(
         self.runtime.apply(
           TransportOpened({
@@ -460,7 +470,13 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
           active.rejections.record(@management.RejectedOther)
         }
       }
-    UnregisterTransport(connection_id) => self.sinks.remove(connection_id)
+    UnregisterTransport(connection_id) => {
+      self.sinks.remove(connection_id)
+      if self.management_connections is Some(index) &&
+        !index.remove(connection_id.value().to_string()) {
+        self.management_connections_available = false
+      }
+    }
   }
   self.poll_authentication()
   ignore(self.poll_snapshot(@async.now()))
