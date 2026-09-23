@@ -33,6 +33,7 @@ fi
 for required in moon.mod README.md README.zh_CN.md LICENSE CHANGELOG.md THIRD_PARTY_NOTICES.md \
   docs/getting-started.md docs/getting-started.zh_CN.md \
   docs/configuration.md docs/configuration.zh_CN.md \
+  docs/management.md docs/management.zh_CN.md \
   docs/security.md docs/security.zh_CN.md \
   docs/persistence.md docs/persistence.zh_CN.md \
   docs/compatibility.md docs/compatibility.zh_CN.md \

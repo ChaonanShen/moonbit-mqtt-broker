@@ -345,3 +345,18 @@ DISTRIBUTION_RUNTIME_REFERENCE=/absolute/repo/test-results/distribution/<success
 发布主机需要 Python 3（标准库即可）运行缓存参考保护测试和解析器；这不是 Broker 的运行依赖，不要求开发/四环境容器安装 Python。严格入口在启动耗时验证前检查此依赖。资源容器门禁只使用镜像已有的 MoonBit、Node、Argon2 CLI 和 OpenSSL。
 
 干净源码与解包目录在正式门禁前执行正常 registry 的 pinned 依赖准备；明确的下载/网络错误最多尝试 4 次（上限可配置为 1—5），每次日志保存于 `dependency-fetch-source/` 或 `dependency-fetch-package/`。类型/编译错误立即失败。这里不注入主机依赖缓存，成功后全部正式检查仍完整运行；耗尽重试仍是失败。脚本保护测试覆盖瞬时恢复、编译错误不重试及持续错误有界退出。
+
+## 管理功能的候选验证
+
+累计发布门禁包含令牌/加密库启动负例，以及真实进程 HTTP/MQTT 验证
+（包括一万次管理请求和 QoS 0/1/2）。严格分发构建会生成 UID 65532
+持有的私有摘要文件及独立的客户端令牌文件。每个运行环境在管理功能
+关闭和启用两种状态下运行 MQTT 测试；关闭时管理端口必须不存在。
+`full` 环境还在当前 Broker 容器的网络命名空间中启动固定 digest 的
+Prometheus 镜像，要求授权 `up=1`、错误令牌 `up=0` 及
+`moonbit_mqtt_broker_build_info=1`。运行库清单显式检查
+`libcrypto.so`，因为 `ldd` 不列出全部 `dlopen` 依赖。
+
+这些检查与原有运行矩阵使用同一已提交候选及可执行文件。
+`runtime-*-management.log` 应与原运行日志一起留存。最外层退出码、
+源码 SHA、四项 PASS 及产物哈希仍是必需验收条件。
