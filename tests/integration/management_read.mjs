@@ -91,6 +91,8 @@ try {
     ['obs-fold', 'GET /health/live HTTP/1.1\r\nHost: localhost\r\n folded\r\n\r\n', 400],
     ['lf-only', 'GET /health/live HTTP/1.1\nHost: localhost\n\n', 400],
     ['transfer-encoding', 'GET /health/live HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n', 400],
+    ['cookie-token', `GET /metrics HTTP/1.1\r\nHost: localhost\r\nCookie: token=${metricsToken}\r\n\r\n`, 401],
+    ['body-token', `GET /metrics HTTP/1.1\r\nHost: localhost\r\nContent-Length: ${metricsToken.length}\r\n\r\n${metricsToken}`, 400],
     ['post', 'POST /health/live HTTP/1.1\r\nHost: localhost\r\n\r\n', 405],
     ['suffix', 'GET /health/live HTTP/1.1\r\nHost: localhost\r\n\r\nGET /health/live HTTP/1.1\r\nHost: localhost\r\n\r\n', 400]
   ]) {
@@ -115,11 +117,63 @@ try {
   assert.equal(after.status, 200)
   assert.ok(metric(after.body, 'moonbit_mqtt_broker_publish_packets_received_total') >=
     metric(before.body, 'moonbit_mqtt_broker_publish_packets_received_total') + 3)
+  assert.ok(metric(after.body, 'moonbit_mqtt_broker_qos2_received_total') >=
+    metric(before.body, 'moonbit_mqtt_broker_qos2_received_total') + 1)
   const receivedCount = metric(after.body, 'moonbit_mqtt_broker_publish_packets_received_total')
   await pause(200)
   const scrapeAgain = await get('/metrics', metricsToken)
   assert.equal(metric(scrapeAgain.body, 'moonbit_mqtt_broker_publish_packets_received_total'), receivedCount,
     'scrapes must not change MQTT received count')
+  // Scrape and authenticate while MQTT replaces an active connection with
+  // the same Client ID. The old transport must close and the new one must work.
+  const oldClosed = new Promise(resolve => publisher.once('close', resolve))
+  const [replacement, takeoverMetrics, takeoverStatus, takeoverDenied] = await Promise.all([
+    connect('publisher'), get('/metrics', metricsToken),
+    get('/v1/status', readToken),
+    get('/metrics', 'metrics1.' + 'f'.repeat(64))
+  ])
+  await Promise.race([
+    oldClosed,
+    pause(2000).then(() => { throw new Error('old MQTT transport survived takeover') })
+  ])
+  assert.equal(takeoverMetrics.status, 200)
+  assert.equal(takeoverStatus.status, 200)
+  assert.equal(takeoverDenied.status, 401)
+  await publish(replacement, 'management/integration', 'post-takeover', 1)
+  for (let i = 0; i < 40 && arrivals < 4; i++) await pause(25)
+  assert.equal(arrivals, 4)
+  // Deterministic malformed and valid header values must stay within fixed
+  // status and metric-label sets under repeated untrusted input.
+  let seed = 0x5eed1234
+  for (let i = 0; i < 256; i++) {
+    let value = ''
+    for (let j = 0; j < 20; j++) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0
+      value += String.fromCharCode(i % 7 === 0 && j === 3 ? 1 : 32 + (seed % 95))
+    }
+    const response = await raw(`GET /health/live HTTP/1.1\r\nHost: localhost\r\nX-Random: ${value}\r\n\r\n`)
+    assert.match(response, /^HTTP\/1\.1 (200|400) /)
+  }
+  const authBefore = await get('/metrics', metricsToken)
+  const rejectedBefore = Number(authBefore.body.match(
+    /^moonbit_mqtt_broker_management_rejected_total\{reason="auth"\} ([0-9]+)$/m
+  )[1])
+  let badIssued = 0
+  async function badWorker() {
+    while (badIssued < 1000) {
+      badIssued++
+      assert.equal((await get('/metrics', 'metrics1.' + 'f'.repeat(64))).status, 401)
+    }
+  }
+  await Promise.all(Array.from({ length: 8 }, badWorker))
+  const authAfter = await get('/metrics', metricsToken)
+  const rejectedAfter = Number(authAfter.body.match(
+    /^moonbit_mqtt_broker_management_rejected_total\{reason="auth"\} ([0-9]+)$/m
+  )[1])
+  assert.ok(rejectedAfter >= rejectedBefore + 1000)
+  const series = authAfter.body.split('\n').filter(line => line && !line.startsWith('#'))
+  assert.ok(series.length <= 256)
+  assert.equal(new Set(series.map(line => line.slice(0, line.lastIndexOf(' ')))).size, series.length)
   let completed = 0
   const started = performance.now()
   async function worker() {
