@@ -355,3 +355,98 @@ pub fn OperationTable::check_invariants(self : OperationTable) -> Bool {
   }
   live == self.by_id.length()
 }
+
+///|
+/// Undo an unstarted admission before any 202 is published. Sequence numbers
+/// may be skipped, but are never reused.
+pub fn OperationTable::discard_unstarted(
+  self : OperationTable,
+  id : String,
+) -> Bool {
+  let slot = match self.by_id.get(id) {
+    Some(value) => value
+    None => return false
+  }
+  let record = match self.slots[slot] {
+    Some(value) if value.state == Accepted => value
+    _ => return false
+  }
+  self.slots[slot] = None
+  self.by_id.remove(id)
+  if self.by_actor.get(record.actor_token_id) is Some(keys) {
+    keys.remove(record.idempotency_key)
+    if keys.length() == 0 {
+      self.by_actor.remove(record.actor_token_id)
+    }
+  }
+  true
+}
+
+///|
+fn operation_kind_name(kind : OperationKind) -> String {
+  match kind {
+    Kick => "kick"
+    DeleteSession => "delete_session"
+    Reload => "reload"
+  }
+}
+
+///|
+fn operation_state_name(state : OperationState) -> String {
+  match state {
+    Accepted => "accepted"
+    Running => "running"
+    Succeeded => "succeeded"
+    Failed => "failed"
+  }
+}
+
+///|
+fn operation_stage_name(stage : OperationStage) -> String {
+  match stage {
+    Queued => "queued"
+    ClosingTransport => "closing_transport"
+    WaitingAuthReap => "waiting_auth_reap"
+    Applying => "applying"
+    Done => "done"
+  }
+}
+
+///|
+/// Explicit public whitelist. The normalized request and idempotency key
+/// remain internal, and no raw error/body/header can enter this JSON.
+pub fn OperationRecord::to_json(self : OperationRecord) -> Json {
+  let fields : Map[String, Json] = Map([
+    ("operation_id", self.id.to_json()),
+    ("kind", operation_kind_name(self.kind).to_json()),
+    ("target", self.target.to_json()),
+    ("state", operation_state_name(self.state).to_json()),
+    ("stage", operation_stage_name(self.stage).to_json()),
+    ("accepted_at_ms", self.accepted_at_ms.to_string().to_json()),
+    (
+      "started_at_ms",
+      self.started_at_ms.map(value => value.to_string()).to_json(),
+    ),
+    (
+      "finished_at_ms",
+      self.finished_at_ms.map(value => value.to_string()).to_json(),
+    ),
+    ("effect_applied", self.effect_applied.to_json()),
+    ("transport_closed", self.transport_closed.to_json()),
+    ("timed_out", self.timed_out.to_json()),
+    ("completion_scope", self.completion_scope.to_json()),
+    ("persistence_mode", self.persistence_mode.to_json()),
+    (
+      "state_revision_after",
+      self.state_revision_after.map(value => value.to_string()).to_json(),
+    ),
+    (
+      "snapshot_committed_revision_at_finish",
+      self.snapshot_committed_revision_at_finish
+      .map(value => value.to_string())
+      .to_json(),
+    ),
+    ("error_code", self.error_code.to_json()),
+  ])
+  fields.to_json()
+}

@@ -122,6 +122,7 @@ pub fn parse_read_query(
     "/v1/connections" => Connections
     "/v1/sessions" => Sessions
     "/v1/retained" => Retained
+    "/v1/audit" => Audit
     "/v1/config" => Config
     _ =>
       if segments.length() == 4 &&
@@ -175,7 +176,7 @@ pub fn parse_read_query(
       match name {
         "limit" =>
           match kind {
-            Connections | Sessions | Subscriptions | Retained => {
+            Connections | Sessions | Subscriptions | Retained | Audit => {
               let parsed = @string.parse_int(value) catch {
                 _ => return Err(QueryBadRequest)
               }
@@ -190,7 +191,7 @@ pub fn parse_read_query(
           }
         "cursor" =>
           match kind {
-            Connections | Sessions | Subscriptions | Retained => {
+            Connections | Sessions | Subscriptions | Retained | Audit => {
               if value.length() != 65 {
                 return Err(QueryBadRequest)
               }

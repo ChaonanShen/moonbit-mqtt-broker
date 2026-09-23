@@ -131,3 +131,22 @@ pub fn AuditRing::page(
     scanned,
   }
 }
+
+///|
+pub fn AuditEvent::to_json(self : AuditEvent) -> Json {
+  let fields : Map[String, Json] = Map([
+    ("sequence", self.sequence.to_string().to_json()),
+    ("timestamp_ms", self.timestamp_ms.to_string().to_json()),
+    ("operation_id", self.operation_id.to_json()),
+    ("kind", operation_kind_name(self.kind).to_json()),
+    ("target", self.target.to_json()),
+    ("phase", self.phase.to_json()),
+    ("result", self.result.to_json()),
+    ("effect_applied", self.effect_applied.to_json()),
+    (
+      "state_revision",
+      self.state_revision.map(value => value.to_string()).to_json(),
+    ),
+  ])
+  fields.to_json()
+}

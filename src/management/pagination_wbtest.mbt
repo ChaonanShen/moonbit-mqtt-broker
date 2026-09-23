@@ -6,6 +6,7 @@ fn cursor_fixture() -> CursorRecord {
     filters: "attached=false",
     session_handle: "",
     next_slot: 7,
+    audit_after_sequence: None,
     index_generation: 1L,
     expires_monotonic_ms: 0L,
   }
