@@ -27,9 +27,13 @@ chmod 0444 /results/runtime/server.crt
 management_token='distread.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 management_digest="$(printf 'moonbit-mqtt-broker/admin/v1:%s' "${management_token}" | sha256sum | awk '{print $1}')"
 printf 'distread:%s:metrics,read\n' "${management_digest}" >/results/runtime/management-tokens
+management_admin_token='distadmin.abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789'
+management_admin_digest="$(printf 'moonbit-mqtt-broker/admin/v1:%s' "$management_admin_token" | sha256sum | awk '{print $1}')"
+printf 'distadmin:%s:read,operator\n' "$management_admin_digest" >>/results/runtime/management-tokens
+printf '%s\n' "$management_admin_token" >/results/runtime/management-admin-client-token
 printf '%s\n' "${management_token}" >/results/runtime/management-client-token
 chown 65532:65532 /results/runtime/management-tokens
 chmod 0400 /results/runtime/management-tokens
-chmod 0444 /results/runtime/management-client-token
+chmod 0444 /results/runtime/management-client-token /results/runtime/management-admin-client-token
 (cd /results && sha256sum package.zip runtime/broker >artifacts.sha256)
 echo 'DISTRIBUTION clean source, release archive, and exported native binary passed'

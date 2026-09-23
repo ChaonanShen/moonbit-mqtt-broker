@@ -168,6 +168,23 @@ for profile in base argon2 tls full; do
   docker logs "${BROKER_CONTAINER}" >"${RESULTS}/runtime-${profile}-management.log" 2>&1
   docker rm "${BROKER_CONTAINER}" >/dev/null
   broker_started=0
+  docker run --detach "${runtime_options[@]}" --name "$BROKER_CONTAINER" \
+    "$runtime_image" --listen 127.0.0.1:1883 "${feature_args[@]}" \
+    --management-enabled true --management-details-enabled true \
+    --management-operations-enabled true --management-max-bytes-total 33554432 \
+    --management-listen 127.0.0.1:9091 \
+    --management-token-file /artifact/management-tokens >/dev/null
+  broker_started=1
+  docker run --rm --platform linux/amd64 --network "container:$BROKER_CONTAINER" \
+    --entrypoint node --volume "$SOURCE_VOLUME:/workspace:ro" \
+    --volume "$RESULTS/runtime:/artifact:ro" --workdir /workspace "$DEV_IMAGE" \
+    tests/integration/management_runtime_admin_smoke.mjs \
+    "$scheme://127.0.0.1:1883" "$auth_mode"
+  docker stop --time 10 "$BROKER_CONTAINER" >/dev/null
+  [[ "$(docker inspect --format '{{.State.ExitCode}}' "$BROKER_CONTAINER")" = 0 ]]
+  docker logs "$BROKER_CONTAINER" >"$RESULTS/runtime-$profile-admin.log" 2>&1
+  docker rm "$BROKER_CONTAINER" >/dev/null
+  broker_started=0
   printf 'runtime_%s=PASS\n' "${profile}" >>"${RESULTS}/evidence.txt"
 done
 [[ "$(git rev-parse HEAD)" = "${SOURCE_SHA}" ]]
