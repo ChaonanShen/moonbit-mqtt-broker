@@ -1,1 +1,5 @@
 // Bounded HTTP/1.1 syntax shared by management and future WebSocket.
+import {
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/string",
+}
