@@ -76,4 +76,16 @@ grep -qF 'management authentication requires libcrypto.so.3' "${WORK_DIR}/missin
 ! grep -Eq 'PanicError|SIGABRT' "${WORK_DIR}/missing-libcrypto.log"
 LD_PRELOAD="${WORK_DIR}/missing-libcrypto.so" \
   "${BROKER}" --check-config | grep -qxF 'configuration valid'
+cc -std=c11 -D_GNU_SOURCE -DMANAGEMENT_TEST_NO_SYMBOLS \
+  -Wall -Wextra -Werror -shared -fPIC \
+  tests/integration/management_crypto_missing.c -ldl \
+  -o "${WORK_DIR}/missing-symbols.so"
+if LD_PRELOAD="${WORK_DIR}/missing-symbols.so" \
+  "${BROKER}" --management-enabled true --management-token-file "${WORK_DIR}/tokens" \
+  --check-config >"${WORK_DIR}/missing-symbols.log" 2>&1; then
+  echo 'enabled management accepted libcrypto without EVP symbols' >&2
+  exit 1
+fi
+grep -qF 'management authentication requires libcrypto.so.3' "${WORK_DIR}/missing-symbols.log"
+! grep -Eq 'PanicError|SIGABRT' "${WORK_DIR}/missing-symbols.log"
 echo 'management crypto startup and disabled missing-library cases passed'

@@ -8,7 +8,11 @@ void *dlopen(const char *filename, int flags) {
     real_dlopen = dlsym(RTLD_NEXT, "dlopen");
   }
   if (filename != NULL && strcmp(filename, "libcrypto.so.3") == 0) {
+#ifdef MANAGEMENT_TEST_NO_SYMBOLS
+    return real_dlopen("libc.so.6", flags);
+#else
     return NULL;
+#endif
   }
   return real_dlopen(filename, flags);
 }
