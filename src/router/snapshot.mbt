@@ -117,13 +117,20 @@ fn BrokerState::snapshot_session_candidate(
   self : BrokerState,
   client_id : @session.ClientId,
   session : @session.ClientSession,
+  planned_subscriptions? : Array[SnapshotSubscriptionV3],
 ) -> SnapshotSessionV3 {
-  let subscriptions : Array[SnapshotSubscriptionV3] = []
-  for record in self.subscriptions.records_for(client_id) {
-    subscriptions.push({
-      filter: record.filter.value(),
-      qos: snapshot_qos(record.qos),
-    })
+  let subscriptions = match planned_subscriptions {
+    Some(value) => value.copy()
+    None => {
+      let records : Array[SnapshotSubscriptionV3] = []
+      for record in self.subscriptions.records_for(client_id) {
+        records.push({
+          filter: record.filter.value(),
+          qos: snapshot_qos(record.qos),
+        })
+      }
+      records
+    }
   }
   let inflight = session
     .inflight()

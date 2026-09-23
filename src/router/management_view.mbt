@@ -173,3 +173,44 @@ pub fn BrokerState::admin_delete_offline(
     Err(_) => Err(AdminInvariantViolation)
   }
 }
+
+///|
+/// Prepare an offline management deletion without changing its ETag, index,
+/// budget or session until the WAL commit has completed.
+pub fn BrokerState::prepare_durable_admin_delete(
+  self : BrokerState,
+  handle : Int64,
+  expected_lifecycle_version : Int64,
+  session_generation : Int64,
+) -> Result[DurableLifecyclePlan, AdminDeleteError] {
+  let index = match self.admin_sessions {
+    Some(value) if value.available() => value
+    _ => return Err(AdminDetailsUnavailable)
+  }
+  let identity = match index.identity_for_handle(handle) {
+    Some(value) => value
+    None => return Err(AdminNotFound)
+  }
+  if identity.lifecycle_version != expected_lifecycle_version {
+    return Err(AdminPreconditionFailed)
+  }
+  let session = match self.sessions.get(identity.client_id) {
+    Some(value) => value
+    None => return Err(AdminInvariantViolation)
+  }
+  if session.mode() != @session.Persistent || session.is_attached() {
+    return Err(AdminSessionActive)
+  }
+  let plan = match
+    self.prepare_durable_lifecycle(
+      identity.client_id,
+      session_generation,
+      Delete,
+    ) {
+    Ok(value) => value
+    Err(_) => return Err(AdminInvariantViolation)
+  }
+  plan.admin_handle = Some(handle)
+  plan.admin_version = Some(expected_lifecycle_version)
+  Ok(plan)
+}
