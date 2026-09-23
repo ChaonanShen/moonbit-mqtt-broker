@@ -6,6 +6,7 @@ import {
   "ChaonanShen/moonbit-mqtt-broker/security",
   "ChaonanShen/moonbit-mqtt-broker/observability",
   "ChaonanShen/moonbit-mqtt-broker/config",
+  "ChaonanShen/moonbit-mqtt-broker/management",
   "moonbitlang/async",
   "moonbitlang/async/fs",
   "moonbitlang/async/signal",

@@ -63,3 +63,67 @@ test "management enabled needs a token source and adequate total fee" {
     ManagementConfig::new(token_file="/missing", max_bytes_total=1L) is Ok(_),
   )
 }
+
+///|
+test "management numeric option boundaries" {
+  assert_true(ManagementConfig::new(max_connections=0) is Err(_))
+  assert_true(ManagementConfig::new(max_connections=65) is Err(_))
+  assert_true(ManagementConfig::new(max_header_bytes=1023) is Err(_))
+  assert_true(ManagementConfig::new(max_header_bytes=16385) is Err(_))
+  assert_true(ManagementConfig::new(max_header_count=0) is Err(_))
+  assert_true(ManagementConfig::new(max_header_count=65) is Err(_))
+  assert_true(ManagementConfig::new(max_response_bytes=4095) is Err(_))
+  assert_true(ManagementConfig::new(max_response_bytes=262145) is Err(_))
+  assert_true(ManagementConfig::new(request_timeout_ms=99) is Err(_))
+  assert_true(ManagementConfig::new(request_timeout_ms=30001) is Err(_))
+  assert_true(ManagementConfig::new(write_timeout_ms=99) is Err(_))
+  assert_true(ManagementConfig::new(write_timeout_ms=30001) is Err(_))
+  assert_true(ManagementConfig::new(snapshot_interval_ms=99) is Err(_))
+  assert_true(ManagementConfig::new(snapshot_interval_ms=10001) is Err(_))
+  assert_true(ManagementConfig::new(snapshot_max_age_ms=299) is Err(_))
+  assert_true(ManagementConfig::new(snapshot_max_age_ms=60001) is Err(_))
+  assert_true(ManagementConfig::new(request_rate=0) is Err(_))
+  assert_true(ManagementConfig::new(request_rate=10001) is Err(_))
+  assert_true(ManagementConfig::new(request_burst=0) is Err(_))
+  assert_true(ManagementConfig::new(request_burst=20001) is Err(_))
+  assert_true(ManagementConfig::new(connection_rate=0) is Err(_))
+  assert_true(ManagementConfig::new(connection_rate=10001) is Err(_))
+  assert_true(ManagementConfig::new(connection_burst=0) is Err(_))
+  assert_true(ManagementConfig::new(connection_burst=20001) is Err(_))
+  assert_true(ManagementConfig::new(max_connections=1) is Ok(_))
+  assert_true(ManagementConfig::new(max_connections=64) is Ok(_))
+  assert_true(ManagementConfig::new(max_header_bytes=1024) is Ok(_))
+  assert_true(ManagementConfig::new(max_header_bytes=16384) is Ok(_))
+  assert_true(ManagementConfig::new(max_header_count=1) is Ok(_))
+  assert_true(ManagementConfig::new(max_header_count=64) is Ok(_))
+  assert_true(ManagementConfig::new(max_response_bytes=4096) is Ok(_))
+  assert_true(ManagementConfig::new(max_response_bytes=262144) is Ok(_))
+  assert_true(
+    ManagementConfig::new(request_timeout_ms=100, write_timeout_ms=100) is Ok(_),
+  )
+  assert_true(ManagementConfig::new(request_timeout_ms=30000) is Ok(_))
+  assert_true(ManagementConfig::new(write_timeout_ms=100) is Ok(_))
+  assert_true(
+    ManagementConfig::new(write_timeout_ms=30000, request_timeout_ms=30000)
+    is Ok(_),
+  )
+  assert_true(ManagementConfig::new(snapshot_interval_ms=100) is Ok(_))
+  assert_true(
+    ManagementConfig::new(snapshot_interval_ms=10000, snapshot_max_age_ms=30000)
+    is Ok(_),
+  )
+  assert_true(
+    ManagementConfig::new(snapshot_max_age_ms=300, snapshot_interval_ms=100)
+    is Ok(_),
+  )
+  assert_true(ManagementConfig::new(snapshot_max_age_ms=60000) is Ok(_))
+  assert_true(ManagementConfig::new(request_rate=1) is Ok(_))
+  assert_true(ManagementConfig::new(request_rate=10000) is Ok(_))
+  assert_true(ManagementConfig::new(request_burst=1) is Ok(_))
+  assert_true(ManagementConfig::new(request_burst=20000) is Ok(_))
+  assert_true(ManagementConfig::new(connection_rate=1) is Ok(_))
+  assert_true(ManagementConfig::new(connection_rate=10000) is Ok(_))
+  assert_true(ManagementConfig::new(connection_burst=1) is Ok(_))
+  assert_true(ManagementConfig::new(connection_burst=20000) is Ok(_))
+  assert_true(ManagementConfig::new(max_bytes_total=0L) is Err(_))
+}
