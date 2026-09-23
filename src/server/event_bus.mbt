@@ -40,6 +40,8 @@ priv struct EventBus {
   mut management_queries : ManagementQueryMailbox?
   mut management_commands : ManagementCommandMailbox?
   mut command_turn : Bool
+  mut maintenance_due : Bool
+  mut maintenance_wait_events : Int
   mut since_management : Int
   mut deferred_data : DriverEvent?
   mut control_batch : Int
@@ -86,6 +88,8 @@ fn EventBus::new(
     management_queries: None,
     management_commands: None,
     command_turn: true,
+    maintenance_due: false,
+    maintenance_wait_events: 0,
     since_management: 0,
     deferred_data: None,
     control_batch: 0,
@@ -130,6 +134,12 @@ fn EventBus::take_management_command(self : EventBus) -> DriverEvent? {
 
 ///|
 fn EventBus::take_management(self : EventBus) -> DriverEvent? {
+  if self.maintenance_due && self.maintenance_wait_events >= 8 {
+    self.maintenance_due = false
+    self.maintenance_wait_events = 0
+    self.since_management = 0
+    return Some(ManagementMaintenance)
+  }
   let event = if self.command_turn {
     match self.take_management_command() {
       Some(value) => Some(value)
@@ -143,8 +153,18 @@ fn EventBus::take_management(self : EventBus) -> DriverEvent? {
   }
   if event is Some(_) {
     self.command_turn = !self.command_turn
+    if self.maintenance_due && self.maintenance_wait_events < 8 {
+      self.maintenance_wait_events += 1
+    }
+    return event
   }
-  event
+  if self.maintenance_due {
+    self.maintenance_due = false
+    self.maintenance_wait_events = 0
+    self.since_management = 0
+    return Some(ManagementMaintenance)
+  }
+  None
 }
 
 ///|
@@ -343,6 +363,14 @@ fn EventBus::post_tick(self : EventBus, event : RuntimeEvent) -> Unit {
 }
 
 ///|
+fn EventBus::post_management_maintenance(self : EventBus) -> Unit {
+  if !self.closed {
+    self.maintenance_due = true
+    self.signal()
+  }
+}
+
+///|
 fn EventBus::post_observation(self : EventBus) -> Unit {
   if !self.closed {
     if !self.observation_due {
@@ -485,13 +513,29 @@ fn EventBus::completed(self : EventBus, event : DriverEvent) -> Unit {
 }
 
 ///|
+fn EventBus::close_management(self : EventBus) -> Array[String] {
+  if self.management_queries is Some(mailbox) {
+    mailbox.close()
+  }
+  let queued = match self.management_commands {
+    Some(mailbox) => mailbox.close()
+    None => []
+  }
+  self.maintenance_due = false
+  queued
+}
+
+///|
 fn EventBus::close(self : EventBus) -> Unit {
   if self.closed {
     return
   }
   self.closed = true
+  ignore(self.close_management())
   self.observation_due = false
   self.observation_wait_events = 0
+  self.maintenance_due = false
+  self.maintenance_wait_events = 0
   if self.deferred_data is Some(Accounted(_, ticket)) {
     ticket.release().unwrap()
   }

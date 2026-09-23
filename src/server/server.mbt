@@ -5,6 +5,7 @@ async fn run_ticker(
   persistence : PersistenceRuntime?,
   bus? : EventBus,
   observation_interval_ms? : Int,
+  management_maintenance? : Bool = false,
 ) -> Unit {
   let keep_alive_interval = config.keep_alive_check_interval_ms()
   let auth_interval = config.auth_poll_interval_ms()
@@ -17,7 +18,13 @@ async fn run_ticker(
     Some(value) if value > 0 && value < interval => value
     _ => interval
   }
+  let interval = if management_maintenance && interval > 20 {
+    20
+  } else {
+    interval
+  }
   let first_mono = @budget.monotonic_ms()
+  let mut next_maintenance_at = first_mono + 20L
   let mut next_observation_at : Int64? = match observation_interval_ms {
     Some(value) if value > 0 &&
       first_mono >= 0L &&
@@ -67,6 +74,15 @@ async fn run_ticker(
           }
       }
       next_metrics_at = now_ms + config.system_metrics_interval_ms().to_int64()
+    }
+    if management_maintenance {
+      let current_mono = @budget.monotonic_ms()
+      if current_mono >= next_maintenance_at {
+        if bus is Some(active) {
+          active.post_management_maintenance()
+        }
+        next_maintenance_at = current_mono + 20L
+      }
     }
     if next_observation_at is Some(deadline) {
       let current_mono = @budget.monotonic_ms()
@@ -229,7 +245,10 @@ pub async fn serve(
     }
   }
   let allocator = ConnectionIdAllocator::new()
-  errdefer @async.protect_from_cancel(() => driver.shutdown_authentication())
+  errdefer @async.protect_from_cancel(() => {
+    driver.shutdown_authentication()
+    driver.shutdown_management(bus)
+  })
   run_with_snapshot_writer(persistence, driver, () => {
     @async.with_task_group() <| group => {
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
@@ -239,7 +258,16 @@ pub async fn serve(
         let observation_interval_ms = management.map(active => {
           active.config.snapshot_interval_ms()
         })
-        run_ticker(config, events, persistence, bus~, observation_interval_ms?)
+        let maintenance = management is Some(active) &&
+          active.config.details_enabled()
+        run_ticker(
+          config,
+          events,
+          persistence,
+          bus~,
+          observation_interval_ms?,
+          management_maintenance=maintenance,
+        )
       }
       let management_task = match management {
         Some(active) => Some(group.spawn(() => active.run_acceptor()))
@@ -437,6 +465,7 @@ pub async fn serve_once(
     }
   })
   driver.shutdown_authentication()
+  driver.shutdown_management(bus)
 }
 
 ///|

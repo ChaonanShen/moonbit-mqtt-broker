@@ -165,3 +165,75 @@ async test "stale offline etag returns precondition failure before 202" {
   mailbox.release(ticket)
   management.close()
 }
+
+///|
+async test "shutdown fails accepted queued command without applying delete" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  assert_true(state.enable_management_index())
+  let client_id = @session.ClientId::new("shutdown-queued").unwrap()
+  ignore(
+    state
+    .apply(
+      @router.CreateSessionWith({
+        client_id,
+        mode: @session.Persistent,
+        attached: false,
+      }),
+    )
+    .unwrap(),
+  )
+  let identity = state
+    .management_index()
+    .unwrap()
+    .identity_for_client(client_id)
+    .unwrap()
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let config_b = @management.ManagementConfig::new(
+    enabled=true,
+    token_file="/fixture/tokens",
+    details_enabled=true,
+    operations_enabled=true,
+    max_bytes_total=33554432L,
+  ).unwrap()
+  let tokens = command_tokens()
+  let management = ManagementRuntime::new(
+    listener,
+    { config: config_b, tokens },
+    state.resource_ledger(),
+  ).unwrap()
+  let driver = RouterDriver::new(BrokerRuntime::new(config, state), management~)
+  assert_true(
+    driver.enable_management_connection_index(config.max_connections()),
+  )
+  let data : @async.Queue[DriverEvent] = @async.Queue(kind=Blocking(16))
+  let bus = EventBus::new(config, state.resource_ledger(), data).unwrap()
+  bus.attach_management_commands(management.command_mailbox.unwrap())
+  let actor = command_actor(tokens)
+  let spec = @management.parse_command(
+    "DELETE",
+    "/v1/sessions/" + identity.handle.to_string(),
+    @management.session_etag(management.context.boot_id, identity.handle, 1L),
+    "Key_0123456789abc",
+    actor.token_id(),
+  ).unwrap()
+  let mailbox = management.command_mailbox.unwrap()
+  let ticket = mailbox.submit(spec, actor).unwrap()
+  driver.handle(ManagementCommand(mailbox.take().unwrap()))
+  assert_eq(mailbox.wait(ticket).unwrap().status, @http_transport.Accepted)
+  mailbox.release(ticket)
+  driver.shutdown_management(bus)
+  let record = match
+    management.operations
+    .unwrap()
+    .lookup_key(actor.token_id(), spec.idempotency_key, spec.normalized()) {
+    @management.KeyMatch(value) => value
+    _ => fail("missing accepted record")
+  }
+  assert_eq(record.state, @management.Failed)
+  assert_false(record.effect_applied)
+  assert_eq(record.error_code, Some("shutdown"))
+  assert_true(state.has_session(client_id))
+  bus.close()
+  management.close()
+}

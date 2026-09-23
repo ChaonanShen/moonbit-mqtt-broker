@@ -43,3 +43,30 @@ async test "EventBus serves queued management within eight non-management events
   bus.close()
   assert_eq(state.managed_bytes(), 0L)
 }
+
+///|
+async test "maintenance due is serviced after bounded control work" {
+  let (bus, state) = observation_bus_fixture()
+  bus.post_management_maintenance()
+  for index in 0..<8 {
+    bus.post_tick(CheckDeadlines(index.to_int64()))
+    assert_true(bus.next() is Some(Runtime(CheckDeadlines(_))))
+  }
+  assert_true(bus.next() is Some(ManagementMaintenance))
+  bus.close()
+  assert_eq(state.managed_bytes(), 0L)
+}
+
+///|
+async test "closing query mailbox completes queued waiter without slot reuse" {
+  let mailbox = ManagementQueryMailbox::new(1)
+  let ticket = mailbox.submit(mailbox_spec()).unwrap()
+  mailbox.close()
+  assert_eq(
+    mailbox.wait(ticket).unwrap().status,
+    @http_transport.ServiceUnavailable,
+  )
+  mailbox.release(ticket)
+  assert_true(mailbox.submit(mailbox_spec()) is None)
+  assert_eq(mailbox.active_count(), 0)
+}

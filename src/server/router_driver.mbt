@@ -501,6 +501,7 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
       }
     ManagementQuery(query) => self.handle_management_query(query)
     ManagementCommand(command) => self.handle_management_command(command)
+    ManagementMaintenance => self.maintain_management()
     UnregisterTransport(connection_id) => {
       self.sinks.remove(connection_id)
       if self.management_closing.get(connection_id) is Some(watch) {
