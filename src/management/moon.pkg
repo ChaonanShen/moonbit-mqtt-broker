@@ -3,4 +3,5 @@ import {
   "moonbitlang/core/encoding/utf8",
   "moonbitlang/core/json",
   "ChaonanShen/moonbit-mqtt-broker/management_native",
+  "ChaonanShen/moonbit-mqtt-broker/resource_budget" @budget,
 }

@@ -64,6 +64,24 @@ Import checks file type before opening (including size inspection), rejects exce
 
 The conservative export estimate is eight times persistent/retained CostV1 plus 1024 bytes; import reserves four file-buffer lengths plus four times decoded CostV1, in addition to installed state. These are admission headroom estimates, not RSS measurements. A high backlog may defer snapshots under a small workspace limit. The dirty revision remains pending, diagnostics are rate-limited, and final shutdown cannot claim that an uncommitted snapshot was saved.
 
+## Management accounting
+
+The ledger defines three ordinary categories for the optional management service:
+`management_infrastructure`, `management_request`, and `management_cache`.
+They share a management aggregate cap and do not consume the protected MQTT
+control reserve. With management disabled, none of these pools or tickets is
+created.
+
+An enabled instance reserves one fixed parent ticket before starting request
+tasks. The default logical fee is 5,892,096 bytes under the 8 MiB management
+cap: 106,496 bytes of infrastructure, 4,734,976 bytes for 16 request slots,
+and 1,050,624 bytes for the current and building observation workspaces.
+Each accepted connection leases one already charged request slot; the slot
+remains held through the actual response write and cancellation cleanup.
+Closing the service stops new leases and releases the parent only after all
+outstanding leases are returned. A failed parent reservation leaves no
+partial byte charge. These are logical bounds, not RSS measurements.
+
 ## Resource observations
 
 Additional `$SYS/broker/` topics are `resources/used_bytes`, `resources/reserved_bytes`, `resources/rejections`, `resources/usage`, `limits/rejections`, `persistence/budget_deferred` and `persistence/oldest_dirty_age_ms`. `resources/usage` is a bounded JSON object keyed by resource category with used/reserved/limit values. Control frame/runtime subcaps are folded into their canonical outbound/runtime categories so summing categories does not double-count memory. `limits/rejections` uses fixed operation names, never IP/client/topic labels.
