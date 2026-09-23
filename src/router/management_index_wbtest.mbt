@@ -319,3 +319,56 @@ test "metadata view reads counts and payload length without exporting payload" {
   assert_eq(retained.payload_bytes, 4096L)
   assert_eq(retained.topic, "large/topic")
 }
+
+///|
+test "delivery copy and ACK preserve management handle and lifecycle" {
+  let state = managed_state()
+  assert_true(state.enable_management_index())
+  let id = managed_client("copy-stable")
+  ignore(
+    state
+    .apply(
+      CreateSessionWith({
+        client_id: id,
+        mode: @session.Persistent,
+        attached: true,
+      }),
+    )
+    .unwrap(),
+  )
+  ignore(
+    state
+    .apply(
+      Subscribe({
+        client_id: id,
+        entries: [
+          {
+            filter: @topic.TopicFilter::new("copy/topic").unwrap(),
+            qos: @session.QoS1,
+          },
+        ],
+      }),
+    )
+    .unwrap(),
+  )
+  let initial = managed_identity(state, id)
+  let actions = state
+    .apply(
+      Publish({
+        origin: PublishOrigin::Internal,
+        topic: @topic.TopicName::new("copy/topic").unwrap(),
+        payload: b"copy",
+        qos: @session.QoS1,
+        retain: false,
+      }),
+    )
+    .unwrap()
+  let packet_id = match actions[0] {
+    Deliver(value) => value.packet_id.unwrap()
+    _ => fail("expected inflight delivery")
+  }
+  assert_eq(managed_identity(state, id), initial)
+  ignore(state.apply(Puback({ client_id: id, packet_id })).unwrap())
+  assert_eq(managed_identity(state, id), initial)
+  assert_eq(state.management_index().unwrap().live_count(), 1)
+}

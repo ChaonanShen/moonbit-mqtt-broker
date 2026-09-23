@@ -487,3 +487,152 @@ async test "offline delete dispatches promotion unlocked for another active sess
   sink.close()
   management.close()
 }
+
+///|
+async test "failed snapshot submission does not upgrade runtime delete to durable" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  assert_true(state.enable_management_index())
+  let client_id = @session.ClientId::new("snapshot-failed-delete").unwrap()
+  ignore(
+    state
+    .apply(
+      @router.CreateSessionWith({
+        client_id,
+        mode: @session.Persistent,
+        attached: false,
+      }),
+    )
+    .unwrap(),
+  )
+  let identity = state
+    .management_index()
+    .unwrap()
+    .identity_for_client(client_id)
+    .unwrap()
+  let path = "/tmp/b37-management-" + @management.new_boot_id().unwrap()
+  let disk = @persistence.PersistenceConfig::new(
+    path,
+    debounce_ms=1L,
+    max_delay_ms=1L,
+    retry_ms=1L,
+  ).unwrap()
+  let store = @persistence.SnapshotStore::open(disk).unwrap()
+  let persistence = PersistenceRuntime::new(store, disk).unwrap()
+  persistence.sink.close()
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let config_b = @management.ManagementConfig::new(
+    enabled=true,
+    token_file="/fixture/tokens",
+    details_enabled=true,
+    operations_enabled=true,
+    max_bytes_total=33554432L,
+  ).unwrap()
+  let tokens = command_tokens()
+  let management = ManagementRuntime::new(
+    listener,
+    { config: config_b, tokens },
+    state.resource_ledger(),
+    persistence~,
+  ).unwrap()
+  let driver = RouterDriver::new(
+    BrokerRuntime::new(config, state),
+    snapshot=persistence.driver_config(),
+    management~,
+  )
+  assert_true(
+    driver.enable_management_connection_index(config.max_connections()),
+  )
+  let actor = command_actor(tokens)
+  let spec = @management.parse_command(
+    "DELETE",
+    "/v1/sessions/" + identity.handle.to_string(),
+    @management.session_etag(management.context.boot_id, identity.handle, 1L),
+    "Key_0123456789abc",
+    actor.token_id(),
+  ).unwrap()
+  let mailbox = management.command_mailbox.unwrap()
+  let ticket = mailbox.submit(spec, actor).unwrap()
+  driver.handle(ManagementCommand(mailbox.take().unwrap()))
+  assert_eq(mailbox.wait(ticket).unwrap().status, @http_transport.Accepted)
+  mailbox.release(ticket)
+  driver.handle(ManagementCommand(mailbox.take().unwrap()))
+  let record = match
+    management.operations
+    .unwrap()
+    .lookup_key(actor.token_id(), spec.idempotency_key, spec.normalized()) {
+    @management.KeyMatch(value) => value
+    _ => fail("operation missing")
+  }
+  assert_eq(record.state, @management.Succeeded)
+  assert_true(record.effect_applied)
+  assert_eq(record.persistence_mode, "snapshot")
+  assert_eq(record.completion_scope, "runtime")
+  assert_eq(record.snapshot_committed_revision_at_finish, None)
+  assert_eq(persistence.committed_revision(), -1L)
+  assert_false(state.has_session(client_id))
+  management.close()
+  persistence.close()
+}
+
+///|
+async test "command scheduling failure rolls back Operation before 202" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  assert_true(state.enable_management_index())
+  let client_id = @session.ClientId::new("reserve-rollback").unwrap()
+  ignore(
+    state
+    .apply(
+      @router.CreateSessionWith({
+        client_id,
+        mode: @session.Persistent,
+        attached: false,
+      }),
+    )
+    .unwrap(),
+  )
+  let identity = state
+    .management_index()
+    .unwrap()
+    .identity_for_client(client_id)
+    .unwrap()
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let config_b = @management.ManagementConfig::new(
+    enabled=true,
+    token_file="/fixture/tokens",
+    details_enabled=true,
+    operations_enabled=true,
+    max_bytes_total=33554432L,
+  ).unwrap()
+  let tokens = command_tokens()
+  let management = ManagementRuntime::new(
+    listener,
+    { config: config_b, tokens },
+    state.resource_ledger(),
+  ).unwrap()
+  let driver = RouterDriver::new(BrokerRuntime::new(config, state), management~)
+  assert_true(
+    driver.enable_management_connection_index(config.max_connections()),
+  )
+  let actor = command_actor(tokens)
+  let spec = @management.parse_command(
+    "DELETE",
+    "/v1/sessions/" + identity.handle.to_string(),
+    @management.session_etag(management.context.boot_id, identity.handle, 1L),
+    "Key_0123456789abc",
+    actor.token_id(),
+  ).unwrap()
+  let mailbox = management.command_mailbox.unwrap()
+  let ticket = mailbox.submit(spec, actor).unwrap()
+  let event = mailbox.take().unwrap()
+  ignore(mailbox.close())
+  driver.handle(ManagementCommand(event))
+  let reply = mailbox.wait(ticket).unwrap()
+  assert_eq(reply.status, @http_transport.TooManyRequests)
+  assert_eq(management.operations.unwrap().live_count(), 0)
+  assert_eq(management.audit.unwrap().count(), 0)
+  assert_true(state.has_session(client_id))
+  mailbox.release(ticket)
+  management.close()
+}

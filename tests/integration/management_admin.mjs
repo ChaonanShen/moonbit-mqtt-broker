@@ -164,6 +164,10 @@ try {
   assert.equal(deleted.state, 'succeeded')
   assert.equal(deleted.effect_applied, true)
   assert.equal(deleted.completion_scope, 'runtime')
+  const oldBoot = (config.boot_id[0] === 'a' ? 'b' : 'a') +
+    config.boot_id.slice(1)
+  assert.equal((await request('GET', '/v1/operations/' + oldBoot + '.1',
+    operatorToken)).status, 410)
   assert.equal((await request('GET', deletePath, readerToken)).status, 404)
   assert.ok((await list('/v1/retained')).some(item => item.topic === 'b/admin/retained'))
   const same = await request('DELETE', deletePath, operatorToken, headers)
@@ -173,6 +177,26 @@ try {
     { ...headers, 'If-Match': '"' + config.boot_id + ':s:' + offline.handle + ':999"' })).status, 409)
 
   console.error('admin-stage=aba')
+  const lost = await offlineSession('b-admin-lost-response', 'b/lost')
+  const lostPath = '/v1/sessions/' + lost.handle
+  const lostKey = 'LostResponse_01234567'
+  await new Promise((resolve, reject) => {
+    const socket = net.connect(adminPort, '127.0.0.1')
+    socket.once('connect', () => socket.write(
+      'DELETE ' + lostPath + ' HTTP/1.1\r\nHost: localhost\r\n' +
+      'Authorization: Bearer ' + operatorToken + '\r\n' +
+      'If-Match: ' + lost.etag + '\r\n' +
+      'Idempotency-Key: ' + lostKey + '\r\nContent-Length: 0\r\n\r\n'))
+    socket.once('data', () => { socket.destroy(); resolve() })
+    socket.once('error', reject)
+    socket.setTimeout(3000, () => socket.destroy(new Error('lost response timeout')))
+  })
+  const recovered = await request('DELETE', lostPath, operatorToken,
+    { 'If-Match': lost.etag, 'Idempotency-Key': lostKey })
+  assert.ok(recovered.status === 200 || recovered.status === 202, recovered.text)
+  assert.equal((await terminal(json(recovered).operation_id)).state, 'succeeded')
+  assert.equal((await request('GET', lostPath, readerToken)).status, 404)
+
   const aba = await offlineSession('b-admin-aba', 'b/aba')
   const reconnected = await connect('b-admin-aba')
   await end(reconnected)

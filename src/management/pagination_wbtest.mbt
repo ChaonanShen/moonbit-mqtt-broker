@@ -81,3 +81,37 @@ test "cursor rejects altered and previous boot handles" {
     is Err(ExpiredCursor),
   )
 }
+
+///|
+test "cursor source failure and three collisions do not overwrite table" {
+  let table = CursorTable::new(2, 60000L, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+  assert_true(
+    table.issue_with_random(cursor_fixture(), 100L, fn() { Err(CursorEntropy) })
+    is Err(CursorEntropy),
+  )
+  assert_eq(table.live_count(), 0)
+  let existing = table
+    .install("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", cursor_fixture(), 100L)
+    .unwrap()
+  let mut draws = 0
+  assert_true(
+    table.issue_with_random(
+      { ..cursor_fixture(), actor_token_id: "other" },
+      101L,
+      fn() {
+        draws += 1
+        let byte_value = 187
+        Ok(FixedArray::make(16, byte_value.to_byte()))
+      },
+    )
+    is Err(CursorEntropy),
+  )
+  assert_eq(draws, 3)
+  assert_eq(table.live_count(), 1)
+  assert_true(
+    table.lookup(
+      existing, "operator", "sessions", "attached=false", "", 1L, 101L,
+    )
+    is Ok(_),
+  )
+}

@@ -73,6 +73,16 @@ if LD_PRELOAD="${WORK_DIR}/missing-libcrypto.so" \
   exit 1
 fi
 grep -qF 'management authentication requires libcrypto.so.3' "${WORK_DIR}/missing-libcrypto.log"
+if LD_PRELOAD="$WORK_DIR/missing-libcrypto.so" \
+  "$BROKER" --management-enabled true --management-details-enabled true \
+  --management-operations-enabled true --management-max-bytes-total 33554432 \
+  --management-token-file "$WORK_DIR/tokens" --check-config \
+  >"$WORK_DIR/missing-libcrypto-b.log" 2>&1; then
+  echo 'B management unexpectedly survived missing libcrypto' >&2
+  exit 1
+fi
+grep -qF 'management authentication requires libcrypto.so.3' "$WORK_DIR/missing-libcrypto-b.log"
+! grep -Eq 'PanicError|SIGABRT' "$WORK_DIR/missing-libcrypto-b.log"
 ! grep -Eq 'PanicError|SIGABRT' "${WORK_DIR}/missing-libcrypto.log"
 LD_PRELOAD="${WORK_DIR}/missing-libcrypto.so" \
   "${BROKER}" --check-config | grep -qxF 'configuration valid'

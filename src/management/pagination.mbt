@@ -138,10 +138,11 @@ fn CursorTable::install(
 }
 
 ///|
-pub fn CursorTable::issue(
+fn CursorTable::issue_with_random(
   self : CursorTable,
   record : CursorRecord,
   now_monotonic_ms : Int64,
+  random : () -> Result[FixedArray[Byte], CursorError],
 ) -> Result[String, CursorError] {
   if now_monotonic_ms < 0L ||
     self.ttl_ms <= 0L ||
@@ -159,7 +160,7 @@ pub fn CursorTable::issue(
     }
   }
   for _ in 0..<3 {
-    let raw = match @management_native.secure_random(16) {
+    let raw = match random() {
       Ok(value) => value
       Err(_) => return Err(CursorEntropy)
     }
@@ -173,6 +174,20 @@ pub fn CursorTable::issue(
     }
   }
   Err(CursorEntropy)
+}
+
+///|
+pub fn CursorTable::issue(
+  self : CursorTable,
+  record : CursorRecord,
+  now_monotonic_ms : Int64,
+) -> Result[String, CursorError] {
+  self.issue_with_random(record, now_monotonic_ms, fn() {
+    match @management_native.secure_random(16) {
+      Ok(value) => Ok(value)
+      Err(_) => Err(CursorEntropy)
+    }
+  })
 }
 
 ///|
