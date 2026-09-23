@@ -82,6 +82,7 @@ int moonbit_mqtt_auth_executor_stats(
 int moonbit_mqtt_auth_executor_destroy(moonbit_mqtt_auth_executor *executor);
 
 #ifdef MOONBIT_MQTT_AUTH_EXECUTOR_TESTING
+void moonbit_mqtt_auth_executor_test_fail_create_at(int index);
 int moonbit_mqtt_auth_executor_test_hold(
   moonbit_mqtt_auth_executor *executor,
   int hold

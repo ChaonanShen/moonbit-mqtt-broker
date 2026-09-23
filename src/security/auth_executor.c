@@ -2,6 +2,7 @@
 #include "auth_executor.h"
 #include "argon2_backend.h"
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -13,6 +14,14 @@
 
 #define AUTH_EXECUTOR_MAX_WORKERS 64
 #define AUTH_EXECUTOR_MAX_RECORDS 4096
+
+#ifdef MOONBIT_MQTT_AUTH_EXECUTOR_TESTING
+static int test_fail_create_at = -1;
+
+void moonbit_mqtt_auth_executor_test_fail_create_at(int index) {
+  test_fail_create_at = index;
+}
+#endif
 
 typedef enum {
   AUTH_TASK_FREE = 0,
@@ -248,7 +257,13 @@ moonbit_mqtt_auth_executor *moonbit_mqtt_auth_executor_create(
     return NULL;
   }
   for (int index = 0; index < workers; index++) {
-    if (pthread_create(&executor->threads[index], NULL, auth_worker, executor) != 0) {
+#ifdef MOONBIT_MQTT_AUTH_EXECUTOR_TESTING
+    int create_status = index == test_fail_create_at
+      ? EAGAIN : pthread_create(&executor->threads[index], NULL, auth_worker, executor);
+#else
+    int create_status = pthread_create(&executor->threads[index], NULL, auth_worker, executor);
+#endif
+    if (create_status != 0) {
       pthread_mutex_lock(&executor->lock);
       executor->accepting = 0;
       executor->stopping = 1;
