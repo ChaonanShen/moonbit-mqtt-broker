@@ -91,11 +91,20 @@ QoS 保证针对每段 MQTT 交换，降级为 QoS 1 的下游仍可能重复。
 PUBREC/PUBCOMP 不代表已 fsync；崩溃恢复仍以 latest-committed 快照为边界，
 不承诺端到端业务 exactly-once 或崩溃零丢失。
 
-## 只读管理路径
+## 管理路径
 
-可选 HTTP 监听器持有有界 socket、解析 buffer、请求租约、固定角色令牌
-校验和独立限流桶。它不直接读取可变 MQTT Map。RouterDriver 将类型化
-观测值发布到有界缓存；HTTP handler 只读取缓存。观测事件合并后，与 MQTT
-控制和数据事件公平调度。真实 driver 心跳独立于缓存发布时间，因此延迟
-或失败的采样不会伪装成进度。启动和停机统一管理两个监听器、缓存预算和
-原生认证 worker 的排空。
+可选 loopback HTTP 监听器持有有界 socket、解析缓冲区、请求租约、
+按作用域划分的令牌和独立限流桶。健康、指标及状态摘要读取类型化
+观测缓存。明细 HTTP handler 把类型化查询送入固定槽位和代际邮箱；
+只有 RouterDriver 读取可选的 Session、订阅、retained 和连接元数据
+索引。单页只扫描有界的物理槽，不复制载荷或排序整个 Broker 状态。
+
+写 handler 校验作用域、强 ETag 和幂等键，再由单写者原子接纳
+Operation 并排队命令。离线删除重新核对 Session 生命周期，复用
+BrokerState.apply 完成资源结算与其他会话推进动作的派发。kick
+安装精确 ConnectionId 关闭意图，沿 supervisor terminal 路径执行，
+在注销及该连接关联的原生认证任务真正 reap 后才成功。HTTP 响应
+丢失不撤销已接纳效果。Operation、游标和审计表有固定容量与有界
+维护；审计环只在内存中，满时覆盖旧事件。管理索引异常会停用明细
+与写接口，但不改变 MQTT 业务状态。观测和管理事件与 MQTT 控制、
+数据事件共用公平 EventBus 调度。

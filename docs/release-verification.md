@@ -278,29 +278,44 @@ Clean source and extracted packages prepare pinned dependencies through the norm
 
 ## Management candidate checks
 
-The cumulative release gate includes token/crypto startup negatives and the
-real-process HTTP/MQTT gate (including 10,000 management requests and
-QoS 0/1/2). The strict distribution builder creates a private digest file
-owned by UID 65532 and a separate client token file. Each runtime profile
-runs MQTT smoke both with management disabled and enabled; disabled mode
-must have no management port. The full profile also starts the pinned
-Prometheus image in the exact Broker container's network namespace and
-requires authorized `up=1`, wrong-token `up=0`, and
-`moonbit_mqtt_broker_build_info=1`. `libcrypto.so` is explicitly checked
-in the runtime inventory because `ldd` alone does not list `dlopen` use.
+The cumulative release gate runs the original management crypto and read
+gates, followed once by `management_admin.sh`, `management_auth_kick.sh`
+and `management_snapshot_admin.sh`. The admin gate covers scoped detail
+queries, strong ETags, 202/idempotency, precise kick, offline QoS 2 deletion,
+audit overwrite/gap, 10,000 protected Operation reads, and slow-reader
+shutdown. The auth gate observes a real Argon2 task in
+`authenticating`, kicks its exact ConnectionId, and requires the Operation
+to wait through native reap without late activation. The snapshot gate
+distinguishes normal final-save deletion from a runtime-successful delete
+followed by SIGKILL before the next snapshot. These are process gates within
+the strict chain, not separate full release runs.
 
-These checks use the same committed candidate and executable as the existing
-matrix. Preserve `runtime-*-management.log` alongside the original runtime
-logs. The outer exit code, source SHA, four PASS records and artifact hashes
-remain mandatory.
+The strict distribution builder creates a private digest file owned by UID
+65532 and separate client token files. Each of the four isolated runtime
+profiles runs MQTT smoke with management disabled, A-only, and details plus
+operations enabled. Disabled mode must have no management port. B mode
+performs real read, kick and offline delete against the packaged binary.
+The full profile also runs the pinned Prometheus check on the A-only
+instance, requiring authorized `up=1`, wrong-token `up=0` and
+`moonbit_mqtt_broker_build_info=1`. Inventory explicitly checks
+`libcrypto.so` because `ldd` does not list every `dlopen` dependency.
+Keep `runtime-*-management.log` and `runtime-*-admin.log` alongside MQTT
+runtime logs. Same HEAD, same artifact hashes, four profile PASS records
+and the outermost exit code 0 are required. A-only and disabled coverage
+must remain when B is added.
 
-The separate `scripts/verify-management-performance.sh` runs three paired
-10-second warmup/60-second measurement rounds with 20 MQTT connections and
-QoS 0/1/2, followed by a 60-second overload run. It limits each Broker
-container to 2 CPUs, 256 MiB and 64 processes. Each managed round must keep
-at least 90% of baseline publish throughput; PING and QoS 1 PUBACK P99 must
-stay within the larger of twice baseline or baseline plus 20 ms. Every
-five-second overload window must include a successful PING. Raw samples and
-the threshold summary are retained under `.local/p1-03a-execution/`.
-This performance check is run separately from the distribution soak so the
-two loads do not contaminate each other's measurements.
+The separate `scripts/verify-management-admin-performance.sh` compares
+the same Native binary and 32 MiB parent-cap configuration with B off
+(A-only) and B on. Three paired rounds each warm for 10 seconds and
+measure 60 seconds under QoS 0/1/2 traffic. B-on adds a 1 Hz scrape,
+5 Hz detail pagination and one offline Session operation per second.
+Each B-on round needs at least 90% of the B-off throughput; PING and QoS 1
+PUBACK P99 must stay within the larger of twice baseline or baseline plus
+20 ms. A further 60-second B overload fills query/cursor/command/Operation
+pressure while holding 16 slow HTTP readers; every five-second window must
+include a successful MQTT PING. Containers use 2 CPUs, 256 MiB and 64
+processes. Preserve raw samples, fd counts and the threshold summary under
+`.local/p1-03b-execution/performance-*`. Run this separately from
+distribution soak so the two loads do not contaminate one another. The
+earlier A-only performance evidence remains under
+`.local/p1-03a-execution/`.

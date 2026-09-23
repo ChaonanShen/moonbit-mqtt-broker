@@ -165,7 +165,7 @@ The CLI switches are `--rate-limits-enabled` and `--per-ip-limits-enabled`, acce
 
 Unless explicitly configured, retained-message and per-connection Will limits follow max_packet_size. Authentication conservatively reserves validated PHC m (KiB) ×1024 + p×256KiB +1MiB; this is logical budgeting, not measured RSS. Restore exceeding a byte cap fails startup instead of truncating old state.
 
-## Read-only management listener
+## Management listener
 
 `[management]` is optional and disabled by default. See the
 [management API guide](management.md) for token generation and route behavior.
@@ -198,3 +198,42 @@ Only numeric IPv4 loopback is accepted; hostnames, non-loopback addresses and
 IPv6 are rejected. Enabling management requires a private token file and a
 logical budget large enough for the required fixed responses and request
 slots. `--check-config` validates the file and capacity without binding.
+
+### Detail and operation settings
+
+A read-only A configuration can omit all keys below. To expose detail
+queries and protected writes, set `details_enabled = true`,
+`operations_enabled = true` and an explicit `max_bytes_total = 33554432`.
+`operations_enabled` requires details, and details require management.
+`max_index_bytes` must cover the configured Broker object capacities at
+startup. All CLI flags use the `--management-` prefix and hyphenated key name.
+
+| TOML key | Default | Valid range |
+| --- | ---: | --- |
+| `details_enabled` | false | boolean |
+| `operations_enabled` | false | boolean; requires details |
+| `query_queue_limit` | 16 | 1..64 |
+| `operation_queue_limit` | 16 | 1..64 |
+| `max_operation_records` | 256 | 16..4096 |
+| `max_running_operations` | 8 | 1..min(32, records) |
+| `operation_timeout_ms` | 30000 | 1000..120000 |
+| `operation_retention_ms` | 900000 | 1000..3600000 |
+| `max_cursor_records` | 256 | 16..4096 |
+| `cursor_ttl_ms` | 60000 | 1000..300000 |
+| `default_page_size` | 50 | 1..max_page_size |
+| `max_page_size` | 100 | 1..500 |
+| `query_scan_limit` | 256 | max_page_size..2048 |
+| `query_timeout_ms` | 2000 | 100..request_timeout_ms when details are enabled |
+| `max_audit_records` | 1024 | 64..16384 |
+| `command_rate` | 5 | 1..1000 per second |
+| `command_burst` | 10 | 1..2000 |
+| `max_index_bytes` | 8388608 | positive, no more than max_bytes_total when details are enabled |
+
+The parent pool reserves fixed index/query/cursor and, when operations are on,
+Operation/command/audit capacity before MQTT accepts. The logical index fee
+is 256 bytes per maximum Session, 192 per MQTT connection, 192 per maximum
+subscription and 128 per maximum retained entry. The default capacities
+(1024, 128, 16384, 1024) require 3,563,520 bytes. A smaller
+`max_index_bytes` fails startup; it does not silently reduce MQTT limits.
+See [management API](management.md) for the runtime completion and pagination
+contracts.

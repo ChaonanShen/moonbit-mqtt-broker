@@ -12,9 +12,10 @@ supports multiple TCP or TLS clients, QoS 0/1/2, wildcard subscriptions, retaine
 messages, Wills, Keep Alive, persistent Sessions, optional restart persistence,
 authentication, ACLs, metrics, structured logs, and TOML configuration.
 
-The optional [read-only management API](docs/management.md) provides
-loopback health checks, scoped Prometheus metrics and a status summary. It is
-disabled by default and uses a separate private token file.
+The optional [management API](docs/management.md) provides loopback health,
+scoped Prometheus metrics, bounded detail queries, and protected connection
+kick/offline Session deletion. Detail and write routes have separate switches
+and are disabled by default. The listener uses a private token file.
 
 ## What is new in 0.2.0
 

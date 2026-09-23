@@ -92,8 +92,9 @@ A complete request requiring password verification consumes global/IP attempt to
 
 ## Management bearer tokens
 
-The separate [read-only management API](management.md) uses explicit
-`metrics` and `read` roles. Its digest file is startup-only and is
+The separate [management API](management.md) uses explicit `metrics`,
+`read`, `operator` and `config_admin` roles; none implies another. Its digest
+file is startup-only and is
 unrelated to the MQTT PasswordDatabase or ACL. It must be a private regular
 file owned by the Broker user. Enabled management loads `libcrypto.so.3`
 dynamically for CSPRNG and SHA-256; a missing library or required symbol

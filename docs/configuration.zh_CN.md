@@ -169,7 +169,7 @@ per_ip_enabled = true
 
 未显式配置的 retained 单消息与 Will 单连接上限跟随 max_packet_size。认证 workspace 按已验证 PHC 的 m（KiB）×1024 + p×256KiB + 1MiB 保守预留；这是逻辑预算，不是实测 RSS。快照超过新字节上限时启动失败，不裁剪旧状态。
 
-## 只读管理端口
+## 管理端口
 
 `[management]` 可选，默认关闭。令牌生成与路由语义见
 [管理 API 指南](management.zh_CN.md)。CLI 名称是在同一键名前加
@@ -201,3 +201,39 @@ max_bytes_total = 8388608
 仅接受数字形式的 IPv4 loopback；主机名、非 loopback 地址及 IPv6
 会被拒绝。启用时必须提供私有令牌文件，逻辑预算须容纳固定响应和请求
 槽位。`--check-config` 可在绑定端口前校验文件及容量。
+
+### 明细与操作配置
+
+只读配置可省略下列键。启用明细和受保护操作时，显式设置
+`details_enabled = true`、`operations_enabled = true` 及
+`max_bytes_total = 33554432`。操作依赖明细，明细依赖管理端口。
+`max_index_bytes` 须在启动时容纳 Broker 配置的最大对象数。CLI 参数均以
+`--management-` 为前缀，键名中的下划线换成连字符。
+
+| TOML 键 | 默认 | 范围 |
+| --- | ---: | --- |
+| `details_enabled` | false | 布尔值 |
+| `operations_enabled` | false | 布尔值，依赖明细 |
+| `query_queue_limit` | 16 | 1..64 |
+| `operation_queue_limit` | 16 | 1..64 |
+| `max_operation_records` | 256 | 16..4096 |
+| `max_running_operations` | 8 | 1..min(32, records) |
+| `operation_timeout_ms` | 30000 | 1000..120000 |
+| `operation_retention_ms` | 900000 | 1000..3600000 |
+| `max_cursor_records` | 256 | 16..4096 |
+| `cursor_ttl_ms` | 60000 | 1000..300000 |
+| `default_page_size` | 50 | 1..max_page_size |
+| `max_page_size` | 100 | 1..500 |
+| `query_scan_limit` | 256 | max_page_size..2048 |
+| `query_timeout_ms` | 2000 | 启用明细时为 100..request_timeout_ms |
+| `max_audit_records` | 1024 | 64..16384 |
+| `command_rate` | 5 | 每秒 1..1000 |
+| `command_burst` | 10 | 1..2000 |
+| `max_index_bytes` | 8388608 | 正数；启用明细时不大于 max_bytes_total |
+
+MQTT accept 前，父池会预留固定的索引、查询、游标，以及启用操作后的
+Operation、命令和审计容量。逻辑索引费用为每最大 Session 256 字节、
+每 MQTT 连接 192、每最大订阅 192、每最大 retained 条目 128。默认
+容量（1024、128、16384、1024）需要 3,563,520 字节。
+`max_index_bytes` 不足会使启动失败，不会暗中降低 MQTT 限额。
+运行时完成与分页语义见[管理 API](management.zh_CN.md)。

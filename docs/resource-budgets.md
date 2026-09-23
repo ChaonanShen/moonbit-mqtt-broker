@@ -66,21 +66,48 @@ The conservative export estimate is eight times persistent/retained CostV1 plus 
 
 ## Management accounting
 
-The ledger defines three ordinary categories for the optional management service:
-`management_infrastructure`, `management_request`, and `management_cache`.
-They share a management aggregate cap and do not consume the protected MQTT
-control reserve. With management disabled, none of these pools or tickets is
-created.
+The optional management service uses ordinary ledger categories
+`management_infrastructure`, `management_request` and `management_cache`.
+Detail/operation mode adds `management_index`, `management_query`,
+`management_cursor`, `management_operation` and `management_audit`. All share
+one management aggregate cap and cannot borrow the protected MQTT control
+reserve. With management disabled, these pools and tickets are not created.
+With details or operations disabled, their corresponding tables and byte
+reservations are absent.
 
-An enabled instance reserves one fixed parent ticket before starting request
-tasks. The default logical fee is 5,892,096 bytes under the 8 MiB management
-cap: 106,496 bytes of infrastructure, 4,734,976 bytes for 16 request slots,
-and 1,050,624 bytes for the current and building observation workspaces.
-Each accepted connection leases one already charged request slot; the slot
-remains held through the actual response write and cancellation cleanup.
-Closing the service stops new leases and releases the parent only after all
-outstanding leases are returned. A failed parent reservation leaves no
-partial byte charge. These are logical bounds, not RSS measurements.
+The A-only defaults reserve one parent ticket of 5,892,096 logical bytes
+under an 8 MiB local cap: 106,496 infrastructure, 4,734,976 for 16 HTTP
+request slots and 1,050,624 for the current/building observation workspaces.
+Each accepted HTTP connection leases one already charged request slot through
+its final write or cancellation. The parent is released only after the
+acceptor, cache and outstanding leases have ended.
+
+When both B switches are on with default sizes, the parent fee is
+19,679,232 logical bytes, so a deployment must set a larger
+`max_bytes_total` (the documented example uses 32 MiB). The additional
+reservations are: 8,388,608 for the full conservative index cap, 4,210,688
+for 16 query/result slots, 131,072 for 256 cursor records, 532,480 for
+256 Operation records and 16 command envelopes, and 524,288 for 1024 audit
+events. The actual index capacity formula is 256 bytes per maximum Session,
+192 per MQTT connection, 192 per maximum subscription and 128 per maximum
+retained entry. Startup rejects a configuration whose computed fee exceeds
+`max_index_bytes`, while the ledger conservatively reserves that full cap.
+This is a logical upper bound, not RSS accounting or proof that real allocator
+overhead exactly matches the fee.
+
+Slot/free-list/reverse metadata does not own message payloads. Query work
+scans at most `query_scan_limit` slots per turn and owns each response until
+the HTTP request slot copies or discards it. A cancelled query uses a
+generation check so a late producer cannot fill a reused slot. Accepted
+Operations remain owned after HTTP disconnect. Running kick state stays
+bounded by `max_running_operations` and is not reclaimed until transport
+terminal/unregister and every associated native authentication task is
+reaped. Terminal records, idempotency entries, cursors and audit slots are
+reclaimed by bounded maintenance scans or fixed-ring overwrite. An index
+invariant failure closes detail/write availability without changing MQTT
+business admission. These reservations remain subject to the Broker's global
+ordinary ledger; a failed atomic parent reservation leaves no partial byte
+charge.
 
 ## Resource observations
 
@@ -89,14 +116,3 @@ Additional `$SYS/broker/` topics are `resources/used_bytes`, `resources/reserved
 Reservation rejections identify the violated scope and account label with used/requested/limit values. Rejection counters describe admission attempts, including optional promotion attempts, not just closed clients. Oldest dirty age tracks actual writer completion rather than queue submission. Prometheus and an administration API remain separate work.
 
 IP expiry rotates through at most 32 existing keys without collecting the entire key table or obtaining a new memory reservation. A key has exactly one rotation entry; cleanup remains possible when the control workspace is otherwise occupied. Fixed server infrastructure reserves 16 KiB of bookkeeping space in addition to queue slots. The `max_auth_result_bytes_total` key bounds completed authentication records until the single-writer loop reaps them; cancellation and timeout do not release running native work early.
-
-## Management accounting
-
-Enabling management reserves one ordinary aggregate ticket for its fixed
-infrastructure, 16 default request slots and two bounded cache buffers.
-The default logical charge is 5,892,096 bytes under its 8 MiB local cap;
-it also remains subject to the Broker's global ordinary budget. Per-request
-leases do not double-charge the reserved storage. The HTTP reader owns each
-lease through the last write or cancellation. Management connection and
-request token buckets are independent of MQTT admission buckets. Failure
-before or after binding releases the parent ticket and both listeners.

@@ -104,13 +104,24 @@ The guarantee applies to each MQTT exchange. Downstream QoS 1 can still repeat.
 PUBREC/PUBCOMP do not imply fsync: crash recovery remains latest-committed
 snapshot recovery, without end-to-end exactly-once or zero-loss durability.
 
-## Read-only management path
+## Management path
 
-The optional HTTP listener owns bounded sockets, parser buffers, request
-leases, fixed-scope token checks and independent rate buckets. It never reads
-mutable MQTT maps directly. RouterDriver publishes a typed observation into
-a bounded cache; HTTP handlers only read that cache. Observation events are
-coalesced and scheduled fairly with MQTT control and data events. A live
-driver heartbeat is separate from cache publication, so a delayed or failed
-sample does not masquerade as progress. Startup and shutdown own both
-listeners, the cache budget and native authentication worker drain.
+The optional loopback HTTP listener owns bounded sockets, parser buffers,
+request leases, scoped tokens and independent rate buckets. Health, metrics
+and status read a typed observation cache. Detail HTTP handlers submit typed
+query envelopes to fixed slot/generation mailboxes; RouterDriver alone reads
+the optional Session, subscription, retained and connection metadata indices.
+A page scans a bounded number of physical slots without copying payloads or
+sorting the whole Broker state.
+
+Write handlers validate scope, strong ETag and idempotency key, then ask the
+single writer to atomically accept an Operation and queue its command. Offline
+delete rechecks the Session lifecycle and uses BrokerState.apply so resource
+settlement and promoted actions are dispatched. Kick installs an exact
+ConnectionId closing intent, uses the supervisor terminal path, and waits
+for unregister and associated native auth task reap before success. Running
+effects survive a lost HTTP response. Operation, cursor and audit tables have
+fixed capacities and bounded maintenance; the audit ring is in memory and
+overwrites old events. Management index failure disables detail/write routes
+without changing MQTT business state. Observation and management events
+share a fair EventBus schedule with MQTT control and data.

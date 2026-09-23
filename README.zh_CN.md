@@ -11,9 +11,9 @@
 QoS 0/1/2、通配符订阅、保留消息、Will、Keep Alive、持久会话、可选的重启
 持久化、身份认证、ACL、指标、结构化日志和 TOML 配置。
 
-可选的[只读管理 API](docs/management.zh_CN.md)提供 loopback 健康检查、
-按角色授权的 Prometheus 指标和状态摘要。它默认关闭，使用独立的私有
-令牌文件。
+可选的[管理 API](docs/management.zh_CN.md)提供 loopback 健康检查、按角色
+授权的 Prometheus 指标、有界明细，以及受保护的精确连接关闭和离线持久
+Session 删除。明细与写路由分别开关且默认关闭，令牌存放在独立私有文件。
 
 ## 0.2.0 新增功能
 
