@@ -71,6 +71,63 @@ fn RouterDriver::precheck_delete(
 }
 
 ///|
+fn RouterDriver::precheck_kick(
+  self : RouterDriver,
+  spec : @management.CommandSpec,
+  active : ManagementRuntime,
+) -> ManagementCommandReply? {
+  let etag = match @management.parse_strong_etag(spec.if_match, "c") {
+    Ok(value) => value
+    Err(_) =>
+      return Some(
+        management_command_error(@http_transport.BadRequest, "bad_request"),
+      )
+  }
+  if etag.boot_id != active.context.boot_id {
+    return Some(
+      management_command_error(
+        @http_transport.PreconditionFailed,
+        "precondition_failed",
+      ),
+    )
+  }
+  let id = ConnectionId::new(etag.target)
+  let view = match self.management_connection_view(etag.target) {
+    Some(value) => value
+    None =>
+      return Some(
+        management_command_error(@http_transport.NotFound, "not_found"),
+      )
+  }
+  if spec.if_match !=
+    @management.connection_etag(active.context.boot_id, view.connection_id) {
+    return Some(
+      management_command_error(
+        @http_transport.PreconditionFailed,
+        "precondition_failed",
+      ),
+    )
+  }
+  if self.management_closing.contains(id) {
+    return Some(
+      management_command_error(@http_transport.Conflict, "connection_closing"),
+    )
+  }
+  if self.management_closing.length() + active.pending_kick_reservations >=
+    active.config.max_running_operations() {
+    return Some(
+      management_command_error(
+        @http_transport.TooManyRequests,
+        "capacity_exhausted",
+      ),
+    )
+  }
+  None
+}
+
+///|
+
+///|
 fn RouterDriver::accept_management_command(
   self : RouterDriver,
   ticket : ManagementCommandTicket,
@@ -162,14 +219,10 @@ fn RouterDriver::accept_management_command(
     @management.KeyUnused => ()
   }
   if spec.kind == @management.Kick {
-    mailbox.produce(
-      ticket,
-      management_command_error(
-        @http_transport.ServiceUnavailable,
-        "unavailable",
-      ),
-    )
-    return
+    if self.precheck_kick(spec, active) is Some(error) {
+      mailbox.produce(ticket, error)
+      return
+    }
   }
   if spec.kind == @management.DeleteSession {
     if self.precheck_delete(spec, active) is Some(error) {
@@ -256,6 +309,9 @@ fn RouterDriver::accept_management_command(
       ),
     )
     return
+  }
+  if spec.kind == @management.Kick {
+    active.pending_kick_reservations += 1
   }
   mailbox.produce(
     ticket,
@@ -404,7 +460,8 @@ fn RouterDriver::handle_management_command(
       match spec.kind {
         @management.DeleteSession =>
           self.run_management_delete(operation_id, spec)
-        _ => ()
+        @management.Kick => self.run_management_kick(operation_id, spec)
+        @management.Reload => ()
       }
   }
 }

@@ -9,6 +9,9 @@ pub struct RouterDriver {
   priv mut auth_infrastructure : @budget.Ticket?
   priv auth_cancels : Map[Int64, Bool]
   priv auth_reaps : Map[Int64, Bool]
+  priv auth_task_connection : Map[Int64, ConnectionId]
+  priv auth_outstanding : Map[ConnectionId, Int]
+  priv management_closing : Map[ConnectionId, ManagementKickWatch]
   priv mut last_progress_monotonic_ms : Int64
   priv management : ManagementRuntime?
 }
@@ -70,6 +73,9 @@ pub fn RouterDriver::new(
     auth_infrastructure,
     auth_cancels: Map([]),
     auth_reaps: Map([]),
+    auth_task_connection: Map([]),
+    auth_outstanding: Map([]),
+    management_closing: Map([]),
     last_progress_monotonic_ms: @budget.monotonic_ms(),
     management,
   }
@@ -187,6 +193,12 @@ fn RouterDriver::transport_failed(
   connection_id : ConnectionId,
   reason : CloseReason,
 ) -> Array[RuntimeAction] {
+  if self.management_closing.contains(connection_id) {
+    if self.sinks.get(connection_id) is Some(sink) {
+      sink.try_close(reason)
+    }
+    return []
+  }
   self.runtime.apply(
     TransportClosed({ connection_id, reason, observed_at_ms: 0L }),
   )
@@ -207,6 +219,7 @@ fn RouterDriver::retry_auth_control(self : RouterDriver) -> Unit {
       CancelRetryLater => ()
       CancelUnknown => {
         self.auth_cancels.remove(request_id)
+        self.clear_auth_association(request_id)
         self.dispatch(
           self.runtime.apply(
             AuthenticationCompleted({
@@ -226,8 +239,11 @@ fn RouterDriver::retry_auth_control(self : RouterDriver) -> Unit {
   }
   for request_id in reap_ids {
     match executor.reap(request_id) {
-      ControlRetryLater => ()
-      _ => self.auth_reaps.remove(request_id)
+      ControlRetryLater | ControlStillRunning => ()
+      _ => {
+        self.auth_reaps.remove(request_id)
+        self.clear_auth_association(request_id)
+      }
     }
   }
 }
@@ -243,17 +259,23 @@ fn RouterDriver::poll_authentication(self : RouterDriver) -> Unit {
     match executor.poll() {
       NoCompletion | PollRetryLater | PollInvalid => return
       Completion(completed) => {
+        let outcome = match self.auth_task_connection.get(completed.task_id) {
+          Some(connection_id) if self.management_closing.contains(connection_id) =>
+            @security.AuthCompletionOutcome::AuthInternalFailure
+          _ => completed.outcome
+        }
         self.dispatch(
           self.runtime.apply(
             AuthenticationCompleted({
               request_id: completed.task_id,
-              outcome: completed.outcome,
+              outcome,
               completed_at_ms: @async.now(),
             }),
           ),
         )
         match executor.reap(completed.task_id) {
-          ControlDone | ControlInvalid => ()
+          ControlDone | ControlInvalid =>
+            self.clear_auth_association(completed.task_id)
           ControlRetryLater | ControlStillRunning => {
             self.auth_reaps.set(completed.task_id, true)
             return
@@ -371,6 +393,9 @@ fn RouterDriver::dispatch(
           }
         }
       StartAuthentication(start) => {
+        let connection_id = self.runtime.auth_tasks
+          .get(start.request_id)
+          .map(task => task.connection_id)
         let failed = match
           (
             self.auth_executor,
@@ -385,6 +410,8 @@ fn RouterDriver::dispatch(
           worklist.append(
             self.runtime.apply(AuthenticationSubmitFailed(start.request_id)),
           )
+        } else if connection_id is Some(id) {
+          self.track_auth_association(start.request_id, id)
         }
       }
       CancelAuthentication(cancel) =>
@@ -402,7 +429,8 @@ fn RouterDriver::dispatch(
           Some(executor) =>
             match executor.cancel(cancel.request_id) {
               CancelRetryLater => self.auth_cancels.set(cancel.request_id, true)
-              CancelUnknown =>
+              CancelUnknown => {
+                self.clear_auth_association(cancel.request_id)
                 worklist.append(
                   self.runtime.apply(
                     AuthenticationCompleted({
@@ -412,6 +440,7 @@ fn RouterDriver::dispatch(
                     }),
                   ),
                 )
+              }
               _ => ()
             }
         }
@@ -474,6 +503,9 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
     ManagementCommand(command) => self.handle_management_command(command)
     UnregisterTransport(connection_id) => {
       self.sinks.remove(connection_id)
+      if self.management_closing.get(connection_id) is Some(watch) {
+        watch.unregistered = true
+      }
       if self.management_connections is Some(index) &&
         !index.remove(connection_id.value().to_string()) {
         self.management_connections_available = false
@@ -481,6 +513,7 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
     }
   }
   self.poll_authentication()
+  self.poll_management_kicks()
   ignore(self.poll_snapshot(@async.now()))
 }
 
@@ -501,6 +534,10 @@ fn RouterDriver::handle_runtime_event(
   event : RuntimeEvent,
 ) -> Unit {
   if event is PacketReceived(packet) {
+    if packet.packet is Connect(_) &&
+      self.management_closing.contains(packet.connection_id) {
+      return
+    }
     if packet.packet is Connect(_) &&
       self.runtime.connections.get(packet.connection_id)
       is Some({ phase: AwaitConnect, .. }) {
@@ -531,6 +568,10 @@ fn RouterDriver::handle_runtime_event(
     }
   }
   self.dispatch(self.runtime.apply(event))
+  if event is TransportClosed(closed) &&
+    self.management_closing.get(closed.connection_id) is Some(watch) {
+    watch.terminal_seen = true
+  }
   if event is CheckDeadlines(_) {
     self.runtime.admission.cleanup_ips((self.runtime.admission.clock)())
     self.runtime.admission.prune_publishers(self.runtime.broker_state())
