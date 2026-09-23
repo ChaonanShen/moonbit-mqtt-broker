@@ -275,3 +275,21 @@ Current committed source is still rebuilt, packaged and retested after extractio
 The Docker host requires Python 3 (standard library only) for reference guard tests and resolution. Python is not a broker runtime dependency and is not required in development/runtime containers. The strict entry point checks it before lengthy validation. The resource container gate uses the existing MoonBit, Node, Argon2 CLI and OpenSSL tools.
 
 Clean source and extracted packages prepare pinned dependencies through the normal registry before the full gates. Explicit download/network failures get at most four attempts (configurable from one to five), logged under `dependency-fetch-source/` or `dependency-fetch-package/`. Type/compiler failures stop immediately. No host dependency cache is injected; all full checks run after preparation. Exhausted retries fail the run. Script guards cover transient recovery, compiler fail-fast and bounded persistent failure.
+
+## Management candidate checks
+
+The cumulative release gate includes token/crypto startup negatives and the
+real-process HTTP/MQTT gate (including 10,000 management requests and
+QoS 0/1/2). The strict distribution builder creates a private digest file
+owned by UID 65532 and a separate client token file. Each runtime profile
+runs MQTT smoke both with management disabled and enabled; disabled mode
+must have no management port. The full profile also starts the pinned
+Prometheus image in the exact Broker container's network namespace and
+requires authorized `up=1`, wrong-token `up=0`, and
+`moonbit_mqtt_broker_build_info=1`. `libcrypto.so` is explicitly checked
+in the runtime inventory because `ldd` alone does not list `dlopen` use.
+
+These checks use the same committed candidate and executable as the existing
+matrix. Preserve `runtime-*-management.log` alongside the original runtime
+logs. The outer exit code, source SHA, four PASS records and artifact hashes
+remain mandatory.
