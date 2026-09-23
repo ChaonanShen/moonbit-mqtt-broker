@@ -104,3 +104,25 @@ test "durable ACK detects owner change before installing committed candidate" {
   prepared.cancel()
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "ACL-dropped QoS 2 publish persists only the inbound dedup stage" {
+  let (state, client, _) = durable_ack_fixture()
+  let inbound_id = @session.SessionPacketId::new(9).unwrap()
+  let prepared = state
+    .prepare_durable_ack(client, inbound_id, InboundPublishDropped, 5L)
+    .unwrap()
+  assert_eq(state.inbound_qos2_count(), 0)
+  assert_eq(prepared.delta().session_puts[0].session.inbound_qos2, [9])
+  state.begin_action_scope()
+  let actions = prepared.commit().unwrap()
+  state.end_action_scope()
+  assert_true(actions[0] is SendPubrec(_))
+  assert_eq(state.inbound_qos2_count(), 1)
+  let duplicate = state
+    .prepare_durable_ack(client, inbound_id, InboundPublishDropped, 5L)
+    .unwrap()
+  assert_eq(duplicate.delta(), DurableDelta::empty())
+  duplicate.cancel()
+  assert_eq(state.check_invariants(), Ok(()))
+}

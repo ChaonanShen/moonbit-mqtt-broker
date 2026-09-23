@@ -4,6 +4,7 @@ pub(all) enum DurableAckKind {
   OutboundPubrec
   OutboundPubcomp
   InboundPubrel
+  InboundPublishDropped
 } derive(Eq, Debug)
 
 ///|
@@ -114,6 +115,27 @@ pub fn BrokerState::prepare_durable_ack(
       let deleted = candidate.complete_inbound_qos2(packet_id)
       actions.push(SendPubcomp({ client_id, packet_id }))
       deleted
+    }
+    InboundPublishDropped => {
+      if !original.is_attached() {
+        scratch.release().unwrap()
+        return Err(InvalidSessionState(client_id))
+      }
+      if !original.has_inbound_qos2(packet_id) &&
+        self.inbound_qos2_total >= self.config.max_inbound_qos2_total() {
+        scratch.release().unwrap()
+        return Err(InboundQoS2ResourceLimit(InboundQoS2Total))
+      }
+      let begun = match
+        candidate.begin_inbound_qos2(packet_id, self.session_limits()) {
+        Ok(value) => value
+        Err(error) => {
+          scratch.release().unwrap()
+          return Err(SessionFailure(error))
+        }
+      }
+      actions.push(SendPubrec({ client_id, packet_id }))
+      begun
     }
   }
   let owner = self.resources.owners.get(client_id).unwrap()

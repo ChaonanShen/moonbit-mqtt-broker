@@ -408,6 +408,7 @@ fn BrokerState::preflight_deliveries(
   self : BrokerState,
   candidates : Array[DeliveryCandidate],
   strict : Bool,
+  retained_delta? : Int64 = 0L,
 ) -> Result[Array[PlannedDelivery], RouterError] {
   let planned : Array[PlannedDelivery] = []
   let planned_inflight : Map[@session.ClientId, Int] = Map([])
@@ -456,7 +457,19 @@ fn BrokerState::preflight_deliveries(
           usage.inbound -
           inflight_extra -
           pending_extra
-        let global_free_bytes = self.resources.ledger.ordinary_available() -
+        let available = self.resources.ledger.ordinary_available()
+        let adjusted_free = if retained_delta >= 0L {
+          match @budget.checked_sub(available, retained_delta) {
+            Ok(value) => value
+            Err(_) => 0L
+          }
+        } else {
+          match @budget.checked_add(available, -retained_delta) {
+            Ok(value) => value
+            Err(_) => 0L
+          }
+        }
+        let global_free_bytes = adjusted_free -
           inflight_bytes_added -
           pending_bytes_added
         let inflight_fits = cost <=
@@ -528,6 +541,7 @@ fn BrokerState::preflight_deliveries(
 fn BrokerState::prepare_deliveries(
   self : BrokerState,
   planned : Array[PlannedDelivery],
+  deferred? : Bool = false,
 ) -> Result[PreparedDeliveries, RouterError] {
   let usage_updates : Map[@session.ClientId, ResourceUsage] = Map([])
   let copied : Map[@session.ClientId, Bool] = Map([])
@@ -578,12 +592,14 @@ fn BrokerState::prepare_deliveries(
     Ok(t) => t
     Err(e) => return Err(e)
   }
-  match self.resources.set_usages(usage_updates) {
-    Err(e) => {
-      scratch.release().unwrap()
-      return Err(e)
+  if !deferred {
+    match self.resources.set_usages(usage_updates) {
+      Err(error) => {
+        scratch.release().unwrap()
+        return Err(error)
+      }
+      Ok(_) => ()
     }
-    Ok(_) => ()
   }
   let mut prepared_ok = false
   defer (if !prepared_ok { scratch.release().unwrap() })
@@ -659,7 +675,7 @@ fn BrokerState::prepare_deliveries(
     }
   }
   prepared_ok = true
-  Ok({ actions, updates, inflight_added, pending_added, scratch })
+  Ok({ actions, updates, inflight_added, pending_added, scratch, usage_updates })
 }
 
 ///|
@@ -1256,6 +1272,7 @@ priv struct PreparedDeliveries {
   updates : Map[@session.ClientId, @session.ClientSession]
   inflight_added : Int
   pending_added : Int
+  usage_updates : Map[@session.ClientId, ResourceUsage]
 }
 
 ///|
