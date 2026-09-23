@@ -81,3 +81,73 @@ test "durable activation preserves persistent generation on restore and deletes 
   assert_eq(state.export_snapshot().sessions.length(), 0)
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "durable reconnect promotes pending in the same committed session result" {
+  let state = BrokerState::new(
+    BrokerConfig::new(
+      4,
+      16,
+      4,
+      max_inflight_per_session=1,
+      max_inflight_total=2,
+    ).unwrap(),
+  )
+  let client = @session.ClientId::new("offline").unwrap()
+  ignore(
+    state.apply(
+      CreateSessionWith({
+        client_id: client,
+        mode: @session.Persistent,
+        attached: false,
+      }),
+    ),
+  )
+  ignore(
+    state.apply(
+      Subscribe({
+        client_id: client,
+        entries: [
+          {
+            filter: @topic.TopicFilter::new("queued").unwrap(),
+            qos: @session.QoS1,
+          },
+        ],
+      }),
+    ),
+  )
+  ignore(
+    state.apply(
+      Publish({
+        origin: Internal,
+        topic: @topic.TopicName::new("queued").unwrap(),
+        payload: b"waiting",
+        qos: @session.QoS1,
+        retain: false,
+      }),
+    ),
+  )
+  assert_eq(state.pending_qos1_count(), 1)
+  let prepared = state
+    .prepare_durable_activation(
+      client,
+      @session.Persistent,
+      @security.Principal::Anonymous,
+      5L,
+      5L,
+    )
+    .unwrap()
+  assert_eq(prepared.delta().session_puts[0].session.pending.length(), 0)
+  assert_eq(prepared.delta().session_puts[0].session.inflight.length(), 1)
+  assert_eq(state.pending_qos1_count(), 1)
+  state.begin_action_scope()
+  let replay = prepared.commit().unwrap()
+  state.end_action_scope()
+  match replay[0] {
+    Deliver(value) => assert_false(value.dup)
+    _ => fail("pending delivery must be promoted")
+  }
+  assert_eq(state.pending_qos1_count(), 0)
+  assert_eq(state.inflight_count(), 1)
+  assert_eq(state.check_invariants(), Ok(()))
+}

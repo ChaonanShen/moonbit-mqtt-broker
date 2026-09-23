@@ -12,6 +12,7 @@ pub(all) enum ResourceKind {
   Outbound
   Routing
   Snapshot
+  WalPending
   AuthRequest
   AuthWorkspace
   AuthResult
@@ -506,6 +507,7 @@ pub fn ResourceKind::name(self : ResourceKind) -> String {
     Outbound => "outbound"
     Routing => "routing"
     Snapshot => "snapshot"
+    WalPending => "wal_pending"
     AuthRequest => "auth_request"
     AuthWorkspace => "auth_workspace"
     AuthResult => "auth_result"
