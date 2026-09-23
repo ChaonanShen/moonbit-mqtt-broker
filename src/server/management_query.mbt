@@ -178,39 +178,80 @@ fn management_row_key_too_large(
   key : String,
   state : @router.BrokerState,
   driver : RouterDriver,
+  boot_id : String,
   max_bytes : Int,
 ) -> Bool {
-  let mut bytes = 0
-  match kind {
+  let size = match kind {
     @management.Connections => {
-      let id = @string.parse_int64(key) catch { _ => 0L }
-      if id > 0L && driver.management_connection_view(id) is Some(view) {
-        if view.client_id is Some(value) {
-          bytes += management_json_string_bytes(value)
-        }
-        if view.principal is Some(value) {
-          bytes += management_json_string_bytes(value)
-        }
+      let id = @string.parse_int64(key) catch { _ => return false }
+      let view = match driver.management_connection_view(id) {
+        Some(value) => value
+        None => return false
       }
+      let blank : ManagementConnectionView = {
+        ..view,
+        client_id: view.client_id.map(_ => ""),
+        principal: view.principal.map(_ => ""),
+      }
+      let mut bytes = @utf8.encode(
+        management_connection_json(blank, boot_id).stringify(),
+      ).length()
+      if view.client_id is Some(value) {
+        bytes += management_json_string_bytes(value) - 2
+      }
+      if view.principal is Some(value) {
+        bytes += management_json_string_bytes(value) - 2
+      }
+      bytes
     }
     @management.Sessions => {
-      let handle = @string.parse_int64(key) catch { _ => 0L }
-      if handle > 0L && state.admin_session_view(handle) is Some(view) {
-        bytes += management_json_string_bytes(view.client_id)
-        bytes += management_json_string_bytes(view.owner)
+      let handle = @string.parse_int64(key) catch { _ => return false }
+      let view = match state.admin_session_view(handle) {
+        Some(value) => value
+        None => return false
       }
+      let blank : @router.AdminSessionView = {
+        ..view,
+        client_id: "",
+        owner: "",
+      }
+      @utf8.encode(management_session_json(blank, boot_id).stringify()).length() -
+      4 +
+      management_json_string_bytes(view.client_id) +
+      management_json_string_bytes(view.owner)
     }
-    @management.Subscriptions =>
-      if state.admin_subscription_view(key) is Some(view) {
-        bytes += management_json_string_bytes(view.filter)
+    @management.Subscriptions => {
+      let view = match state.admin_subscription_view(key) {
+        Some(value) => value
+        None => return false
       }
-    @management.Retained => bytes += management_json_string_bytes(key)
-    _ => ()
+      let blank : Map[String, Json] = Map([
+        ("filter", "".to_json()),
+        ("qos", "".to_json()),
+      ])
+      @utf8.encode(blank.to_json().stringify()).length() -
+      4 +
+      management_json_string_bytes(view.filter) +
+      management_json_string_bytes(view.qos)
+    }
+    @management.Retained => {
+      let view = match state.admin_retained_view(key) {
+        Some(value) => value
+        None => return false
+      }
+      let blank : Map[String, Json] = Map([
+        ("topic", "".to_json()),
+        ("qos", view.qos.to_json()),
+        ("payload_bytes", view.payload_bytes.to_string().to_json()),
+      ])
+      @utf8.encode(blank.to_json().stringify()).length() -
+      2 +
+      management_json_string_bytes(view.topic)
+    }
+    _ => 0
   }
-  bytes > max_bytes
+  size > max_bytes
 }
-
-///|
 
 ///|
 fn management_query_kind_name(kind : @management.QueryKind) -> String {
@@ -465,6 +506,19 @@ fn RouterDriver::management_query_result(
       None =>
         return management_query_error(@http_transport.NotFound, "not_found")
     }
+    if management_row_key_too_large(
+        @management.Connections,
+        spec.target,
+        state,
+        self,
+        boot_id,
+        max_bytes,
+      ) {
+      return management_query_error(
+        @http_transport.Unprocessable,
+        "result_too_large",
+      )
+    }
     let bytes = @utf8.encode(
       management_connection_json(view, boot_id).stringify(),
     )
@@ -485,6 +539,19 @@ fn RouterDriver::management_query_result(
       Some(value) => value
       None =>
         return management_query_error(@http_transport.NotFound, "not_found")
+    }
+    if management_row_key_too_large(
+        @management.Sessions,
+        spec.target,
+        state,
+        self,
+        boot_id,
+        max_bytes,
+      ) {
+      return management_query_error(
+        @http_transport.Unprocessable,
+        "result_too_large",
+      )
     }
     let bytes = @utf8.encode(management_session_json(view, boot_id).stringify())
     if bytes.length() > max_bytes {
@@ -635,7 +702,14 @@ fn RouterDriver::management_query_result(
   let mut has_more = page.has_more
   for offset in 0..<page.keys.length() {
     let key = page.keys[offset]
-    if management_row_key_too_large(spec.kind, key, state, self, max_bytes) {
+    if management_row_key_too_large(
+        spec.kind,
+        key,
+        state,
+        self,
+        boot_id,
+        max_bytes,
+      ) {
       return management_query_error(
         @http_transport.Unprocessable,
         "result_too_large",

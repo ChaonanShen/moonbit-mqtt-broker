@@ -162,6 +162,9 @@ fn ObservationCache::readable(
 pub fn ObservationCache::status_body(
   self : ObservationCache,
   now_monotonic_ms : Int64,
+  details_enabled? : Bool = false,
+  operations_enabled? : Bool = false,
+  details_available? : Bool = false,
 ) -> Result[Bytes, CacheError] {
   let entry = match self.readable(now_monotonic_ms) {
     Ok(value) => value
@@ -173,6 +176,9 @@ pub fn ObservationCache::status_body(
     self.config.snapshot_max_age_ms().to_int64(),
     self.config.snapshot_max_age_ms().to_int64(),
     driver_progress_override=self.latest_driver_progress_ms,
+    details_enabled~,
+    operations_enabled~,
+    details_available~,
   )
   if body.length() > self.config.max_response_bytes() {
     return Err(ResponseTooLarge)

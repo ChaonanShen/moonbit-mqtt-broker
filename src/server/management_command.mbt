@@ -406,7 +406,17 @@ fn RouterDriver::run_management_delete(
   } else {
     None
   }
-  let committed = active.persistence.map(value => value.committed_revision())
+  let committed = match active.persistence {
+    Some(value) => {
+      let revision = value.committed_revision()
+      if revision >= 0L {
+        Some(revision)
+      } else {
+        None
+      }
+    }
+    None => None
+  }
   let now_wall = @async.now()
   ignore(
     table.finish(

@@ -20,6 +20,7 @@ pub struct ManagementHttp {
   query_mailbox : ManagementQueryMailbox?
   command_mailbox : ManagementCommandMailbox?
   command_bucket : @budget.Bucket
+  availability : ManagementAvailability?
   mut next_request_id : Int64
 }
 
@@ -34,6 +35,7 @@ pub fn ManagementHttp::new(
   now_monotonic_ms : Int64,
   query_mailbox? : ManagementQueryMailbox,
   command_mailbox? : ManagementCommandMailbox,
+  availability? : ManagementAvailability,
 ) -> Result[ManagementHttp, @budget.BudgetError] {
   if !config.enabled() {
     return Err(@budget.InvalidConfiguration)
@@ -77,6 +79,7 @@ pub fn ManagementHttp::new(
     query_mailbox,
     command_mailbox,
     command_bucket,
+    availability,
     next_request_id: 1L,
   })
 }
@@ -343,7 +346,13 @@ pub fn ManagementHttp::respond(
   let body = if route == RouteMetrics {
     self.cache.render_metrics(now_monotonic_ms, self.rejections)
   } else {
-    self.cache.status_body(now_monotonic_ms)
+    self.cache.status_body(
+      now_monotonic_ms,
+      details_enabled=self.config.details_enabled(),
+      operations_enabled=self.config.operations_enabled(),
+      details_available=self.availability is Some(value) &&
+        value.details_available,
+    )
   }
   match body {
     Ok(value) =>
