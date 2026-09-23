@@ -348,24 +348,36 @@ DISTRIBUTION_RUNTIME_REFERENCE=/absolute/repo/test-results/distribution/<success
 
 ## 管理功能的候选验证
 
-累计发布门禁包含令牌/加密库启动负例，以及真实进程 HTTP/MQTT 验证
-（包括一万次管理请求和 QoS 0/1/2）。严格分发构建会生成 UID 65532
-持有的私有摘要文件及独立的客户端令牌文件。每个运行环境在管理功能
-关闭和启用两种状态下运行 MQTT 测试；关闭时管理端口必须不存在。
-`full` 环境还在当前 Broker 容器的网络命名空间中启动固定 digest 的
-Prometheus 镜像，要求授权 `up=1`、错误令牌 `up=0` 及
-`moonbit_mqtt_broker_build_info=1`。运行库清单显式检查
-`libcrypto.so`，因为 `ldd` 不列出全部 `dlopen` 依赖。
+累计发布门禁保留原有管理加密库与只读门禁，并各运行一次
+`management_admin.sh`、`management_auth_kick.sh` 和
+`management_snapshot_admin.sh`。admin 门禁覆盖按角色隔离的明细、
+强 ETag、202/幂等、精确 kick、离线 QoS 2 删除、审计覆盖与缺口、
+一万次受保护 Operation 读取及慢读取停机。认证门禁在真实 Argon2
+任务处于 `authenticating` 时 kick 精确 ConnectionId，要求 Operation
+等到原生任务真正 reap，且迟到结果不能激活连接。快照门禁区分正常退出
+最终保存后的删除和运行时删除成功、下次快照前 SIGKILL 的恢复边界。
+这些是严格链中的进程门禁，不单独重复一套完整发布验收。
 
-这些检查与原有运行矩阵使用同一已提交候选及可执行文件。
-`runtime-*-management.log` 应与原运行日志一起留存。最外层退出码、
-源码 SHA、四项 PASS 及产物哈希仍是必需验收条件。
+严格分发构建会生成 UID 65532 持有的私有摘要文件及独立客户端令牌。
+四个隔离运行环境各测试管理关闭、仅 A 只读，以及 B 明细加操作三种状态；
+关闭时管理端口必须不存在。B 状态对已打包二进制执行真实 read、kick 和
+离线 delete。`full` 环境仍在 A-only Broker 网络命名空间内运行固定
+Prometheus 镜像，要求授权 `up=1`、错误令牌 `up=0` 和
+`moonbit_mqtt_broker_build_info=1`。清单显式检查 `libcrypto.so`，
+因为 `ldd` 不列出全部 `dlopen` 依赖。保留
+`runtime-*-management.log`、`runtime-*-admin.log` 及 MQTT 运行日志。
+同一 HEAD、同一批产物哈希、四项 profile PASS 和最外层退出码 0 才能
+验收；新增 B 不得替代原有 A-only/关闭覆盖。
 
-独立的 `scripts/verify-management-performance.sh` 在 20 个 MQTT 连接、
-QoS 0/1/2 负载下，做三轮各 10 秒预热、60 秒测量的开关对照，
-再运行 60 秒过载测试。每个 Broker 容器限制为 2 CPU、256 MiB 和
-64 个进程。开启管理端的每轮发布吞吐至少为基线的 90%；PING 与 QoS 1
-PUBACK 的 P99 不高于「基线两倍」和「基线加 20 ms」中的较大值。
-过载期间每个 5 秒窗口须至少成功一次 PING。原始样本和阈值摘要保留在
-`.local/p1-03a-execution/`。该性能门禁与分发 soak 分开运行，
-避免两组负载互相污染。
+独立的 `scripts/verify-management-admin-performance.sh` 使用同一
+Native 二进制和 32 MiB 父池上限，对比 B 关闭（A-only）与 B 开启。
+三轮各预热 10 秒、测量 60 秒，并保持 QoS 0/1/2 负载。B 开启时叠加
+每秒一次抓取、每秒五次明细分页及每秒一次离线 Session 操作。每轮
+吞吐量至少为 B 关闭组的 90%；PING 与 QoS 1 PUBACK P99 不高于
+「基线两倍」和「基线加 20 ms」中的较大值。另跑 60 秒 B 过载，持续
+压满查询/游标/命令/Operation，保持 16 个慢 HTTP 读取者；每个 5 秒
+窗口必须有成功的 MQTT PING。容器限制为 2 CPU、256 MiB 和 64 个进程。
+原始样本、fd 与阈值摘要保存在
+`.local/p1-03b-execution/performance-*`。性能门禁与分发 soak 分开，
+避免两组负载互相污染。原有 A-only 性能证据仍在
+`.local/p1-03a-execution/`。

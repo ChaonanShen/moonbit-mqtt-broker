@@ -87,8 +87,9 @@ Disk V1 会话迁移为 `legacy-anonymous`，且只能由匿名连接恢复；�
 
 ## 管理 Bearer 令牌
 
-独立的[只读管理 API](management.zh_CN.md)使用显式 `metrics` 和
-`read` 角色。其摘要文件只在启动时读取，与 MQTT PasswordDatabase
+独立的[管理 API](management.zh_CN.md)使用互不隐含的 `metrics`、`read`、
+`operator` 和 `config_admin` 角色。其摘要文件只在启动时读取，与 MQTT
+PasswordDatabase
 及 ACL 无关。文件必须是 Broker 用户持有的私有普通文件。启用管理功能
 时动态加载 `libcrypto.so.3` 来提供 CSPRNG 和 SHA-256；库或必需
 符号缺失会在监听前使启动失败。禁用时不加载这一功能依赖。管理端口是
