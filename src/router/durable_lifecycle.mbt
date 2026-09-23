@@ -1,6 +1,7 @@
 ///|
 pub(all) enum DurableLifecycleKind {
   DetachAt(Int64)
+  SetDetachedAt(Int64)
   Delete
 } derive(Eq, Debug)
 
@@ -69,6 +70,30 @@ pub fn BrokerState::prepare_durable_lifecycle(
         }
       } else {
         DurableDelta::empty()
+      }
+      (Some(candidate), SessionDetached(client_id), delta)
+    }
+    SetDetachedAt(detached_at_ms) => {
+      if old.mode() != @session.Persistent ||
+        old.is_attached() ||
+        old.detached_at_ms() != Some(0L) ||
+        detached_at_ms < 0L {
+        scratch.release().unwrap()
+        return Err(InvalidSessionState(client_id))
+      }
+      let candidate = old.copy()
+      candidate.detach(detached_at_ms~)
+      let delta = DurableDelta::{
+        session_puts: [
+          {
+            expected_generation: generation,
+            generation,
+            session: self.snapshot_session_candidate(client_id, candidate),
+          },
+        ],
+        session_deletes: [],
+        retained_puts: [],
+        retained_deletes: [],
       }
       (Some(candidate), SessionDetached(client_id), delta)
     }

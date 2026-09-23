@@ -43,7 +43,7 @@ async test "strict coordinator releases activation only after WAL completion" {
     let mut completed = false
     for _ in 0..<1000 {
       match coordinator.poll() {
-        CommitReleased(_) => {
+        CommitReleased(_, _) => {
           completed = true
           break
         }

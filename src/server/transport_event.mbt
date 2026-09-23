@@ -11,6 +11,7 @@ pub(all) enum DriverEvent {
   RegisterTransport(RegisterTransportEvent)
   Runtime(RuntimeEvent)
   ObservationDue
+  WalCompletionDue
   ManagementQuery(ManagementQueryEvent)
   ManagementCommand(ManagementCommandEvent)
   ManagementMaintenance

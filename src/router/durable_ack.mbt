@@ -5,6 +5,7 @@ pub(all) enum DurableAckKind {
   OutboundPubcomp
   InboundPubrel
   InboundPublishDropped
+  PendingPromotion
 } derive(Eq, Debug)
 
 ///|
@@ -115,6 +116,32 @@ pub fn BrokerState::prepare_durable_ack(
       let deleted = candidate.complete_inbound_qos2(packet_id)
       actions.push(SendPubcomp({ client_id, packet_id }))
       deleted
+    }
+    PendingPromotion => {
+      let free_slots = self.config.max_inflight_total() - self.inflight_total
+      if free_slots <= 0 ||
+        !candidate.is_attached() ||
+        candidate.pending_count() == 0 {
+        actions.clear()
+        false
+      } else {
+        let max_inflight = if candidate.inflight_count() + free_slots <
+          self.config.max_inflight_per_session() {
+          candidate.inflight_count() + free_slots
+        } else {
+          self.config.max_inflight_per_session()
+        }
+        let promoted = match
+          candidate.promote_for_commit(self.session_limits(max_inflight~)) {
+          Ok(value) => value
+          Err(error) => {
+            scratch.release().unwrap()
+            return Err(SessionFailure(error))
+          }
+        }
+        actions.append(durable_promoted_actions(client_id, promoted))
+        !promoted.is_empty()
+      }
     }
     InboundPublishDropped => {
       if !original.is_attached() {

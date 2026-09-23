@@ -2,6 +2,7 @@
 pub(all) enum PreparedBrokerMutation {
   Noop
   Publish(@router.DurablePublishPlan)
+  PublishWithWill(@router.DurablePublishPlan, @budget.Ticket?)
   Ack(@router.DurableAckPlan)
   Activation(@router.DurableActivationPlan)
   ActivationWithWill(@router.DurableActivationPlan, @budget.Ticket?)
@@ -17,6 +18,7 @@ fn PreparedBrokerMutation::delta(
   match self {
     Noop => @router.DurableDelta::empty()
     Publish(value) => value.delta()
+    PublishWithWill(value, _) => value.delta()
     Ack(value) => value.delta()
     Activation(value) => value.delta()
     ActivationWithWill(value, _) => value.delta()
@@ -33,6 +35,7 @@ fn PreparedBrokerMutation::commit(
   match self {
     Noop => Ok([])
     Publish(value) => value.commit()
+    PublishWithWill(value, _) => value.commit()
     Ack(value) => value.commit()
     Activation(value) => value.commit()
     ActivationWithWill(value, _) => value.commit()
@@ -47,6 +50,10 @@ fn PreparedBrokerMutation::cancel(self : PreparedBrokerMutation) -> Unit {
   match self {
     Noop => ()
     Publish(value) => value.cancel()
+    PublishWithWill(value, ticket) => {
+      value.cancel()
+      release_optional(ticket)
+    }
     Ack(value) => value.cancel()
     Activation(value) => value.cancel()
     ActivationWithWill(value, ticket) => {
@@ -72,7 +79,7 @@ pub(all) enum CommitSubmitError {
 ///|
 pub enum CommitPollResult {
   NoCommitCompletion
-  CommitReleased(Array[RuntimeAction])
+  CommitReleased(Array[RuntimeAction], @router.DurableDelta)
   CommitFencedResult(String)
 }
 
@@ -80,6 +87,7 @@ pub enum CommitPollResult {
 pub struct PendingCommit {
   lsn : Int64
   plan : PreparedBrokerMutation
+  delta : @router.DurableDelta
   after_commit : (Array[@router.BrokerAction]) -> Array[RuntimeAction]
   ticket : @budget.Ticket
 }
@@ -170,11 +178,9 @@ pub fn CommitCoordinator::submit(
     self.fenced = true
     return Err(CommitLsnExhausted)
   }
+  let delta = plan.delta()
   let encoded = match
-    @persistence.encode_durable_delta(
-      plan.delta(),
-      max_bytes=self.max_delta_bytes,
-    ) {
+    @persistence.encode_durable_delta(delta, max_bytes=self.max_delta_bytes) {
     Ok(value) => value
     Err(_) => {
       plan.cancel()
@@ -199,7 +205,7 @@ pub fn CommitCoordinator::submit(
     self.fenced = true
     return Err(CommitWriterUnavailable)
   }
-  self.pending = Some({ lsn, plan, after_commit, ticket })
+  self.pending = Some({ lsn, plan, delta, after_commit, ticket })
   Ok(lsn)
 }
 
@@ -239,7 +245,7 @@ pub fn CommitCoordinator::poll(self : CommitCoordinator) -> CommitPollResult {
       let released = (pending.after_commit)(actions)
       self.last_released_lsn = pending.lsn
       pending.ticket.release().unwrap()
-      CommitReleased(released)
+      CommitReleased(released, pending.delta)
     }
     @persistence.Failed(epoch, reason) if epoch == self.writer_epoch => {
       pending.plan.cancel()
