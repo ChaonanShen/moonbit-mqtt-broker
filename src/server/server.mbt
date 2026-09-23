@@ -167,6 +167,9 @@ pub async fn serve(
       raise ResourceStartupFailure("resource budget cannot initialize server")
   }
   defer bus.close()
+  if management is Some(active) && active.query_mailbox is Some(mailbox) {
+    bus.attach_management_queries(mailbox)
+  }
   let auth_runtime = create_auth_executor(
     config,
     security,
@@ -496,6 +499,9 @@ pub async fn run(
     }
   }
   defer (if management_runtime is Some(active) { active.close() })
+  if management_runtime is Some(active) {
+    active.set_mqtt_listener_address(listener.addr.to_string())
+  }
   if management_runtime is Some(active) && active.config.details_enabled() {
     ignore(initial_state.enable_management_index())
   }

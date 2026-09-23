@@ -17,6 +17,7 @@ pub struct ManagementHttp {
   connection_bucket : @budget.Bucket
   request_bucket : @budget.Bucket
   boot_id : String
+  query_mailbox : ManagementQueryMailbox?
   mut next_request_id : Int64
 }
 
@@ -29,6 +30,7 @@ pub fn ManagementHttp::new(
   rejections : @management.ManagementRejections,
   boot_id : String,
   now_monotonic_ms : Int64,
+  query_mailbox? : ManagementQueryMailbox,
 ) -> Result[ManagementHttp, @budget.BudgetError] {
   if !config.enabled() {
     return Err(@budget.InvalidConfiguration)
@@ -60,6 +62,7 @@ pub fn ManagementHttp::new(
     connection_bucket,
     request_bucket,
     boot_id,
+    query_mailbox,
     next_request_id: 1L,
   })
 }
@@ -345,4 +348,164 @@ pub fn ManagementHttp::respond(
         @management.RejectedStale,
       )
   }
+}
+
+///|
+/// B details use a typed bounded mailbox. The HTTP coroutine never touches
+/// BrokerState or borrows a mutable Session across an await.
+pub async fn ManagementHttp::respond_details(
+  self : ManagementHttp,
+  head : @http_transport.HttpRequestHead,
+  same_read_suffix_bytes : Int,
+  now_monotonic_ms : Int64,
+) -> Bytes {
+  let request_id = match self.request_id() {
+    Some(value) => value
+    None =>
+      return self.encode(
+        @http_transport.ServiceUnavailable,
+        b"{\"error\":{\"code\":\"id_exhausted\"}}",
+        @http_transport.JsonBody,
+      )
+  }
+  if head.target.contains("%") ||
+    head.target.contains("#") ||
+    same_read_suffix_bytes != 0 ||
+    (head.content_length is Some(length) && length != 0) {
+    return self.reject(
+      @http_transport.BadRequest,
+      "bad_request",
+      request_id,
+      @management.RejectedParse,
+    )
+  }
+  for forbidden in ["transfer-encoding", "upgrade", "expect"] {
+    if management_header(head, forbidden) is Some(_) {
+      return self.reject(
+        @http_transport.BadRequest,
+        "bad_request",
+        request_id,
+        @management.RejectedParse,
+      )
+    }
+  }
+  if head.method_name != "GET" {
+    return self.reject(
+      @http_transport.MethodNotAllowed,
+      "method_not_allowed",
+      request_id,
+      @management.RejectedParse,
+      allow=@http_transport.AllowGet,
+    )
+  }
+  if now_monotonic_ms < 0L {
+    return self.reject(
+      @http_transport.ServiceUnavailable,
+      "unavailable",
+      request_id,
+      @management.RejectedStale,
+    )
+  }
+  if @budget.admit([(self.request_bucket, 1L)], now_monotonic_ms) is Err(_) {
+    return self.reject(
+      @http_transport.TooManyRequests,
+      "rate_limited",
+      request_id,
+      @management.RejectedRate,
+    )
+  }
+  let token = match management_header(head, "authorization") {
+    Some(value) => management_bearer(value)
+    None => None
+  }
+  let actor = match token {
+    Some(value) => self.tokens.authenticate(value)
+    None => None
+  }
+  let actor = match actor {
+    Some(value) => value
+    None =>
+      return self.reject(
+        @http_transport.Unauthorized,
+        "unauthenticated",
+        request_id,
+        @management.RejectedAuth,
+      )
+  }
+  if !actor.allows(@management.Read) {
+    return self.reject(
+      @http_transport.Forbidden,
+      "forbidden",
+      request_id,
+      @management.RejectedRole,
+    )
+  }
+  let spec = match
+    @management.parse_read_query(
+      head.target,
+      actor.token_id(),
+      self.config.default_page_size(),
+      self.config.max_page_size(),
+    ) {
+    Ok(value) => value
+    Err(@management.QueryNotFound) =>
+      return self.reject(
+        @http_transport.NotFound,
+        "not_found",
+        request_id,
+        @management.RejectedOther,
+      )
+    Err(_) =>
+      return self.reject(
+        @http_transport.BadRequest,
+        "bad_request",
+        request_id,
+        @management.RejectedParse,
+      )
+  }
+  if !self.config.details_enabled() {
+    return self.reject(
+      @http_transport.ServiceUnavailable,
+      "details_disabled",
+      request_id,
+      @management.RejectedOther,
+    )
+  }
+  let mailbox = match self.query_mailbox {
+    Some(value) => value
+    None =>
+      return self.reject(
+        @http_transport.ServiceUnavailable,
+        "details_unavailable",
+        request_id,
+        @management.RejectedOther,
+      )
+  }
+  let ticket = match mailbox.submit(spec) {
+    Some(value) => value
+    None =>
+      return self.reject(
+        @http_transport.TooManyRequests,
+        "capacity_exhausted",
+        request_id,
+        @management.RejectedCapacity,
+      )
+  }
+  defer mailbox.release(ticket)
+  let reply = @async.with_timeout_opt(self.config.query_timeout_ms(), () => {
+    mailbox.wait(ticket)
+  }) catch {
+    _ => None
+  }
+  let reply = match reply {
+    Some(Some(value)) => value
+    _ =>
+      return self.reject(
+        @http_transport.ServiceUnavailable,
+        "unavailable",
+        request_id,
+        @management.RejectedDeadline,
+      )
+  }
+  self.encode(reply.status, reply.body, @http_transport.JsonBody)
 }

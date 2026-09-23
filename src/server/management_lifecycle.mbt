@@ -21,6 +21,9 @@ pub struct ManagementRuntime {
   budget : @management.ManagementBudget
   cache : @management.ObservationCache
   http : ManagementHttp
+  query_mailbox : ManagementQueryMailbox?
+  cursor_table : @management.CursorTable?
+  mut mqtt_listener_address : String
   rejections : @management.ManagementRejections
   mut context : ObservationContext
   persistence : PersistenceRuntime?
@@ -55,6 +58,22 @@ pub fn ManagementRuntime::new(
     }
   }
   let rejections = @management.ManagementRejections::new()
+  let query_mailbox = if startup.config.details_enabled() {
+    Some(ManagementQueryMailbox::new(startup.config.query_queue_limit()))
+  } else {
+    None
+  }
+  let cursor_table = if startup.config.details_enabled() {
+    Some(
+      @management.CursorTable::new(
+        startup.config.max_cursor_records(),
+        startup.config.cursor_ttl_ms().to_int64(),
+        boot_id,
+      ),
+    )
+  } else {
+    None
+  }
   let http = match
     ManagementHttp::new(
       startup.config,
@@ -64,6 +83,7 @@ pub fn ManagementRuntime::new(
       rejections,
       boot_id,
       started_at,
+      query_mailbox?,
     ) {
     Ok(value) => value
     Err(_) => {
@@ -79,6 +99,9 @@ pub fn ManagementRuntime::new(
     budget,
     cache,
     http,
+    query_mailbox,
+    cursor_table,
+    mqtt_listener_address: "",
     rejections,
     context: {
       boot_id,
@@ -124,4 +147,12 @@ pub fn ManagementRuntime::close(self : ManagementRuntime) -> Unit {
     self.budget.release_b_tables()
     self.listener.close()
   }
+}
+
+///|
+fn ManagementRuntime::set_mqtt_listener_address(
+  self : ManagementRuntime,
+  address : String,
+) -> Unit {
+  self.mqtt_listener_address = address
 }
