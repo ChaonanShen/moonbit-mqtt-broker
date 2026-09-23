@@ -3,10 +3,11 @@
 /// slots and cache overlap. Every category also charges the ordinary global
 /// pool and this shared aggregate cap.
 pub struct ManagementBudget {
-  ledger : @budget.Ledger
+  config : ManagementConfig
   mut parent : @budget.Ticket?
   occupied_slots : Array[Bool]
   mut active : Int
+  mut cache_live : Bool
   mut closing : Bool
 }
 
@@ -124,10 +125,11 @@ pub fn ManagementBudget::new(
   }
   parent.commit().unwrap()
   Ok({
-    ledger,
+    config,
     parent: Some(parent),
     occupied_slots: Array::make(config.max_connections(), false),
     active: 0,
+    cache_live: false,
     closing: false,
   })
 }
@@ -161,10 +163,29 @@ pub fn ManagementRequestLease::release(self : ManagementRequestLease) -> Bool {
   }
   owner.occupied_slots[self.index] = false
   owner.active -= 1
-  if owner.closing && owner.active == 0 {
+  if owner.closing && owner.active == 0 && !owner.cache_live {
     owner.release_parent()
   }
   true
+}
+
+///|
+fn ManagementBudget::register_cache(self : ManagementBudget) -> Bool {
+  if self.closing || self.cache_live || self.parent is None {
+    return false
+  }
+  self.cache_live = true
+  true
+}
+
+///|
+fn ManagementBudget::release_cache(self : ManagementBudget) -> Unit {
+  if self.cache_live {
+    self.cache_live = false
+    if self.closing && self.active == 0 {
+      self.release_parent()
+    }
+  }
 }
 
 ///|
@@ -180,12 +201,17 @@ fn ManagementBudget::release_parent(self : ManagementBudget) -> Unit {
 /// reservation until its real finalizer calls lease.release().
 pub fn ManagementBudget::close(self : ManagementBudget) -> Bool {
   self.closing = true
-  if self.active == 0 {
+  if self.active == 0 && !self.cache_live {
     self.release_parent()
     true
   } else {
     false
   }
+}
+
+///|
+pub fn ManagementBudget::config(self : ManagementBudget) -> ManagementConfig {
+  self.config
 }
 
 ///|
