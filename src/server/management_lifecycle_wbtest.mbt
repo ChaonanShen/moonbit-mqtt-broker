@@ -74,3 +74,25 @@ async test "cancel accept task before closing management listener" {
     assert_eq(state.resource_ledger().occupied(), 0L)
   }
 }
+
+///|
+async test "driver observation event refreshes cache without broker mutation" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let management = ManagementRuntime::new(
+    listener,
+    lifecycle_startup(),
+    state.resource_ledger(),
+  ).unwrap()
+  let runtime = BrokerRuntime::new(config, state)
+  let driver = RouterDriver::new(runtime, management~)
+  let before = state.snapshot_revision()
+  driver.handle(ObservationDue)
+  assert_true(management.cache.captured_at() is Some(_))
+  assert_true(management.cache.status_body(@budget.monotonic_ms()) is Ok(_))
+  assert_eq(state.snapshot_revision(), before)
+  assert_eq(runtime.metrics().messages_sent(), 0L)
+  management.close()
+  assert_eq(state.resource_ledger().occupied(), 0L)
+}

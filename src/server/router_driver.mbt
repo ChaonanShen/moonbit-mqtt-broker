@@ -8,6 +8,7 @@ pub struct RouterDriver {
   priv auth_cancels : Map[Int64, Bool]
   priv auth_reaps : Map[Int64, Bool]
   priv mut last_progress_monotonic_ms : Int64
+  priv management : ManagementRuntime?
 }
 
 ///|
@@ -44,6 +45,7 @@ pub fn RouterDriver::new(
   snapshot? : SnapshotDriverConfig,
   auth_executor? : @security.AuthExecutor,
   auth_infrastructure? : @budget.Ticket,
+  management? : ManagementRuntime,
 ) -> RouterDriver {
   let snapshot = snapshot.map(config => SnapshotDriverState::{
     oldest_uncommitted_ms: None,
@@ -65,6 +67,7 @@ pub fn RouterDriver::new(
     auth_cancels: Map([]),
     auth_reaps: Map([]),
     last_progress_monotonic_ms: @budget.monotonic_ms(),
+    management,
   }
 }
 
@@ -416,7 +419,11 @@ fn RouterDriver::dispatch(
 pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
   self.runtime.broker_state().begin_action_scope()
   defer {
-    self.last_progress_monotonic_ms = @budget.monotonic_ms()
+    let completed = @budget.monotonic_ms()
+    self.last_progress_monotonic_ms = completed
+    if self.management is Some(active) {
+      active.cache.update_driver_progress(completed)
+    }
   }
   defer self.runtime.broker_state().end_action_scope()
   match event {
@@ -439,7 +446,20 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
       )
     }
     Runtime(event) => self.handle_runtime_event(event)
-    ObservationDue => ()
+    ObservationDue =>
+      if self.management is Some(active) {
+        let sampled_at = @budget.monotonic_ms()
+        let persistence = active.persistence
+        let sample = self.capture_observation(
+          sampled_at,
+          @async.now(),
+          active.context,
+          persistence?,
+        )
+        if !active.cache.publish(sample) {
+          active.rejections.record(@management.RejectedOther)
+        }
+      }
     UnregisterTransport(connection_id) => self.sinks.remove(connection_id)
   }
   self.poll_authentication()
