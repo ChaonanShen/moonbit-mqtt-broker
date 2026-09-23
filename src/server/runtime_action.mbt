@@ -34,4 +34,5 @@ pub(all) enum RuntimeAction {
   CloseTransport(CloseTransportAction)
   StartAuthentication(StartAuthenticationAction)
   CancelAuthentication(CancelAuthenticationAction)
+  StartDurableWill(ConnectionId)
 } derive(Eq, Debug)

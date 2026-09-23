@@ -1,0 +1,139 @@
+///|
+fn BrokerRuntime::finish_strict_transport_close(
+  self : BrokerRuntime,
+  event : TransportClosedEvent,
+) -> Array[RuntimeAction] {
+  let meta = match self.connections.get(event.connection_id) {
+    Some(value) => value
+    None => return []
+  }
+  self.connections.remove(event.connection_id)
+  let actions : Array[RuntimeAction] = []
+  match meta.phase {
+    Active(client_id) => {
+      if self.active_by_client.get(client_id) == Some(event.connection_id) {
+        self.active_by_client.remove(client_id)
+      }
+      let publish_will = event.reason != NormalDisconnect &&
+        event.reason != ConnectRejected &&
+        event.reason != ServerShutdown
+      if publish_will && meta.will is Some(will) {
+        self.strict_pending_wills.set(event.connection_id, (client_id, will))
+        actions.push(StartDurableWill(event.connection_id))
+      } else {
+        let ticket = self.will_tickets.get(event.connection_id)
+        self.will_tickets.remove(event.connection_id)
+        release_optional(ticket)
+      }
+      self.admission.prune_publishers(self.broker_state)
+    }
+    Authenticating(request_id) =>
+      actions.push(CancelAuthentication({ request_id, }))
+    AwaitConnect => ()
+  }
+  actions.push(
+    CloseTransport({ connection_id: event.connection_id, reason: event.reason }),
+  )
+  actions
+}
+
+///|
+fn BrokerRuntime::take_strict_pending_will(
+  self : BrokerRuntime,
+  connection_id : ConnectionId,
+) -> (@session.ClientId, StoredWill, @budget.Ticket?)? {
+  let pending = self.strict_pending_wills.get(connection_id)
+  self.strict_pending_wills.remove(connection_id)
+  match pending {
+    Some((client_id, will)) => {
+      let ticket = self.will_tickets.get(connection_id)
+      self.will_tickets.remove(connection_id)
+      Some((client_id, will, ticket))
+    }
+    None => None
+  }
+}
+
+///|
+pub fn BrokerRuntime::prepare_strict_termination(
+  self : BrokerRuntime,
+  event : TransportClosedEvent,
+  generations : Map[@session.ClientId, Int64],
+) -> StrictPacketPlan {
+  let meta = match self.connections.get(event.connection_id) {
+    Some(value) => value
+    None => return StrictImmediate([])
+  }
+  match meta.phase {
+    AwaitConnect | Authenticating(_) =>
+      StrictImmediate(self.apply(TransportClosed(event)))
+    Active(client_id) => {
+      if self.active_by_client.get(client_id) != Some(event.connection_id) {
+        return StrictImmediate(self.finish_strict_transport_close(event))
+      }
+      let kind = match self.broker_state.session_mode(client_id) {
+        Some(@session.Persistent) =>
+          @router.DurableLifecycleKind::DetachAt(
+            if event.observed_at_ms > 0L {
+              event.observed_at_ms
+            } else {
+              meta.last_control_at_ms
+            },
+          )
+        Some(@session.Clean) => @router.DurableLifecycleKind::Delete
+        None => return StrictClose(event.connection_id, ResourceExhausted)
+      }
+      let generation = generations.get(client_id).unwrap_or(1L)
+      let plan = match
+        self.broker_state.prepare_durable_lifecycle(client_id, generation, kind) {
+        Ok(value) => value
+        Err(_) => return StrictClose(event.connection_id, ResourceExhausted)
+      }
+      StrictPrepared(Lifecycle(plan), _ => {
+        self.finish_strict_transport_close(event)
+      })
+    }
+  }
+}
+
+///|
+fn BrokerRuntime::strict_due_closures(
+  self : BrokerRuntime,
+  now_ms : Int64,
+) -> Array[TransportClosedEvent] {
+  let result : Array[TransportClosedEvent] = []
+  for connection_id, meta in self.connections {
+    let reason : CloseReason? = match meta.phase {
+      AwaitConnect =>
+        if now_ms >=
+          meta.accepted_at_ms + self.config.connect_timeout_ms().to_int64() {
+          Some(ConnectTimeout)
+        } else {
+          None
+        }
+      Authenticating(request_id) => {
+        let deadline = match self.auth_tasks.get(request_id) {
+          Some(task) => task.deadline_ms
+          None => meta.accepted_at_ms
+        }
+        if now_ms >= deadline {
+          Some(ConnectTimeout)
+        } else {
+          None
+        }
+      }
+      Active(_) =>
+        if meta.keep_alive_seconds > 0 &&
+          now_ms >=
+          meta.last_control_at_ms + meta.keep_alive_seconds.to_int64() * 1500L {
+          Some(KeepAliveTimeout)
+        } else {
+          None
+        }
+    }
+    if reason is Some(value) {
+      result.push({ connection_id, reason: value, observed_at_ms: now_ms })
+    }
+  }
+  result
+}

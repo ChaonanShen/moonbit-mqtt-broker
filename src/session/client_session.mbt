@@ -521,3 +521,13 @@ pub fn ClientSession::pending_head_cost(self : ClientSession) -> Int64? {
     Some(self.pending[0].cost())
   }
 }
+// @session.ClientSession exposes a bounded promotion step for the broker's
+// durable prepare path; the caller invokes it on an isolated session copy.
+
+///|
+pub fn ClientSession::promote_for_commit(
+  self : ClientSession,
+  limits : SessionLimits,
+) -> Result[Array[SessionDelivery], SessionError] {
+  self.promote_pending(limits)
+}

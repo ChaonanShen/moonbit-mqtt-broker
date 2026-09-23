@@ -5,6 +5,12 @@ pub struct RouterDriver {
   priv mut management_connections : @slot_index.SlotIndex?
   priv mut management_connections_available : Bool
   priv snapshot : SnapshotDriverState?
+  priv strict : CommitCoordinator?
+  priv strict_generations : Map[@session.ClientId, Int64]
+  priv strict_held : @deque.Deque[(RuntimeEvent, @budget.Ticket?)]
+  priv strict_held_connections : Map[ConnectionId, Int]
+  priv mut strict_pending_connection : ConnectionId?
+  priv mut strict_fenced : Bool
   priv auth_executor : @security.AuthExecutor?
   priv mut auth_infrastructure : @budget.Ticket?
   priv auth_cancels : Map[Int64, Bool]
@@ -51,6 +57,8 @@ pub fn RouterDriver::new(
   auth_executor? : @security.AuthExecutor,
   auth_infrastructure? : @budget.Ticket,
   management? : ManagementRuntime,
+  strict? : CommitCoordinator,
+  strict_generations? : Map[@session.ClientId, Int64] = Map([]),
 ) -> RouterDriver {
   let snapshot = snapshot.map(config => SnapshotDriverState::{
     oldest_uncommitted_ms: None,
@@ -69,6 +77,12 @@ pub fn RouterDriver::new(
     management_connections: None,
     management_connections_available: true,
     snapshot,
+    strict,
+    strict_generations,
+    strict_held: @deque.Deque([]),
+    strict_held_connections: Map([]),
+    strict_pending_connection: None,
+    strict_fenced: false,
     auth_executor,
     auth_infrastructure,
     auth_cancels: Map([]),
@@ -199,6 +213,13 @@ fn RouterDriver::transport_failed(
     }
     return []
   }
+  if self.strict is Some(_) {
+    self.handle_strict_runtime_event(
+      TransportClosed({ connection_id, reason, observed_at_ms: 0L }),
+      None,
+    )
+    return []
+  }
   self.runtime.apply(
     TransportClosed({ connection_id, reason, observed_at_ms: 0L }),
   )
@@ -220,15 +241,16 @@ fn RouterDriver::retry_auth_control(self : RouterDriver) -> Unit {
       CancelUnknown => {
         self.auth_cancels.remove(request_id)
         self.clear_auth_association(request_id)
-        self.dispatch(
-          self.runtime.apply(
-            AuthenticationCompleted({
-              request_id,
-              outcome: @security.AuthCompletionOutcome::AuthInternalFailure,
-              completed_at_ms: @async.now(),
-            }),
-          ),
-        )
+        let completed = AuthenticationCompleted({
+          request_id,
+          outcome: @security.AuthCompletionOutcome::AuthInternalFailure,
+          completed_at_ms: @async.now(),
+        })
+        if self.strict is Some(_) {
+          self.handle_strict_runtime_event(completed, None)
+        } else {
+          self.dispatch(self.runtime.apply(completed))
+        }
       }
       _ => self.auth_cancels.remove(request_id)
     }
@@ -264,15 +286,16 @@ fn RouterDriver::poll_authentication(self : RouterDriver) -> Unit {
             @security.AuthCompletionOutcome::AuthInternalFailure
           _ => completed.outcome
         }
-        self.dispatch(
-          self.runtime.apply(
-            AuthenticationCompleted({
-              request_id: completed.task_id,
-              outcome,
-              completed_at_ms: @async.now(),
-            }),
-          ),
-        )
+        let completed_event = AuthenticationCompleted({
+          request_id: completed.task_id,
+          outcome,
+          completed_at_ms: @async.now(),
+        })
+        if self.strict is Some(_) {
+          self.handle_strict_runtime_event(completed_event, None)
+        } else {
+          self.dispatch(self.runtime.apply(completed_event))
+        }
         match executor.reap(completed.task_id) {
           ControlDone | ControlInvalid =>
             self.clear_auth_association(completed.task_id)
@@ -414,6 +437,61 @@ fn RouterDriver::dispatch(
           self.track_auth_association(start.request_id, id)
         }
       }
+      StartDurableWill(connection_id) => {
+        let pending = match
+          self.runtime.take_strict_pending_will(connection_id) {
+          Some(value) => value
+          None => continue
+        }
+        let (client_id, will, ticket) = pending
+        let coordinator = match self.strict {
+          Some(value) if !self.strict_fenced => value
+          _ => {
+            release_optional(ticket)
+            continue
+          }
+        }
+        let input : @router.PublishInput = {
+          origin: Will(client_id),
+          topic: will.topic,
+          payload: will.payload,
+          qos: will.qos,
+          retain: will.retain,
+        }
+        let plan = match
+          self.runtime
+          .broker_state()
+          .prepare_durable_publish(input, self.strict_generations) {
+          Ok(value) => Some(value)
+          Err(_) if will.retain =>
+            match
+              self.runtime
+              .broker_state()
+              .prepare_durable_publish(
+                { ..input, retain: false },
+                self.strict_generations,
+              ) {
+              Ok(value) => Some(value)
+              Err(_) => None
+            }
+          Err(_) => None
+        }
+        match plan {
+          None => {
+            self.runtime.metrics.record_dropped()
+            release_optional(ticket)
+          }
+          Some(value) => {
+            let submitted = coordinator.submit(PublishWithWill(value, ticket), broker_actions => {
+              release_optional(ticket)
+              self.runtime.map_broker_actions(broker_actions)
+            })
+            if submitted is Err(_) {
+              self.strict_fence("will-submit")
+            }
+          }
+        }
+      }
       CancelAuthentication(cancel) =>
         match self.auth_executor {
           None =>
@@ -463,10 +541,13 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
   }
   defer self.runtime.broker_state().end_action_scope()
   match event {
-    Accounted(event, ticket) => {
-      defer ticket.release().unwrap()
-      self.handle_runtime_event(event)
-    }
+    Accounted(event, ticket) =>
+      if self.strict is Some(_) {
+        self.handle_strict_runtime_event(event, Some(ticket))
+      } else {
+        defer ticket.release().unwrap()
+        self.handle_runtime_event(event)
+      }
     RegisterTransport(register) => {
       if self.sinks.get(register.connection_id) is Some(_) {
         return
@@ -487,7 +568,13 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
         ),
       )
     }
-    Runtime(event) => self.handle_runtime_event(event)
+    Runtime(event) =>
+      if self.strict is Some(_) {
+        self.handle_strict_runtime_event(event, None)
+      } else {
+        self.handle_runtime_event(event)
+      }
+    WalCompletionDue => ()
     ObservationDue =>
       if self.management is Some(active) {
         let sampled_at = @budget.monotonic_ms()
@@ -503,7 +590,12 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
         }
       }
     ManagementQuery(query) => self.handle_management_query(query)
-    ManagementCommand(command) => self.handle_management_command(command)
+    ManagementCommand(command) =>
+      if self.strict is Some(_) {
+        self.strict_fence("management-command-not-wired")
+      } else {
+        self.handle_management_command(command)
+      }
     ManagementMaintenance => self.maintain_management()
     UnregisterTransport(connection_id) => {
       self.sinks.remove(connection_id)
@@ -517,8 +609,12 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
     }
   }
   self.poll_authentication()
-  self.poll_management_kicks()
-  ignore(self.poll_snapshot(@async.now()))
+  if self.strict is Some(_) {
+    self.poll_strict_completion()
+  } else {
+    self.poll_management_kicks()
+    ignore(self.poll_snapshot(@async.now()))
+  }
 }
 
 ///|

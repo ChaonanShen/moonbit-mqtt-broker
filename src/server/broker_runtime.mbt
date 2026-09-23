@@ -10,6 +10,7 @@ priv struct PendingAuthentication {
 ///|
 pub struct BrokerRuntime {
   priv will_tickets : Map[ConnectionId, @budget.Ticket]
+  priv strict_pending_wills : Map[ConnectionId, (@session.ClientId, StoredWill)]
   priv admission : AdmissionState
   priv auth_tasks : Map[Int64, PendingAuthentication]
   priv auth_submissions : Map[Int64, @security.PasswordAuthentication]
@@ -37,6 +38,7 @@ pub fn BrokerRuntime::new(
   {
     config,
     will_tickets: Map([]),
+    strict_pending_wills: Map([]),
     auth_tasks: Map([]),
     auth_submissions: Map([]),
     next_auth_request_id: 1L,
