@@ -50,6 +50,7 @@ pub fn ManagementRuntime::new(
     Ok(value) => value
     Err(_) => {
       ignore(budget.close())
+      budget.release_b_tables()
       return Err(InvalidLifecycle)
     }
   }
@@ -68,6 +69,7 @@ pub fn ManagementRuntime::new(
     Err(_) => {
       cache.close()
       ignore(budget.close())
+      budget.release_b_tables()
       return Err(InvalidLifecycle)
     }
   }
@@ -119,6 +121,7 @@ pub fn ManagementRuntime::close(self : ManagementRuntime) -> Unit {
     self.closed = true
     self.cache.close()
     ignore(self.budget.close())
+    self.budget.release_b_tables()
     self.listener.close()
   }
 }
