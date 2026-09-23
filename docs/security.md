@@ -89,3 +89,14 @@ Client IDs, filters, and application payloads.
 ## Authentication resource admission
 
 A complete request requiring password verification consumes global/IP attempt tokens once before reserving input and conservative workspace costs for its validated PHC. Bad passwords, unknown users and later resource failure do not refund consumed tokens. Anonymous connections bypass hash admission but retain connection/transport caps. A bounded native pthread executor owns C copies of the password and PHC while workers run; the routing loop retains only secret-free identity metadata and consumes fixed-size results. Disconnect and timeout invalidate activation but do not free a running job early. CONNECT pipelining is held behind a one-shot reader gate until CONNACK is queued. The supported PHC envelope is at most 65536 KiB memory, 10 iterations and parallelism 4. Verify the isolation and saturation behavior with `scripts/verify-auth-isolation-docker.sh`. See the [resource contract](resource-budgets.md).
+
+## Management bearer tokens
+
+The separate [read-only management API](management.md) uses explicit
+`metrics` and `read` roles. Its digest file is startup-only and is
+unrelated to the MQTT PasswordDatabase or ACL. It must be a private regular
+file owned by the Broker user. Enabled management loads `libcrypto.so.3`
+dynamically for CSPRNG and SHA-256; a missing library or required symbol
+fails startup before listening. Disabled management does not load this
+feature dependency. The listener is loopback HTTP without TLS, so guard host
+access and use a secure channel for forwarding.

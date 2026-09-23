@@ -168,3 +168,36 @@ per_ip_enabled = true
 | `server.max_runtime_events_per_connection` | `--max-runtime-events-per-connection` | 32 |
 
 未显式配置的 retained 单消息与 Will 单连接上限跟随 max_packet_size。认证 workspace 按已验证 PHC 的 m（KiB）×1024 + p×256KiB + 1MiB 保守预留；这是逻辑预算，不是实测 RSS。快照超过新字节上限时启动失败，不裁剪旧状态。
+
+## 只读管理端口
+
+`[management]` 可选，默认关闭。令牌生成与路由语义见
+[管理 API 指南](management.zh_CN.md)。CLI 名称是在同一键名前加
+`--management-` 并把下划线换成连字符。例如
+`[management] snapshot_max_age_ms` 对应
+`--management-snapshot-max-age-ms`。CLI 优先于 TOML。
+
+```toml
+[management]
+enabled = true
+listen = "127.0.0.1:9091"
+token_file = "/path/to/management-tokens"
+max_connections = 16
+max_header_bytes = 4096
+max_header_count = 32
+max_response_bytes = 65536
+request_timeout_ms = 5000
+write_timeout_ms = 2000
+snapshot_interval_ms = 1000
+snapshot_max_age_ms = 5000
+ready_require_snapshot_healthy = false
+request_rate = 50
+request_burst = 100
+connection_rate = 100
+connection_burst = 200
+max_bytes_total = 8388608
+```
+
+仅接受数字形式的 IPv4 loopback；主机名、非 loopback 地址及 IPv6
+会被拒绝。启用时必须提供私有令牌文件，逻辑预算须容纳固定响应和请求
+槽位。`--check-config` 可在绑定端口前校验文件及容量。

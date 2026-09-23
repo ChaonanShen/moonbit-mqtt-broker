@@ -5,6 +5,7 @@
 | 能力 | 当前状态 | 说明 |
 | --- | --- | --- |
 | Linux x86_64 Native 构建 | 支持 | 固定 Docker 和 CI 路径 |
+| 可选 loopback 管理 HTTP | 支持只读 | 匿名 live/ready；按 Bearer 角色访问 metrics/status；无写入、热重载或查询 API |
 | MQTT 3.1.1 CONNECT / CONNACK | 支持 | 完整 Clean/Persistent `session_present` 语义 |
 | TCP 拆包/粘包 framing | 支持 | 感知容量的 reader 和有界三态 decoder |
 | 相同 packet/receive 上限 | 支持 | 16/16 边界覆盖完整 CONNECT 加粘连 PINGREQ |

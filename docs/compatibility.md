@@ -5,6 +5,7 @@
 | Capability | Current status | Notes |
 | --- | --- | --- |
 | Linux x86_64 Native build | Supported | Pinned Docker and CI path |
+| Optional loopback management HTTP | Supported read-only | Anonymous live/ready; scoped Bearer metrics/status; no write, reload or query API |
 | MQTT 3.1.1 CONNECT / CONNACK | Supported | Full clean/persistent `session_present` semantics |
 | TCP split/sticky packet framing | Supported | Capacity-aware reader plus bounded three-state decoder |
 | Equal packet/receive limits | Supported | 16/16 boundary covers complete CONNECT plus sticky PINGREQ |

@@ -84,3 +84,12 @@ Disk V1 会话迁移为 `legacy-anonymous`，且只能由匿名连接恢复；�
 ## 认证资源准入
 
 完整且需要密码校验的请求先消费一次全局/IP 认证 token，再预留输入和已验证 PHC 对应的保守工作费用。密码错误、未知用户名和后续资源不足不会退还已消费的 token。匿名路径不占 hash 任务额度，但仍受连接/传输限制。有界原生 pthread 执行器在 worker 运行时持有密码与 PHC 的 C 副本；路由主循环只保留无秘密身份元数据并消费固定大小结果。断开和超时只会取消激活资格，不会提前释放仍运行的任务。CONNECT 流水线通过一次性 reader gate 等到 CONNACK 入队后再恢复。支持的 PHC 上限为内存 65536 KiB、迭代 10、并行度 4。使用 `scripts/verify-auth-isolation-docker.sh` 验证隔离和饱和行为。详见[资源契约](resource-budgets.md)。
+
+## 管理 Bearer 令牌
+
+独立的[只读管理 API](management.zh_CN.md)使用显式 `metrics` 和
+`read` 角色。其摘要文件只在启动时读取，与 MQTT PasswordDatabase
+及 ACL 无关。文件必须是 Broker 用户持有的私有普通文件。启用管理功能
+时动态加载 `libcrypto.so.3` 来提供 CSPRNG 和 SHA-256；库或必需
+符号缺失会在监听前使启动失败。禁用时不加载这一功能依赖。管理端口是
+没有 TLS 的 loopback HTTP，需保护主机访问，转发时使用安全通道。
