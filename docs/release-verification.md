@@ -319,3 +319,16 @@ processes. Preserve raw samples, fd counts and the threshold summary under
 distribution soak so the two loads do not contaminate one another. The
 earlier A-only performance evidence remains under
 `.local/p1-03a-execution/`.
+
+## P1-02 transport gate
+
+The strict distribution chain reaches `scripts/verify-release.sh`, whose
+`tests/integration/transports.sh` case starts TCP, TLS, WS and WSS in one
+Broker. MQTT.js checks four-entry QoS 1 routing and TCP-to-WSS persistent
+Session resumption. The same case checks that WS-enabled startup fails
+cleanly when `libcrypto.so.3` or its required EVP symbols are unavailable,
+while TCP-only validation still works. Native package tests cover bounded
+Upgrade parsing, WebSocket frame boundaries, WSS with certificate
+verification, and private TLS material capture. CI supplies the complete
+functional and distribution record for the committed candidate; development
+uses only focused checks.

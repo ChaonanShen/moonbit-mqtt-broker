@@ -45,9 +45,9 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 
 ## 功能
 
-| 范围 | 0.2.0 支持情况 |
+| 范围 | 当前源码支持情况 |
 | --- | --- |
-| 协议 | 基于 TCP 或 TLS 的 MQTT 3.1.1 |
+| 协议 | 基于 TCP、TLS、WS 或 WSS 的 MQTT 3.1.1 |
 | 消息投递 | QoS 0/1/2 发布订阅；出站按阶段重放 PUBLISH/PUBREL |
 | Topic | `+`、`#` 过滤器，重叠订阅确定性合并，保留消息 |
 | 会话 | Clean/Persistent Session、Client ID 接管、有界离线 QoS 1/2 |
@@ -56,7 +56,7 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 | 安全 | 可选 Argon2id 密码、仅允许式 ACL、Principal 所有权会话 |
 | 运维 | TOML 配置、字节预算与连接/认证/发布限流、`$SYS/broker/#` 指标、文本/JSON 日志 |
 
-MQTT 5、WebSocket、共享订阅、Bridge、插件、集群、外部数据库、
+MQTT 5、共享订阅、Bridge、插件、集群、外部数据库、
 WAL 和零丢失持久化明确不在本版本范围内。可选持久化只保证恢复到最近一次
 成功提交的快照，不提供同步消息持久化。详细边界见
 [兼容性矩阵](docs/compatibility.zh_CN.md)。

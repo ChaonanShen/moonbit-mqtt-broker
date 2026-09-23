@@ -66,6 +66,71 @@ log_level = "info"
 `--print-effective-config` 还会应用命令行覆盖，并以规范 TOML 输出最终配置；
 私钥和密码文件的值会替换为 `<redacted>`。
 
+## 具名 MQTT 监听器与 WS/WSS
+
+用 `[[listeners]]` 在同一 Broker 进程中同时启用 TCP、TLS、WS 和 WSS。
+这种配置不能与旧的 `[server].listen` 或 `[tls]` 混用。未配置数组时，
+旧单监听器继续使用 ID `mqtt`。最多 16 项；ID 必须唯一，长度 1–64，
+只含 ASCII 字母、数字、`-`、`_`。`--once` 只接受一项。
+
+```toml
+[server]
+max_connections = 128
+
+[[listeners]]
+id = "devices"
+transport = "tcp"
+listen = "127.0.0.1:1883"
+max_connections = 128
+
+[[listeners]]
+id = "devices-tls"
+transport = "tls"
+listen = "0.0.0.0:8883"
+max_connections = 96
+tls_cert = "/etc/moonbit-mqtt-broker/server.crt"
+tls_key = "/run/secrets/server.key"
+
+[[listeners]]
+id = "browser"
+transport = "wss"
+listen = "0.0.0.0:8084"
+max_connections = 64
+tls_cert = "/etc/moonbit-mqtt-broker/server.crt"
+tls_key = "/run/secrets/server.key"
+ws_path = "/mqtt"
+ws_allowed_origins = ["https://dashboard.example.com"]
+ws_require_origin = false
+http_upgrade_timeout_ms = 5000
+max_http_header_bytes = 16384
+max_ws_frame_bytes = 1048576
+max_ws_message_bytes = 4194304
+```
+
+所有入口共享 Broker 状态、Client ID、认证/ACL、持久化和全局
+`max_connections`。单项上限不得超过全局上限，各项之和可以超过全局上限。
+所有端口先完成绑定再开始接入；任一绑定失败会关闭已绑定端口。
+
+WS/WSS 只在精确配置路径（默认 `/mqtt`）接受 HTTP/1.1 Upgrade，
+要求 `mqtt` 子协议，并以二进制 WebSocket 帧承载 MQTT 字节；该端口
+不提供管理 API。默认空 Origin 允许列表会拒绝带 Origin 的请求，
+不带 Origin 的原生客户端可连接。浏览器页面需显式配置
+`ws_allowed_origins`；`ws_require_origin = true` 要求所有客户端
+都发送 Origin。Origin 不是 MQTT 身份验证；凭据仍由 MQTT CONNECT
+和 ACL 处理，不要放在 URL 或子协议中。首版不协商压缩。
+
+WS 需要 `libcrypto.so.3` 计算 RFC 6455 握手摘要，TLS/WSS 还需要
+既有 TLS 运行库。启动时把 PEM 捕获到 0700 的私有
+`/tmp/moonbit-mqtt-tls-*` 目录，副本文件为 0600；Broker 校验并用
+该副本处理后续握手，正常退出时清理。运行环境需提供私有可写的
+`/tmp`（运行容器使用 tmpfs）；持久宿主机上的进程被强杀后，运维
+应清理该 Broker 用户拥有的遗留私有目录。监听器拓扑和 TLS 材料
+变更需要重启。
+
+`--check-config` 校验字段和 TLS 材料，但不绑定端口或创建私有副本。
+有效配置摘要按输入顺序列出监听器并隐藏私钥路径，不能直接当作含
+真实密钥的重启配置。
+
 ## 服务优雅退出
 
 systemd 示例：

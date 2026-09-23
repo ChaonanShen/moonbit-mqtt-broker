@@ -381,3 +381,13 @@ Native 二进制和 32 MiB 父池上限，对比 B 关闭（A-only）与 B 开�
 `.local/p1-03b-execution/performance-*`。性能门禁与分发 soak 分开，
 避免两组负载互相污染。原有 A-only 性能证据仍在
 `.local/p1-03a-execution/`。
+
+## P1-02 传输门禁
+
+严格分发链会进入 `scripts/verify-release.sh`，其中
+`tests/integration/transports.sh` 在同一 Broker 启动 TCP、TLS、WS、WSS。
+MQTT.js 检查四入口 QoS 1 路由及 TCP 到 WSS 的持久会话恢复。
+同一用例还验证：WS 启用时缺少 `libcrypto.so.3` 或必需 EVP 符号会明确
+失败，而仅启用 TCP 时仍可校验配置。Native package 定向测试覆盖有界
+Upgrade、WebSocket 帧边界、验证证书的 WSS，以及私有 TLS 材料捕获。
+对已提交候选的完整功能与分发记录由 CI 提供；开发侧只做定向检查。

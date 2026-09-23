@@ -27,7 +27,7 @@
 | Snapshot V3 data boundary | Supported | Inbound IDs and outbound phases; reads legacy V1/V2 and writes V3 |
 | State across Broker restart | Supported when `--data-dir` is set | Debounced local snapshot to latest committed revision |
 | SIGTERM / SIGINT shutdown | Supported | Stops normally, suppresses active Wills, forces and drains latest Snapshot |
-| TLS listener | Supported, opt-in | TLS-only single listener; PEM startup validation and bounded handshakes |
+| TLS listener | Supported, opt-in | Shared multi-listener Broker; private startup PEM snapshot and bounded handshakes |
 | MQTT.js/Mosquitto over TLS | Supported for 0.2.0 | QoS 0/1/2, retained, persistent Session and restart recovery |
 | Argon2id authentication | Supported, opt-in | Encoded hashes only; anonymous allowed by default |
 | Bounded authentication executor | Supported | Native worker/queue limits, timeout and cancellation-safe cleanup |
@@ -40,7 +40,7 @@
 | TOML configuration | Supported | CLI > TOML > defaults; unknown/duplicate keys fatal; check/print modes |
 | QoS 2 | Supported | Method B inbound deduplication, bounded state, phase-aware reconnect and V3 recovery |
 | MQTT 5 | Unsupported | Out of scope |
-| WebSocket | Unsupported | Out of current release scope |
+| WebSocket / WSS | Supported, opt-in | Binary MQTT frames, mqtt subprotocol, Origin allowlist and bounded Upgrade |
 | Shared subscriptions / Bridge / plugins / cluster | Unsupported | Single-node Broker only |
 | External database / WAL / zero-loss durability | Unsupported | Latest-committed local snapshot only |
 

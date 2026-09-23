@@ -164,17 +164,21 @@ fn create_auth_executor(
 }
 
 ///|
-pub async fn serve(
-  listener : @socket.TcpServer,
+pub async fn serve_listeners(
+  listeners : Array[BoundListener],
   config : ServerConfig,
   initial_state : @router.BrokerState,
   persistence? : PersistenceRuntime,
   shutdown_requested? : () -> Bool = () => false,
-  tls? : TlsServerConfig,
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
   logger? : @observability.Logger = @observability.Logger::silent(),
   management? : ManagementRuntime,
 ) -> Unit {
+  for entry in listeners {
+    if entry.config.websocket is Some(_) && !websocket_crypto_ready() {
+      raise ResourceStartupFailure("WS/WSS requires libcrypto.so.3")
+    }
+  }
   let events = @async.Queue(kind=Blocking(config.max_runtime_events()))
   let bus = match
     EventBus::new(config, initial_state.resource_ledger(), events) {
@@ -299,61 +303,141 @@ pub async fn serve(
           }
           active.listener.close()
         }
-        listener.close()
+        for entry in listeners {
+          entry.socket.close()
+        }
         group.return_immediately(())
       }
-      listener.run_forever(
-        allow_failure=true,
-        max_connections=config.max_connections(),
-        (connection, peer) => {
-          match allocator.allocate() {
-            Err(_) => connection.close()
-            Ok(connection_id) => {
-              if !bus.admission.accept(connection_id, canonical_ip(peer)) {
-                connection.close()
-                return
-              }
-              defer bus.admission.release(connection_id)
-              let transport = match tls {
-                None => ConnectionTransport::plain(connection)
-                Some(tls_config) =>
-                  ConnectionTransport::secure(connection, tls_config) catch {
-                    error => {
-                      metrics.record_tls_handshake_failure()
-                      logger.log(
-                        @observability.LogRecord::new(
-                          @async.now(),
-                          @observability.Warn,
-                          "tls_handshake_failed",
-                          message="TLS handshake failed",
-                          peer=peer.to_string(),
-                          reason=error.to_string(),
-                        ),
-                      )
-                      connection.close()
-                      return
+      for entry in listeners {
+        group.spawn_bg() <| () => {
+          entry.socket.run_forever(
+            allow_failure=true,
+            max_connections=entry.config.max_connections,
+            (connection, peer) => {
+              match allocator.allocate() {
+                Err(_) => connection.close()
+                Ok(connection_id) => {
+                  if !bus.admission.accept(connection_id, canonical_ip(peer)) {
+                    connection.close()
+                    return
+                  }
+                  defer bus.admission.release(connection_id)
+                  let transport = match entry.config.tls {
+                    None => ConnectionTransport::plain(connection)
+                    Some(tls_config) =>
+                      ConnectionTransport::secure(connection, tls_config) catch {
+                        error => {
+                          metrics.record_tls_handshake_failure()
+                          logger.log(
+                            @observability.LogRecord::new(
+                              @async.now(),
+                              @observability.Warn,
+                              "tls_handshake_failed",
+                              message="TLS handshake failed",
+                              peer=peer.to_string(),
+                              listener_id=entry.config.id,
+                              transport=entry.config.transport,
+                              reason=error.to_string(),
+                            ),
+                          )
+                          connection.close()
+                          return
+                        }
+                      }
+                  }
+                  let transport = match entry.config.websocket {
+                    None => transport
+                    Some(policy) => {
+                      let limits = config.broker_config().resources()
+                      let pool = bus.ledger
+                        .pool(Receive, limits.get("max_receive_bytes_total"))
+                        .unwrap()
+                      let ticket = match
+                        pool.reserve(
+                          (policy.max_header_bytes + 4096).to_int64() * 3L,
+                        ) {
+                        Ok(value) => value
+                        Err(_) => {
+                          transport.close()
+                          return
+                        }
+                      }
+                      defer ticket.release().unwrap()
+                      transport.upgrade(policy, bus, connection_id) catch {
+                        error => {
+                          logger.log(
+                            @observability.LogRecord::new(
+                              @async.now(),
+                              @observability.Warn,
+                              "websocket_upgrade_failed",
+                              peer=peer.to_string(),
+                              listener_id=entry.config.id,
+                              transport=entry.config.transport,
+                              reason=error.to_string(),
+                            ),
+                          )
+                          transport.close()
+                          return
+                        }
+                      }
                     }
                   }
+                  supervise_transport(
+                    transport,
+                    connection_id,
+                    config,
+                    events,
+                    bus~,
+                    listener_id=entry.config.id,
+                    transport_name=entry.config.transport,
+                    logger~,
+                  )
+                }
               }
-              supervise_transport(
-                transport,
-                connection_id,
-                config,
-                events,
-                bus~,
-              )
-            }
+            },
+          ) catch {
+            error => if !shutdown_requested() { raise error }
           }
-        },
-      ) catch {
-        error => if !shutdown_requested() { raise error }
-      }
-      if !shutdown_requested() {
-        raise ResourceStartupFailure("MQTT listener stopped unexpectedly")
+          if !shutdown_requested() {
+            raise ResourceStartupFailure(
+              "MQTT listener " + entry.config.id + " stopped unexpectedly",
+            )
+          }
+        }
       }
     }
   })
   driver.shutdown_authentication()
+}
+
+///|
+pub async fn serve(
+  listener : @socket.TcpServer,
+  config : ServerConfig,
+  initial_state : @router.BrokerState,
+  persistence? : PersistenceRuntime,
+  shutdown_requested? : () -> Bool = () => false,
+  tls? : TlsServerConfig,
+  security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
+  logger? : @observability.Logger = @observability.Logger::silent(),
+  management? : ManagementRuntime,
+) -> Unit {
+  let entry = ListenerConfig::new(
+    "mqtt",
+    listener.addr.to_string(),
+    config.max_connections(),
+    tls?,
+  ).unwrap()
+  serve_listeners(
+    [{ config: entry, socket: listener }],
+    config,
+    initial_state,
+    persistence?,
+    shutdown_requested~,
+    security~,
+    logger~,
+    management?,
+  )
 }
 
 ///|
@@ -364,6 +448,7 @@ pub async fn serve_once(
   persistence? : PersistenceRuntime,
   shutdown_requested? : () -> Bool = () => false,
   tls? : TlsServerConfig,
+  websocket? : WebSocketPolicy,
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
   logger? : @observability.Logger = @observability.Logger::silent(),
 ) -> Unit {
@@ -460,6 +545,34 @@ pub async fn serve_once(
             }
           }
       }
+      let transport = match websocket {
+        None => transport
+        Some(policy) => {
+          if !websocket_crypto_ready() {
+            transport.close()
+            return
+          }
+          let limits = config.broker_config().resources()
+          let pool = bus.ledger
+            .pool(Receive, limits.get("max_receive_bytes_total"))
+            .unwrap()
+          let ticket = match
+            pool.reserve((policy.max_header_bytes + 4096).to_int64() * 3L) {
+            Ok(value) => value
+            Err(_) => {
+              transport.close()
+              return
+            }
+          }
+          defer ticket.release().unwrap()
+          transport.upgrade(policy, bus, ConnectionId::new(1L)) catch {
+            _ => {
+              transport.close()
+              return
+            }
+          }
+        }
+      }
       supervise_transport(
         transport,
         ConnectionId::new(1L),
@@ -474,14 +587,13 @@ pub async fn serve_once(
 }
 
 ///|
-pub async fn run(
-  listen : String,
+pub async fn run_listeners(
+  listeners : Array[ListenerConfig],
   config : ServerConfig,
   initial_state : @router.BrokerState,
   persistence? : PersistenceRuntime,
   shutdown_requested? : () -> Bool = () => false,
   once? : Bool = false,
-  tls? : TlsServerConfig,
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
   logger? : @observability.Logger = @observability.Logger::new(),
   management? : ManagementStartup,
@@ -495,8 +607,93 @@ pub async fn run(
       "management listener is incompatible with --once",
     )
   }
-  let listener = @socket.TcpServer(@socket.Addr::parse(listen), reuse_addr=true)
-  defer listener.close()
+  if listeners.length() < 1 || listeners.length() > 16 {
+    raise ResourceStartupFailure("MQTT listener count must be in 1..16")
+  }
+  if once && listeners.length() != 1 {
+    raise ResourceStartupFailure("--once requires exactly one MQTT listener")
+  }
+  for entry in listeners {
+    if entry.websocket is Some(_) && !websocket_crypto_ready() {
+      raise ResourceStartupFailure("WS/WSS requires libcrypto.so.3")
+    }
+  }
+  let ids : Map[String, Bool] = Map([])
+  for entry in listeners {
+    if ids.contains(entry.id) {
+      raise ResourceStartupFailure("duplicate MQTT listener ID: " + entry.id)
+    }
+    ids.set(entry.id, true)
+    if entry.max_connections > config.max_connections() {
+      raise ResourceStartupFailure(
+        "MQTT listener cap exceeds global cap: " + entry.id,
+      )
+    }
+  }
+  let materials : Array[TlsMaterialLease] = []
+  let material_tickets : Array[@budget.Ticket] = []
+  defer (for ticket in material_tickets {
+    ticket.release().unwrap()
+  })
+  defer (for material in materials {
+    material.release()
+  })
+  let prepared : Array[ListenerConfig] = []
+  for entry in listeners {
+    match entry.tls {
+      None => prepared.push(entry)
+      Some(tls) => {
+        let limits = config.broker_config().resources()
+        let pool = initial_state
+          .resource_ledger()
+          .pool(Infrastructure, limits.get("max_managed_bytes_total"))
+          .unwrap()
+        let ticket = match pool.reserve(2097152L + 4096L) {
+          Ok(value) => value
+          Err(_) =>
+            raise ResourceStartupFailure(
+              "TLS material snapshot budget unavailable: " + entry.id,
+            )
+        }
+        ticket.commit().unwrap()
+        material_tickets.push(ticket)
+        let lease = TlsMaterialLease::capture(tls)
+        materials.push(lease)
+        validate_tls_config(lease.config) catch {
+          _ =>
+            raise ResourceStartupFailure(
+              "TLS material snapshot validation failed: " + entry.id,
+            )
+        }
+        prepared.push(
+          ListenerConfig::new(
+            entry.id,
+            entry.listen,
+            entry.max_connections,
+            tls=lease.config,
+            transport=entry.transport,
+            websocket?=entry.websocket,
+          ).unwrap(),
+        )
+      }
+    }
+  }
+  let bound : Array[BoundListener] = []
+  defer (for entry in bound {
+    entry.socket.close()
+  })
+  for entry in prepared {
+    let socket = @socket.TcpServer(
+      @socket.Addr::parse(entry.listen),
+      reuse_addr=true,
+    ) catch {
+      error =>
+        raise ResourceStartupFailure(
+          "MQTT listener " + entry.id + " bind failed: " + error.to_string(),
+        )
+    }
+    bound.push({ config: entry, socket })
+  }
   let management_runtime = match management {
     None => None
     Some(startup) => {
@@ -537,105 +734,82 @@ pub async fn run(
   }
   defer (if management_runtime is Some(active) { active.close() })
   if management_runtime is Some(active) {
-    active.set_mqtt_listener_address(listener.addr.to_string())
+    active.set_mqtt_listener_address(bound[0].socket.addr.to_string())
   }
   if management_runtime is Some(active) && active.config.details_enabled() {
     ignore(initial_state.enable_management_index())
   }
-  let management = management_runtime
-  logger.log(
-    @observability.LogRecord::new(
-      @async.now(),
-      @observability.Info,
-      "broker_listening",
-      message="MQTT broker listening on " + listener.addr.to_string(),
-      peer=listener.addr.to_string(),
-    ),
-  )
-  match (once, persistence, tls) {
-    (true, Some(runtime), Some(tls_config)) =>
-      serve_once(
-        listener,
-        config,
-        initial_state,
-        persistence=runtime,
-        shutdown_requested~,
-        tls=tls_config,
-        security~,
-        logger~,
-      )
-    (true, Some(runtime), None) =>
-      serve_once(
-        listener,
-        config,
-        initial_state,
-        persistence=runtime,
-        shutdown_requested~,
-        security~,
-        logger~,
-      )
-    (true, None, Some(tls_config)) =>
-      serve_once(
-        listener,
-        config,
-        initial_state,
-        shutdown_requested~,
-        tls=tls_config,
-        security~,
-        logger~,
-      )
-    (true, None, None) =>
-      serve_once(
-        listener,
-        config,
-        initial_state,
-        shutdown_requested~,
-        security~,
-        logger~,
-      )
-    (false, Some(runtime), Some(tls_config)) =>
-      serve(
-        listener,
-        config,
-        initial_state,
-        persistence=runtime,
-        shutdown_requested~,
-        tls=tls_config,
-        security~,
-        logger~,
-        management?,
-      )
-    (false, Some(runtime), None) =>
-      serve(
-        listener,
-        config,
-        initial_state,
-        persistence=runtime,
-        shutdown_requested~,
-        security~,
-        logger~,
-        management?,
-      )
-    (false, None, Some(tls_config)) =>
-      serve(
-        listener,
-        config,
-        initial_state,
-        shutdown_requested~,
-        tls=tls_config,
-        security~,
-        logger~,
-        management?,
-      )
-    (false, None, None) =>
-      serve(
-        listener,
-        config,
-        initial_state,
-        shutdown_requested~,
-        security~,
-        logger~,
-        management?,
-      )
+  for entry in bound {
+    logger.log(
+      @observability.LogRecord::new(
+        @async.now(),
+        @observability.Info,
+        "broker_listening",
+        message="MQTT listener " +
+          entry.config.id +
+          " listening on " +
+          entry.socket.addr.to_string(),
+        peer=entry.socket.addr.to_string(),
+        listener_id=entry.config.id,
+        transport=entry.config.transport,
+      ),
+    )
   }
+  if once {
+    let first = bound[0]
+    serve_once(
+      first.socket,
+      config,
+      initial_state,
+      persistence?,
+      shutdown_requested~,
+      tls?=first.config.tls,
+      websocket?=first.config.websocket,
+      security~,
+      logger~,
+    )
+  } else {
+    serve_listeners(
+      bound,
+      config,
+      initial_state,
+      persistence?,
+      shutdown_requested~,
+      security~,
+      logger~,
+      management?=management_runtime,
+    )
+  }
+}
+
+///|
+pub async fn run(
+  listen : String,
+  config : ServerConfig,
+  initial_state : @router.BrokerState,
+  persistence? : PersistenceRuntime,
+  shutdown_requested? : () -> Bool = () => false,
+  once? : Bool = false,
+  tls? : TlsServerConfig,
+  security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
+  logger? : @observability.Logger = @observability.Logger::new(),
+  management? : ManagementStartup,
+) -> Unit {
+  let listener = ListenerConfig::new(
+    "mqtt",
+    listen,
+    config.max_connections(),
+    tls?,
+  ).unwrap()
+  run_listeners(
+    [listener],
+    config,
+    initial_state,
+    persistence?,
+    shutdown_requested~,
+    once~,
+    security~,
+    logger~,
+    management?,
+  )
 }
