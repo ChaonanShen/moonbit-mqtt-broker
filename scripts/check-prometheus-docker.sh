@@ -3,6 +3,7 @@ set -euo pipefail
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 readonly IMAGE="$(cat tests/prometheus/image.txt)"
+readonly DEV_IMAGE="${MOONBIT_MQTT_IMAGE:-moonbit-mqtt-broker-dev}"
 if [[ ! "${IMAGE}" =~ ^prom/prometheus@sha256:[0-9a-f]{64}$ ]]; then
   echo 'Prometheus image must be pinned by SHA256 digest' >&2
   exit 1
@@ -65,7 +66,7 @@ docker run --detach --platform linux/amd64 \
 query() {
   docker run --rm --platform linux/amd64 \
     --network "container:${PROMETHEUS_BROKER_CONTAINER}" \
-    --entrypoint curl moonbit-mqtt-broker-dev \
+    --entrypoint curl "${DEV_IMAGE}" \
     --silent --show-error --fail --max-time 2 --get \
     --data-urlencode "query=$1" \
     'http://127.0.0.1:9092/api/v1/query'
@@ -74,7 +75,7 @@ live_ok=0
 for _ in $(seq 1 30); do
   if query 'up{job="management-good"}' >"${PROM_DIR}/good.json" 2>/dev/null &&
      query 'up{job="management-bad"}' >"${PROM_DIR}/bad.json" 2>/dev/null &&
-     python3 - "${PROM_DIR}/good.json" "${PROM_DIR}/bad.json" <<'PY'
+     python3 - "${PROM_DIR}/good.json" "${PROM_DIR}/bad.json" 2>"${PROM_DIR}/retry.err" <<'PY'
 import json, sys
 good, bad = [json.load(open(path)) for path in sys.argv[1:]]
 def values(payload):

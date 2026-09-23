@@ -54,6 +54,7 @@ else
   echo 'runtime_image_mode=build' >>"${RESULTS}/evidence.txt"
 fi
 docker image inspect "${DEV_IMAGE}" --format 'toolchain_image={{.Id}}' >>"${RESULTS}/evidence.txt"
+scripts/check-prometheus-docker.sh
 git archive --format=tar "${SOURCE_SHA}" >"${RESULTS}/source.tar"
 sha256sum "${RESULTS}/source.tar" >>"${RESULTS}/evidence.txt"
 docker volume create "${SOURCE_VOLUME}" >/dev/null
@@ -86,6 +87,7 @@ for profile in base argon2 tls full; do
     'for cmd in moon moonc cc gcc node npm git argon2; do if command -v "$cmd" >/dev/null; then echo "unexpected development tool: $cmd" >&2; exit 1; fi; done; ldd /artifact/broker; /sbin/ldconfig -p' \
     >"${RESULTS}/libraries-${profile}.txt"
   ! grep -q 'not found' "${RESULTS}/libraries-${profile}.txt"
+  grep -q 'libcrypto.so' "${RESULTS}/libraries-${profile}.txt"
   has_argon2=0; has_tls=0
   [[ "${profile}" = argon2 || "${profile}" = full ]] && has_argon2=1
   [[ "${profile}" = tls || "${profile}" = full ]] && has_tls=1
@@ -131,9 +133,39 @@ for profile in base argon2 tls full; do
     --entrypoint node --volume "${SOURCE_VOLUME}:/workspace:ro" \
     --volume "${RESULTS}/runtime:/artifact:ro" --workdir /workspace "${DEV_IMAGE}" \
     tests/integration/distribution_smoke.mjs "${scheme}://127.0.0.1:1883" "${auth_mode}"
+  if docker run --rm --platform linux/amd64 --network "container:${BROKER_CONTAINER}" \
+      --entrypoint curl "${DEV_IMAGE}" --silent --max-time 1 \
+      http://127.0.0.1:9091/health/live >/dev/null 2>&1; then
+    echo "Disabled management unexpectedly bound a listener in ${profile}" >&2
+    exit 1
+  fi
   docker stop --time 10 "${BROKER_CONTAINER}" >/dev/null
   [[ "$(docker inspect --format '{{.State.ExitCode}}' "${BROKER_CONTAINER}")" = 0 ]]
   docker logs "${BROKER_CONTAINER}" >"${RESULTS}/runtime-${profile}.log" 2>&1
+  docker rm "${BROKER_CONTAINER}" >/dev/null
+  broker_started=0
+  docker run --detach "${runtime_options[@]}" --name "${BROKER_CONTAINER}" \
+    "${runtime_image}" --listen 127.0.0.1:1883 "${feature_args[@]}" \
+    --management-enabled true --management-listen 127.0.0.1:9091 \
+    --management-token-file /artifact/management-tokens >/dev/null
+  broker_started=1
+  docker run --rm --platform linux/amd64 --network "container:${BROKER_CONTAINER}" \
+    --entrypoint node --volume "${SOURCE_VOLUME}:/workspace:ro" \
+    --volume "${RESULTS}/runtime:/artifact:ro" --workdir /workspace "${DEV_IMAGE}" \
+    tests/integration/distribution_smoke.mjs "${scheme}://127.0.0.1:1883" "${auth_mode}"
+  docker run --rm --platform linux/amd64 --network "container:${BROKER_CONTAINER}" \
+    --entrypoint node --volume "${SOURCE_VOLUME}:/workspace:ro" \
+    --volume "${RESULTS}/runtime:/artifact:ro" --workdir /workspace "${DEV_IMAGE}" \
+    tests/integration/management_runtime_smoke.mjs
+  if [[ "${profile}" = full ]]; then
+    PROMETHEUS_BROKER_CONTAINER="${BROKER_CONTAINER}" \
+      PROMETHEUS_TOKEN_FILE="${RESULTS}/runtime/management-client-token" \
+      MOONBIT_MQTT_IMAGE="${DEV_IMAGE}" \
+      scripts/check-prometheus-docker.sh
+  fi
+  docker stop --time 10 "${BROKER_CONTAINER}" >/dev/null
+  [[ "$(docker inspect --format '{{.State.ExitCode}}' "${BROKER_CONTAINER}")" = 0 ]]
+  docker logs "${BROKER_CONTAINER}" >"${RESULTS}/runtime-${profile}-management.log" 2>&1
   docker rm "${BROKER_CONTAINER}" >/dev/null
   broker_started=0
   printf 'runtime_%s=PASS\n' "${profile}" >>"${RESULTS}/evidence.txt"

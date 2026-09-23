@@ -22,5 +22,14 @@ printf 'sensor01:%s\n' "${hash}" >/results/runtime/passwords
 chown 65532:65532 /results/runtime/server.key /results/runtime/passwords
 chmod 0400 /results/runtime/server.key /results/runtime/passwords
 chmod 0444 /results/runtime/server.crt
+# Independent test principal. The Broker reads only the digest file; the
+# client token is mounted into the separate verifier and Prometheus containers.
+management_token='distread.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+management_digest="$(printf 'moonbit-mqtt-broker/admin/v1:%s' "${management_token}" | sha256sum | awk '{print $1}')"
+printf 'distread:%s:metrics,read\n' "${management_digest}" >/results/runtime/management-tokens
+printf '%s\n' "${management_token}" >/results/runtime/management-client-token
+chown 65532:65532 /results/runtime/management-tokens
+chmod 0400 /results/runtime/management-tokens
+chmod 0444 /results/runtime/management-client-token
 (cd /results && sha256sum package.zip runtime/broker >artifacts.sha256)
 echo 'DISTRIBUTION clean source, release archive, and exported native binary passed'
