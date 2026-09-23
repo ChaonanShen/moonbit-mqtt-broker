@@ -35,6 +35,8 @@ priv struct EventBus {
   mut tick : RuntimeEvent?
   mut auth_poll : RuntimeEvent?
   mut metrics : RuntimeEvent?
+  mut observation_due : Bool
+  mut observation_wait_events : Int
   mut deferred_data : DriverEvent?
   mut control_batch : Int
   mut needs_promotion : Bool
@@ -75,6 +77,8 @@ fn EventBus::new(
     auth_poll: None,
     tick: None,
     metrics: None,
+    observation_due: false,
+    observation_wait_events: 0,
     deferred_data: None,
     control_batch: 0,
     needs_promotion: false,
@@ -264,6 +268,36 @@ fn EventBus::post_tick(self : EventBus, event : RuntimeEvent) -> Unit {
 }
 
 ///|
+fn EventBus::post_observation(self : EventBus) -> Unit {
+  if !self.closed {
+    if !self.observation_due {
+      self.observation_due = true
+      self.observation_wait_events = 0
+    }
+    self.signal()
+  }
+}
+
+///|
+fn EventBus::selected_other(
+  self : EventBus,
+  event : DriverEvent,
+) -> DriverEvent {
+  if self.observation_due && self.observation_wait_events < 16 {
+    self.observation_wait_events += 1
+  }
+  event
+}
+
+///|
+fn EventBus::take_observation(self : EventBus) -> DriverEvent {
+  self.observation_due = false
+  self.observation_wait_events = 0
+  self.control_batch += 1
+  ObservationDue
+}
+
+///|
 fn EventBus::take_control(self : EventBus) -> DriverEvent? {
   if self.tick is Some(tick) {
     self.tick = None
@@ -305,10 +339,15 @@ async fn EventBus::next(self : EventBus) -> DriverEvent? {
     if self.closed {
       return None
     }
+    if self.observation_due &&
+      self.observation_wait_events >= 16 &&
+      self.control_batch < 8 {
+      return Some(self.take_observation())
+    }
     if self.control_batch < 8 {
       if self.take_control() is Some(event) {
         self.control_batch += 1
-        return Some(event)
+        return Some(self.selected_other(event))
       }
     }
     let data = match self.deferred_data {
@@ -326,14 +365,17 @@ async fn EventBus::next(self : EventBus) -> DriverEvent? {
           !slot.registered {
           slot.registered = true
           self.deferred_data = Some(event)
-          return Some(RegisterTransport(slot.registration))
+          return Some(self.selected_other(RegisterTransport(slot.registration)))
         }
       }
-      return Some(event)
+      return Some(self.selected_other(event))
     }
     self.control_batch = 0
     if self.take_control() is Some(event) {
-      return Some(event)
+      return Some(self.selected_other(event))
+    }
+    if self.observation_due {
+      return Some(self.take_observation())
     }
     self.wake.get() catch {
       _ => return None
@@ -359,6 +401,8 @@ fn EventBus::close(self : EventBus) -> Unit {
     return
   }
   self.closed = true
+  self.observation_due = false
+  self.observation_wait_events = 0
   if self.deferred_data is Some(Accounted(_, ticket)) {
     ticket.release().unwrap()
   }
