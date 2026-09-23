@@ -5,6 +5,9 @@ ulimit -c 0
 readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 moon build --target native
+if [[ "${1:-}" != "--prepared" ]]; then
+  npm ci --prefix tests/integration --ignore-scripts >/dev/null
+fi
 readonly BROKER="${ROOT}/_build/native/debug/build/cmd/broker/broker.exe"
 WORK_DIR="$(mktemp -d)"
 BROKER_PID=""
