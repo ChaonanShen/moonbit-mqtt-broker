@@ -257,6 +257,102 @@ fn map_section(
 }
 
 ///|
+fn map_listeners(
+  args : Array[String],
+  value : @toml.TomlValue,
+) -> Unit raise ConfigFileError {
+  let entries = match value {
+    TomlArray(entries) => entries
+    _ => raise ConfigFileError("listeners must be an array of tables")
+  }
+  if entries.length() < 1 || entries.length() > 16 {
+    raise ConfigFileError("listeners count must be in 1..16")
+  }
+  for entry in entries {
+    let table = match entry {
+      TomlTable(table) => table
+      _ => raise ConfigFileError("listeners entries must be tables")
+    }
+    for required in ["id", "transport", "listen"] {
+      if table.get(required) is None {
+        raise ConfigFileError("listeners." + required + " is required")
+      }
+    }
+    for key, _ in table {
+      if ![
+          "id", "transport", "listen", "max_connections", "tls_cert", "tls_key",
+          "tls_handshake_timeout_ms", "ws_path", "ws_allowed_origins", "ws_require_origin",
+          "http_upgrade_timeout_ms", "max_http_header_bytes", "max_ws_frame_bytes",
+          "max_ws_message_bytes",
+        ].contains(key) {
+        raise ConfigFileError("unknown listener key: " + key)
+      }
+    }
+    add_string(args, "--listener-id", table.get("id").unwrap(), "listeners.id")
+    add_string(
+      args,
+      "--listener-transport",
+      table.get("transport").unwrap(),
+      "listeners.transport",
+    )
+    add_string(
+      args,
+      "--listener-listen",
+      table.get("listen").unwrap(),
+      "listeners.listen",
+    )
+    if table.get("max_connections") is Some(value) {
+      add_integer(
+        args, "--listener-max-connections", value, "listeners.max_connections",
+      )
+    }
+    if table.get("tls_cert") is Some(value) {
+      add_string(args, "--listener-tls-cert", value, "listeners.tls_cert")
+    }
+    if table.get("tls_key") is Some(value) {
+      add_string(args, "--listener-tls-key", value, "listeners.tls_key")
+    }
+    if table.get("tls_handshake_timeout_ms") is Some(value) {
+      add_integer(
+        args, "--listener-tls-handshake-timeout-ms", value, "listeners.tls_handshake_timeout_ms",
+      )
+    }
+    if table.get("ws_path") is Some(value) {
+      add_string(args, "--listener-ws-path", value, "listeners.ws_path")
+    }
+    if table.get("ws_allowed_origins") is Some(value) {
+      let origins = match value {
+        TomlArray(origins) => origins
+        _ =>
+          raise ConfigFileError("listeners.ws_allowed_origins must be an array")
+      }
+      for origin in origins {
+        add_string(
+          args, "--listener-ws-allowed-origin", origin, "listeners.ws_allowed_origins",
+        )
+      }
+    }
+    if table.get("ws_require_origin") is Some(value) {
+      add_boolean(
+        args, "--listener-ws-require-origin", value, "listeners.ws_require_origin",
+      )
+    }
+    for
+      item in [
+        ("http_upgrade_timeout_ms", "--listener-http-upgrade-timeout-ms"),
+        ("max_http_header_bytes", "--listener-max-http-header-bytes"),
+        ("max_ws_frame_bytes", "--listener-max-ws-frame-bytes"),
+        ("max_ws_message_bytes", "--listener-max-ws-message-bytes"),
+      ] {
+      let (key, flag) = item
+      if table.get(key) is Some(value) {
+        add_integer(args, flag, value, "listeners." + key)
+      }
+    }
+  }
+}
+
+///|
 /// Parses a complete TOML document with the maintained bobzhang/toml parser
 /// and returns deterministic CLI-equivalent arguments for precedence merging.
 pub fn parse_config_file(
@@ -275,11 +371,16 @@ pub fn parse_config_file(
   let args : Array[String] = []
   let sections = [
     "server", "broker", "persistence", "tls", "security", "observability", "resources",
-    "limits", "management",
+    "limits", "management", "listeners",
   ]
   for section in sections {
     match root.get(section) {
-      Some(value) => map_section(args, section, value)
+      Some(value) =>
+        if section == "listeners" {
+          map_listeners(args, value)
+        } else {
+          map_section(args, section, value)
+        }
       None => ()
     }
   }

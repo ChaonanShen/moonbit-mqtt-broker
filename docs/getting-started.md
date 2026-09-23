@@ -118,7 +118,7 @@ clean directory.
 
 ## Operational boundaries
 
-This release is single-node and Linux x86_64 Native. It does not implement
-MQTT 5, WebSocket, clustering, bridges, plugins, external databases,
+This source is single-node and Linux x86_64 Native. It does not implement
+MQTT 5, clustering, bridges, plugins, external databases,
 WAL, or zero-loss durability. Review the [compatibility matrix](compatibility.md)
 before deployment.

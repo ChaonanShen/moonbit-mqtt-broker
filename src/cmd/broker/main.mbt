@@ -4,6 +4,25 @@ suberror CliError {
 } derive(Debug)
 
 ///|
+struct ListenerDraft {
+  id : String
+  mut transport : String
+  mut listen : String
+  mut max_connections : Int
+  mut cert : String
+  mut key : String
+  mut handshake_timeout_ms : Int
+  mut ws_path : String
+  ws_allowed_origins : Array[String]
+  mut ws_require_origin : Bool
+  mut http_upgrade_timeout_ms : Int
+  mut max_http_header_bytes : Int
+  mut max_ws_frame_bytes : Int
+  mut max_ws_message_bytes : Int
+  mut ws_settings_used : Bool
+}
+
+///|
 const RELEASE_VERSION : String = "0.2.0"
 
 ///|
@@ -28,6 +47,10 @@ fn print_help() -> Unit {
   println(
     "  --once                             Serve one connection, for smoke tests",
   )
+  println(
+    "  [[listeners]]                     Named tcp/tls/ws/wss listeners (max 16)",
+  )
+  println("  WS/WSS requires libcrypto.so.3; WSS also requires TLS libraries")
   println("  --management-enabled true|false  Default false")
   println("  --management-listen VALUE  Default 127.0.0.1:9091")
   println("  --management-token-file VALUE  Default unset")
@@ -294,6 +317,9 @@ async fn run_main() -> Unit {
   let resource_specs = @budget.byte_limit_specs()
   resource_specs.append(@budget.rate_limit_specs())
   let mut listen = "127.0.0.1:1883"
+  let mut legacy_listen_explicit = false
+  let mut legacy_tls_explicit = false
+  let listener_drafts : Array[ListenerDraft] = []
   let mut max_connections = 128
   let mut max_packet_size = 1048576
   let mut max_receive_buffer_size = 1048576
@@ -387,6 +413,7 @@ async fn run_main() -> Unit {
           raise CliError("--listen requires HOST:PORT")
         }
         listen = args[index + 1]
+        legacy_listen_explicit = true
         index = index + 2
       }
       "--max-connections" => {
@@ -588,6 +615,7 @@ async fn run_main() -> Unit {
           raise CliError("--tls-cert requires a non-empty path")
         }
         tls_certificate_file = Some(args[index + 1])
+        legacy_tls_explicit = true
         index = index + 2
       }
       "--tls-key" => {
@@ -595,6 +623,7 @@ async fn run_main() -> Unit {
           raise CliError("--tls-key requires a non-empty path")
         }
         tls_private_key_file = Some(args[index + 1])
+        legacy_tls_explicit = true
         index = index + 2
       }
       "--tls-handshake-timeout-ms" => {
@@ -602,6 +631,7 @@ async fn run_main() -> Unit {
           args, index, "--tls-handshake-timeout-ms", 1,
         )
         tls_timeout_option_used = true
+        legacy_tls_explicit = true
         index = index + 2
       }
       "--allow-anonymous" => {
@@ -854,6 +884,102 @@ async fn run_main() -> Unit {
         )
         index += 2
       }
+      "--listener-id" => {
+        if index + 1 >= args.length() || args[index + 1] == "" {
+          raise CliError("--listener-id requires a non-empty ID")
+        }
+        listener_drafts.push({
+          id: args[index + 1],
+          transport: "",
+          listen: "",
+          max_connections: -1,
+          cert: "",
+          key: "",
+          handshake_timeout_ms: 10000,
+          ws_path: "/mqtt",
+          ws_allowed_origins: [],
+          ws_require_origin: false,
+          http_upgrade_timeout_ms: 5000,
+          max_http_header_bytes: 16384,
+          max_ws_frame_bytes: 1048576,
+          max_ws_message_bytes: 4194304,
+          ws_settings_used: false,
+        })
+        index += 2
+      }
+      "--listener-transport"
+      | "--listener-listen"
+      | "--listener-max-connections"
+      | "--listener-tls-cert"
+      | "--listener-tls-key"
+      | "--listener-tls-handshake-timeout-ms"
+      | "--listener-ws-path"
+      | "--listener-ws-allowed-origin"
+      | "--listener-ws-require-origin"
+      | "--listener-http-upgrade-timeout-ms"
+      | "--listener-max-http-header-bytes"
+      | "--listener-max-ws-frame-bytes"
+      | "--listener-max-ws-message-bytes" => {
+        if listener_drafts.is_empty() || index + 1 >= args.length() {
+          raise CliError(
+            args[index] + " requires a preceding --listener-id and value",
+          )
+        }
+        let draft = listener_drafts[listener_drafts.length() - 1]
+        match args[index] {
+          "--listener-transport" => draft.transport = args[index + 1]
+          "--listener-listen" => draft.listen = args[index + 1]
+          "--listener-max-connections" =>
+            draft.max_connections = parse_bounded_int(
+              args, index, "--listener-max-connections", 1,
+            )
+          "--listener-tls-cert" => draft.cert = args[index + 1]
+          "--listener-tls-key" => draft.key = args[index + 1]
+          "--listener-tls-handshake-timeout-ms" =>
+            draft.handshake_timeout_ms = parse_bounded_int(
+              args, index, "--listener-tls-handshake-timeout-ms", 1,
+            )
+          "--listener-ws-path" => {
+            draft.ws_path = args[index + 1]
+            draft.ws_settings_used = true
+          }
+          "--listener-ws-allowed-origin" => {
+            draft.ws_allowed_origins.push(args[index + 1])
+            draft.ws_settings_used = true
+          }
+          "--listener-ws-require-origin" => {
+            draft.ws_require_origin = parse_bool_option(
+              args, index, "--listener-ws-require-origin",
+            )
+            draft.ws_settings_used = true
+          }
+          "--listener-http-upgrade-timeout-ms" => {
+            draft.http_upgrade_timeout_ms = parse_bounded_int(
+              args, index, "--listener-http-upgrade-timeout-ms", 1,
+            )
+            draft.ws_settings_used = true
+          }
+          "--listener-max-http-header-bytes" => {
+            draft.max_http_header_bytes = parse_bounded_int(
+              args, index, "--listener-max-http-header-bytes", 1,
+            )
+            draft.ws_settings_used = true
+          }
+          "--listener-max-ws-frame-bytes" => {
+            draft.max_ws_frame_bytes = parse_bounded_int(
+              args, index, "--listener-max-ws-frame-bytes", 1,
+            )
+            draft.ws_settings_used = true
+          }
+          _ => {
+            draft.max_ws_message_bytes = parse_bounded_int(
+              args, index, "--listener-max-ws-message-bytes", 1,
+            )
+            draft.ws_settings_used = true
+          }
+        }
+        index += 2
+      }
       "--once" => {
         once = true
         index = index + 1
@@ -1067,6 +1193,115 @@ async fn run_main() -> Unit {
     (Some(_), None) => raise CliError("--tls-cert requires --tls-key")
     (None, Some(_)) => raise CliError("--tls-key requires --tls-cert")
   }
+  let effective_listeners : Array[@server.ListenerConfig] = []
+  if listener_drafts.is_empty() {
+    let single = match
+      @server.ListenerConfig::new("mqtt", listen, max_connections, tls?) {
+      Ok(value) => value
+      Err(_) => raise CliError("invalid --listen address")
+    }
+    effective_listeners.push(single)
+  } else {
+    if legacy_listen_explicit || legacy_tls_explicit {
+      raise CliError(
+        "listeners cannot be combined with legacy --listen or --tls-*",
+      )
+    }
+    if once && listener_drafts.length() != 1 {
+      raise CliError("--once requires exactly one listener")
+    }
+    let ids : Map[String, Bool] = Map([])
+    for draft in listener_drafts {
+      if ids.contains(draft.id) {
+        raise CliError("duplicate listener id: " + draft.id)
+      }
+      ids.set(draft.id, true)
+      if draft.listen == "" {
+        raise CliError("listener " + draft.id + " requires listen")
+      }
+      let cap = if draft.max_connections < 0 {
+        max_connections
+      } else {
+        draft.max_connections
+      }
+      if cap > max_connections {
+        raise CliError(
+          "listener " + draft.id + " exceeds global max_connections",
+        )
+      }
+      let needs_tls = draft.transport == "tls" || draft.transport == "wss"
+      let needs_ws = draft.transport == "ws" || draft.transport == "wss"
+      if !(draft.transport == "tcp" || needs_tls || needs_ws) {
+        raise CliError("listener transport must be tcp, tls, ws, or wss")
+      }
+      let listener_tls : @server.TlsServerConfig? = if needs_tls {
+        if draft.cert == "" || draft.key == "" {
+          raise CliError("TLS listener requires tls_cert and tls_key")
+        }
+        let certificate_kind = @fs.kind(draft.cert, follow_symlink=false) catch {
+          _ => raise CliError("listener TLS certificate is unavailable")
+        }
+        if certificate_kind != @fs.Regular || private_key_status(draft.key) != 0 {
+          raise CliError("listener TLS material must be safe regular files")
+        }
+        let value = @server.TlsServerConfig::new(
+          draft.cert,
+          draft.key,
+          handshake_timeout_ms=draft.handshake_timeout_ms,
+        ).unwrap()
+        @server.validate_tls_config(value) catch {
+          _ =>
+            raise CliError(
+              "listener TLS certificate/private key validation failed",
+            )
+        }
+        Some(value)
+      } else {
+        if draft.cert != "" ||
+          draft.key != "" ||
+          draft.handshake_timeout_ms != 10000 {
+          raise CliError("non-TLS listener cannot specify TLS settings")
+        }
+        None
+      }
+      let websocket : @server.WebSocketPolicy? = if needs_ws {
+        if !@server.websocket_crypto_ready() {
+          raise CliError("WS/WSS requires libcrypto.so.3")
+        }
+        match
+          @server.WebSocketPolicy::new(
+            path=draft.ws_path,
+            allowed_origins=draft.ws_allowed_origins,
+            require_origin=draft.ws_require_origin,
+            max_header_bytes=draft.max_http_header_bytes,
+            upgrade_timeout_ms=draft.http_upgrade_timeout_ms,
+            max_frame_bytes=draft.max_ws_frame_bytes,
+            max_message_bytes=draft.max_ws_message_bytes,
+          ) {
+          Some(value) => Some(value)
+          None => raise CliError("invalid listener WS policy")
+        }
+      } else {
+        if draft.ws_settings_used {
+          raise CliError("non-WS listener cannot specify WS settings")
+        }
+        None
+      }
+      let config = match
+        @server.ListenerConfig::new(
+          draft.id,
+          draft.listen,
+          cap,
+          tls?=listener_tls,
+          transport=draft.transport,
+          websocket?,
+        ) {
+        Ok(value) => value
+        Err(_) => raise CliError("invalid listener id, address, or capacity")
+      }
+      effective_listeners.push(config)
+    }
+  }
   if !allow_anonymous && password_file is None {
     raise CliError("--allow-anonymous false requires --password-file")
   }
@@ -1157,7 +1392,9 @@ async fn run_main() -> Unit {
   if print_effective_config {
     let quote = fn(value : String) { @json.to_json(value).stringify() }
     println("[server]")
-    println("listen = " + quote(listen))
+    if listener_drafts.is_empty() {
+      println("listen = " + quote(listen))
+    }
     println("max_connections = " + max_connections.to_string())
     println("max_packet_size = " + max_packet_size.to_string())
     println("max_receive_buffer_size = " + max_receive_buffer_size.to_string())
@@ -1211,14 +1448,16 @@ async fn run_main() -> Unit {
     println("snapshot_debounce_ms = " + snapshot_debounce_ms.to_string())
     println("snapshot_max_delay_ms = " + snapshot_max_delay_ms.to_string())
     println("snapshot_retry_ms = " + snapshot_retry_ms.to_string())
-    println("[tls]")
-    println("cert = " + quote(tls_certificate_file.unwrap_or("")))
-    let effective_tls_key = match tls_private_key_file {
-      Some(_) => "<redacted>"
-      None => ""
+    if listener_drafts.is_empty() {
+      println("[tls]")
+      println("cert = " + quote(tls_certificate_file.unwrap_or("")))
+      let effective_tls_key = match tls_private_key_file {
+        Some(_) => "<redacted>"
+        None => ""
+      }
+      println("key = " + quote(effective_tls_key))
+      println("handshake_timeout_ms = " + tls_handshake_timeout_ms.to_string())
     }
-    println("key = " + quote(effective_tls_key))
-    println("handshake_timeout_ms = " + tls_handshake_timeout_ms.to_string())
     println("[security]")
     println("allow_anonymous = " + allow_anonymous.to_string())
     let effective_password_file = match password_file {
@@ -1313,6 +1552,50 @@ async fn run_main() -> Unit {
     println("enabled = " + resources.rates_enabled().to_string())
     println("per_ip_enabled = " + resources.per_ip_enabled().to_string())
     print_resource_section_values(resources, "limits")
+    if !listener_drafts.is_empty() {
+      for draft in listener_drafts {
+        println("[[listeners]]")
+        println("id = " + quote(draft.id))
+        println("transport = " + quote(draft.transport))
+        println("listen = " + quote(draft.listen))
+        let cap = if draft.max_connections < 0 {
+          max_connections
+        } else {
+          draft.max_connections
+        }
+        println("max_connections = " + cap.to_string())
+        if draft.transport == "tls" || draft.transport == "wss" {
+          println("tls_cert = " + quote(draft.cert))
+          println("tls_key = " + quote("<redacted>"))
+          println(
+            "tls_handshake_timeout_ms = " +
+            draft.handshake_timeout_ms.to_string(),
+          )
+        }
+        if draft.transport == "ws" || draft.transport == "wss" {
+          println("ws_path = " + quote(draft.ws_path))
+          let origins : Array[String] = []
+          for origin in draft.ws_allowed_origins {
+            origins.push(quote(origin))
+          }
+          println("ws_allowed_origins = [" + origins.join(", ") + "]")
+          println("ws_require_origin = " + draft.ws_require_origin.to_string())
+          println(
+            "http_upgrade_timeout_ms = " +
+            draft.http_upgrade_timeout_ms.to_string(),
+          )
+          println(
+            "max_http_header_bytes = " + draft.max_http_header_bytes.to_string(),
+          )
+          println(
+            "max_ws_frame_bytes = " + draft.max_ws_frame_bytes.to_string(),
+          )
+          println(
+            "max_ws_message_bytes = " + draft.max_ws_message_bytes.to_string(),
+          )
+        }
+      }
+    }
     return
   }
   if check_config {
@@ -1325,13 +1608,12 @@ async fn run_main() -> Unit {
   })
   match data_dir {
     None =>
-      @server.run(
-        listen,
+      @server.run_listeners(
+        effective_listeners,
         config,
         @router.BrokerState::new(broker_config),
         shutdown_requested~,
         once~,
-        tls?,
         security~,
         logger~,
         management?,
@@ -1393,14 +1675,13 @@ async fn run_main() -> Unit {
           snapshot_revision=initial_state.snapshot_revision().to_string(),
         ),
       )
-      @server.run(
-        listen,
+      @server.run_listeners(
+        effective_listeners,
         config,
         initial_state,
         persistence~,
         shutdown_requested~,
         once~,
-        tls?,
         security~,
         logger~,
         management?,

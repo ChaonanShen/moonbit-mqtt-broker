@@ -168,3 +168,44 @@ test "all B management TOML fields map to CLI options" {
     "7", "--management-command-burst", "14", "--management-max-index-bytes", "4194304",
   ])
 }
+
+///|
+test "listener array keeps stable identities and rejects missing fields" {
+  assert_eq(
+    parse_config_file(
+      "[[listeners]]\nid = \"plain\"\ntransport = \"tcp\"\nlisten = \"127.0.0.1:1883\"\n[[listeners]]\nid = \"secure\"\ntransport = \"tls\"\nlisten = \"127.0.0.1:8883\"\nmax_connections = 4\ntls_cert = \"/tmp/cert\"\ntls_key = \"/tmp/key\"\n",
+    ),
+    [
+      "--listener-id", "plain", "--listener-transport", "tcp", "--listener-listen",
+      "127.0.0.1:1883", "--listener-id", "secure", "--listener-transport", "tls",
+      "--listener-listen", "127.0.0.1:8883", "--listener-max-connections", "4", "--listener-tls-cert",
+      "/tmp/cert", "--listener-tls-key", "/tmp/key",
+    ],
+  )
+  assert_true(
+    config_rejected("[[listeners]]\nid = \"missing\"\ntransport = \"tcp\"\n"),
+  )
+  assert_true(
+    config_rejected(
+      "[[listeners]]\nid = \"x\"\ntransport = \"tcp\"\nlisten = \"127.0.0.1:1\"\nunknown = 1\n",
+    ),
+  )
+}
+
+///|
+test "WS listener arrays keep origin entries without flattening identity" {
+  let args = parse_config_file(
+    "[[listeners]]\nid = \"browser\"\ntransport = \"wss\"\nlisten = \"0.0.0.0:8084\"\ntls_cert = \"/cert\"\ntls_key = \"/key\"\nws_path = \"/mqtt\"\nws_allowed_origins = [\"https://one.example\", \"https://two.example\"]\nws_require_origin = true\n",
+  )
+  assert_true(args.contains("--listener-ws-path"))
+  assert_true(args.contains("--listener-ws-require-origin"))
+  assert_eq(
+    args.filter(value => value == "--listener-ws-allowed-origin").length(),
+    2,
+  )
+  assert_true(
+    config_rejected(
+      "[[listeners]]\nid = \"browser\"\ntransport = \"ws\"\nlisten = \"127.0.0.1:8083\"\nws_allowed_origins = [1]\n",
+    ),
+  )
+}

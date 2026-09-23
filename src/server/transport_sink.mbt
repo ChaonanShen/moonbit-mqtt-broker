@@ -2,6 +2,8 @@
 pub(all) enum OutboundCommand {
   WriteFrame(Bytes)
   WriteFrameThenClose(Bytes, CloseReason)
+  WriteWsWake
+  WriteWsClose(Bytes)
 } derive(Eq, Debug)
 
 ///|
@@ -25,6 +27,10 @@ pub struct TransportSink {
   priv handshake_gate : @async.Queue[Bool]
   outbound : @async.Queue[OutboundCommand]
   close_signal : @async.Queue[CloseReason]
+  ws_close_ack : @async.Queue[Unit]
+  ws_control : @async.Queue[Bytes]
+  mut ws_closing : Bool
+  mut ws_wake_pending : Bool
 }
 
 ///|
@@ -37,6 +43,10 @@ pub fn TransportSink::new(max_outbound : Int) -> TransportSink {
     handshake_gate: @async.Queue(kind=Blocking(1)),
     outbound: @async.Queue(kind=Blocking(max_outbound)),
     close_signal: @async.Queue(kind=Blocking(1)),
+    ws_close_ack: @async.Queue(kind=Blocking(1)),
+    ws_control: @async.Queue(kind=Blocking(4)),
+    ws_closing: false,
+    ws_wake_pending: false,
   }
 }
 
@@ -51,6 +61,13 @@ pub fn TransportSink::outbound(
 pub async fn TransportSink::wait_handshake(self : TransportSink) -> Bool {
   self.handshake_gate.get() catch {
     _ => false
+  }
+}
+
+///|
+fn TransportSink::try_handshake(self : TransportSink) -> Bool? {
+  self.handshake_gate.try_get() catch {
+    _ => Some(false)
   }
 }
 
@@ -92,6 +109,8 @@ pub fn TransportSink::close(self : TransportSink) -> Unit {
   self.handshake_gate.close(clear=true)
   self.outbound.close(clear=true)
   self.close_signal.close(clear=true)
+  self.ws_close_ack.close(clear=true)
+  self.ws_control.close(clear=true)
 }
 
 ///|
@@ -150,6 +169,67 @@ fn TransportSink::enqueue_frame(
     }
   }
   accepted
+}
+
+///|
+fn TransportSink::enqueue_ws_control(
+  self : TransportSink,
+  frame : Bytes,
+) -> Bool {
+  let reservation = match self.reserve_frame(frame.length().to_int64(), true) {
+    Ok(value) => value
+    Err(_) => return false
+  }
+  let accepted = self.ws_control.try_put(frame) catch { _ => false }
+  if accepted && !self.ws_wake_pending {
+    self.ws_wake_pending = self.outbound.try_put(WriteWsWake) catch {
+      _ => false
+    }
+  }
+  if reservation is Some(r) {
+    if accepted {
+      r.ticket.commit().unwrap()
+      self.owned.push({ frame, ticket: r.ticket })
+    } else {
+      r.ticket.release().unwrap()
+    }
+  }
+  accepted
+}
+
+///|
+fn TransportSink::enqueue_ws_close(self : TransportSink, frame : Bytes) -> Bool {
+  let reservation = match self.reserve_frame(frame.length().to_int64(), true) {
+    Ok(value) => value
+    Err(_) => return false
+  }
+  let accepted = self.outbound.try_put(WriteWsClose(frame)) catch { _ => false }
+  if accepted {
+    self.ws_closing = true
+  }
+  if reservation is Some(r) {
+    if accepted {
+      r.ticket.commit().unwrap()
+      self.owned.push({ frame, ticket: r.ticket })
+    } else {
+      r.ticket.release().unwrap()
+    }
+  }
+  accepted
+}
+
+///|
+async fn TransportSink::wait_ws_close(self : TransportSink) -> Unit {
+  ignore(@async.with_timeout_opt(1000, () => self.ws_close_ack.get())) catch {
+    _ => ()
+  }
+}
+
+///|
+fn TransportSink::take_ws_control(self : TransportSink) -> Bytes? {
+  self.ws_control.try_get() catch {
+    _ => None
+  }
 }
 
 ///|

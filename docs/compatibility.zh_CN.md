@@ -27,7 +27,7 @@
 | Snapshot V3 数据边界 | 支持 | 保存 Principal 和 detach epoch；读取旧 V1/V2 并写入 V3 |
 | Broker 重启后状态 | 设置 `--data-dir` 时支持 | debounce 本地快照，恢复到最近提交 revision |
 | SIGTERM / SIGINT 退出 | 支持 | 正常停止、抑制活动 Will、强制并排空最新 Snapshot |
-| TLS listener | 可选支持 | 单个纯 TLS listener；启动时校验 PEM，握手有界 |
+| TLS listener | 可选支持 | 多入口共享 Broker；启动捕获私有 PEM 副本，握手有界 |
 | MQTT.js/Mosquitto TLS | 0.2.0 支持 | QoS 0/1/2、retained、Persistent Session 和重启恢复 |
 | Argon2id 认证 | 可选支持 | 只接受编码哈希；默认允许匿名 |
 | 有界认证执行器 | 支持 | 原生 worker/队列上限、超时和取消安全清理 |
@@ -40,7 +40,7 @@
 | TOML 配置 | 支持 | CLI > TOML > 默认值；未知/重复键致命；支持检查/打印模式 |
 | QoS 2 | 支持 | Method B 入站去重、有界状态、按阶段重连和 V3 恢复 |
 | MQTT 5 | 不支持 | 不在范围内 |
-| WebSocket | 不支持 | 不在当前版本范围内 |
+| WebSocket / WSS | 可选支持 | MQTT 二进制帧、mqtt 子协议、Origin 允许列表与有界 Upgrade |
 | 共享订阅 / Bridge / 插件 / 集群 | 不支持 | 仅单机 Broker |
 | 外部数据库 / WAL / 零丢失持久化 | 不支持 | 仅最近提交的本地快照 |
 

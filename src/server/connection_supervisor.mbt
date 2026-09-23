@@ -63,6 +63,7 @@ async fn read_transport(
       Some(value) => value
     }
     if bus is Some(bus) &&
+      !connection.is_websocket() &&
       !bus.admission.admit_ingress(connection_id, bytes.length().to_int64()) {
       return RateLimited
     }
@@ -153,10 +154,27 @@ async fn read_transport(
                 _ => return ServerShutdown
               }
           }
-          if packet is Connect(_) &&
-            sink is Some(handshake) &&
-            !handshake.wait_handshake() {
-            return ConnectRejected
+          if packet is Connect(_) && sink is Some(handshake) {
+            if connection.is_websocket() {
+              let mut resolved : Bool? = None
+              while resolved is None {
+                resolved = handshake.try_handshake()
+                if resolved is None {
+                  let remaining = config.max_receive_buffer_size() -
+                    decoder.buffered_len()
+                  match connection.drain_buffered_controls(remaining) {
+                    Some(reason) => return reason
+                    None => ()
+                  }
+                  @async.sleep(5)
+                }
+              }
+              if resolved == Some(false) {
+                return ConnectRejected
+              }
+            } else if !handshake.wait_handshake() {
+              return ConnectRejected
+            }
           }
         }
       }
@@ -208,12 +226,40 @@ async fn write_transport(
   sink : TransportSink,
   bus? : EventBus,
 ) -> CloseReason {
+  let mut control_burst = 0
   for ;; {
+    if !sink.ws_closing &&
+      control_burst < 4 &&
+      sink.take_ws_control() is Some(control) {
+      let ticket = sink.take_frame_ticket(control)
+      defer release_optional(ticket)
+      connection.write_control(control) catch {
+        _ => return WriteFailure
+      }
+      control_burst += 1
+      continue
+    }
     let command = sink.outbound().get() catch { _ => return ServerShutdown }
+    control_burst = 0
     match command {
+      WriteWsWake => sink.ws_wake_pending = false
+      WriteWsClose(frame) => {
+        let ticket = sink.take_frame_ticket(frame)
+        defer release_optional(ticket)
+        connection.write_control(frame) catch {
+          _ => return WriteFailure
+        }
+        ignore(sink.ws_close_ack.try_put(())) catch {
+          _ => ()
+        }
+        return PeerEof
+      }
       WriteFrame(frame) => {
         let ticket = sink.take_frame_ticket(frame)
         defer release_optional(ticket)
+        if sink.ws_closing {
+          continue
+        }
         connection.write(frame) catch {
           _ => return WriteFailure
         }
@@ -224,6 +270,9 @@ async fn write_transport(
       WriteFrameThenClose(frame, reason) => {
         let ticket = sink.take_frame_ticket(frame)
         defer release_optional(ticket)
+        if sink.ws_closing {
+          continue
+        }
         connection.write(frame) catch {
           _ => return WriteFailure
         }
@@ -240,8 +289,12 @@ async fn supervise_transport(
   config : ServerConfig,
   events : @async.Queue[DriverEvent],
   bus? : EventBus,
+  listener_id? : String = "",
+  transport_name? : String = "",
+  logger? : @observability.Logger = @observability.Logger::silent(),
 ) -> Unit {
   let sink = TransportSink::new(config.max_outbound_queue())
+  connection.attach_sink(sink)
   let terminal = @async.Queue(kind=Blocking(1))
   let budget = match bus {
     Some(bus) =>
@@ -252,7 +305,10 @@ async fn supervise_transport(
           terminal.close()
           return
         }
-        Ok(budget) => Some(budget)
+        Ok(budget) => {
+          connection.attach_receive_pool(budget.receive)
+          Some(budget)
+        }
       }
     None => {
       events.put(
@@ -298,6 +354,19 @@ async fn supervise_transport(
     reason
   }
   terminal.close(clear=true)
+  if listener_id != "" {
+    logger.log(
+      @observability.LogRecord::new(
+        @async.now(),
+        @observability.Debug,
+        "listener_connection_closed",
+        connection_id=connection_id.value().to_string(),
+        listener_id~,
+        transport=transport_name,
+        reason=close_reason_name(reason),
+      ),
+    )
+  }
   match bus {
     Some(bus) =>
       bus.terminal({ connection_id, reason, observed_at_ms: @async.now() })

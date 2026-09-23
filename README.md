@@ -47,9 +47,9 @@ security example, read the [getting-started guide](docs/getting-started.md).
 
 ## Features
 
-| Area | Version 0.2.0 |
+| Area | Current source |
 | --- | --- |
-| Protocol | MQTT 3.1.1 over TCP or TLS |
+| Protocol | MQTT 3.1.1 over TCP, TLS, WS or WSS |
 | Delivery | QoS 0/1/2 publish/subscribe; phase-aware PUBLISH/PUBREL replay |
 | Topics | `+` and `#` filters, deterministic overlap merge, retained messages |
 | Sessions | Clean and persistent Sessions, Client ID takeover, bounded offline QoS 1/2 |
@@ -58,7 +58,7 @@ security example, read the [getting-started guide](docs/getting-started.md).
 | Security | Optional Argon2id passwords, allow-only ACLs, Principal-owned Sessions |
 | Operations | TOML configuration, byte budgets and connection/auth/publish rate limits, `$SYS/broker/#` metrics, text/JSON logs |
 
-MQTT 5, WebSocket, shared subscriptions, bridges, plugins, clustering,
+MQTT 5, shared subscriptions, bridges, plugins, clustering,
 external databases, WAL, and zero-loss durability are intentionally out of
 scope. Optional persistence provides a latest-committed snapshot guarantee,
 not synchronous message durability. See the [compatibility matrix](docs/compatibility.md) for the exact

@@ -28,9 +28,28 @@ import {
 
 warnings = "-alert_internal"
 
+import {
+  "moonbitlang/async/fs",
+} for "wbtest"
+
+import {
+  "moonbitlang/async/fs",
+  "moonbitlang/async/process",
+} for "test"
+
 options(
+  "native-stub": [ "websocket_native.c", "tls_material_native.c" ],
   targets: {
     "connection_server.mbt": [ "native" ],
+    "websocket_native.mbt": [ "native" ],
+    "tls_material_native.mbt": [ "native" ],
+    "websocket_native_test.mbt": [ "native" ],
+    "websocket_handshake_test.mbt": [ "native" ],
+    "websocket_codec_test.mbt": [ "native" ],
+    "websocket_network_test.mbt": [ "native" ],
+    "tls_material_native_wbtest.mbt": [ "native" ],
+    "websocket_gate_wbtest.mbt": [ "native" ],
     "connection_server_test.mbt": [ "native" ],
+    "multi_listener_test.mbt": [ "native" ],
   },
 )

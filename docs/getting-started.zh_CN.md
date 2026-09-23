@@ -115,7 +115,7 @@ scripts/verify-release-docker.sh
 
 ## 运行边界
 
-本版本为单机 Linux x86_64 Native 实现，不支持 MQTT 5、WebSocket、
+当前源码为单机 Linux x86_64 Native 实现，不支持 MQTT 5、
 集群、Bridge、插件、外部数据库、WAL 或零丢失持久化。部署前请查看
 [兼容性矩阵](compatibility.zh_CN.md)。
 

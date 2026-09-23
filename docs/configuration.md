@@ -65,6 +65,77 @@ binding, locking, opening persistence, or creating the data directory.
 `--print-effective-config` also applies CLI overrides and prints canonical TOML
 with private-key/password-file values replaced by `<redacted>`.
 
+## Named MQTT listeners and WS/WSS
+
+Use `[[listeners]]` to bind TCP, TLS, WS and WSS in one Broker process. This
+form replaces the legacy `[server].listen` and `[tls]` settings; mixing them
+is rejected. Without `[[listeners]]`, the legacy single listener keeps its
+`mqtt` ID. At most 16 listeners are accepted. IDs must be unique, 1–64 ASCII
+letters, digits, `-` or `_`. `--once` accepts exactly one listener.
+
+```toml
+[server]
+max_connections = 128
+
+[[listeners]]
+id = "devices"
+transport = "tcp"
+listen = "127.0.0.1:1883"
+max_connections = 128
+
+[[listeners]]
+id = "devices-tls"
+transport = "tls"
+listen = "0.0.0.0:8883"
+max_connections = 96
+tls_cert = "/etc/moonbit-mqtt-broker/server.crt"
+tls_key = "/run/secrets/server.key"
+
+[[listeners]]
+id = "browser"
+transport = "wss"
+listen = "0.0.0.0:8084"
+max_connections = 64
+tls_cert = "/etc/moonbit-mqtt-broker/server.crt"
+tls_key = "/run/secrets/server.key"
+ws_path = "/mqtt"
+ws_allowed_origins = ["https://dashboard.example.com"]
+ws_require_origin = false
+http_upgrade_timeout_ms = 5000
+max_http_header_bytes = 16384
+max_ws_frame_bytes = 1048576
+max_ws_message_bytes = 4194304
+```
+
+All entries share the one Broker state, Client ID space, security policy,
+persistence and global `max_connections`. Each listener's cap cannot exceed
+the global cap. The caps need not sum to the global cap. All sockets are bound
+before any begins accepting; a bind failure closes those already bound.
+
+WS/WSS accepts only HTTP/1.1 Upgrade on the exact configured path (default
+`/mqtt`), requires the `mqtt` subprotocol, and carries MQTT bytes in binary
+WebSocket frames. It does not serve management routes. The default empty
+Origin allowlist rejects requests with an Origin header; native clients without
+Origin may connect. Set `ws_allowed_origins` for browser pages and
+`ws_require_origin = true` if every client must send one. Origin filtering
+does not replace MQTT CONNECT authentication. Compression is not negotiated.
+Do not put credentials in the URL or WebSocket subprotocol.
+
+WS requires `libcrypto.so.3` for the RFC 6455 handshake digest. TLS/WSS also
+requires the existing TLS runtime libraries. At startup, TLS PEM files are
+copied into a private `/tmp/moonbit-mqtt-tls-*` directory with mode 0700
+and private 0600 files. The Broker validates and uses those captured copies
+for new handshakes, then removes them on normal shutdown. Provide a private
+writable `/tmp` (the runtime container uses tmpfs); after a forced process
+kill on a persistent host `/tmp`, an operator should remove stale private
+directories owned by that Broker user. Listener topology and TLS material
+changes require a restart.
+
+`--check-config` validates listener fields and referenced TLS material
+without binding or creating the private generation. The effective config
+summary prints listeners in input order and redacts private-key paths; it is
+not a directly restartable secret-bearing config.
+
 ## Graceful service shutdown
 
 ```ini

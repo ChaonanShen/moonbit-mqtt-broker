@@ -38,3 +38,18 @@ test "log levels filter and silent logger emits nothing" {
   assert_true(Logger::new(minimum_level=Warn).render(record) is None)
   assert_true(Logger::silent().render(record) is None)
 }
+
+///|
+test "listener origin fields are finite structured log values" {
+  let logger = Logger::new(format=Json)
+  let record = LogRecord::new(
+    1L,
+    Info,
+    "broker_listening",
+    listener_id="browser",
+    transport="wss",
+  )
+  let rendered = logger.render(record).unwrap()
+  assert_true(rendered.contains("\"listener_id\":\"browser\""))
+  assert_true(rendered.contains("\"transport\":\"wss\""))
+}

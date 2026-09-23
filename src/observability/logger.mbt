@@ -22,6 +22,8 @@ pub struct LogRecord {
   client_id : String
   principal : String
   peer : String
+  listener_id : String
+  transport : String
   reason : String
   snapshot_revision : String
 }
@@ -36,6 +38,8 @@ pub fn LogRecord::new(
   client_id? : String = "",
   principal? : String = "",
   peer? : String = "",
+  listener_id? : String = "",
+  transport? : String = "",
   reason? : String = "",
   snapshot_revision? : String = "",
 ) -> LogRecord {
@@ -48,6 +52,8 @@ pub fn LogRecord::new(
     client_id,
     principal,
     peer,
+    listener_id,
+    transport,
     reason,
     snapshot_revision,
   }
@@ -126,6 +132,12 @@ pub fn Logger::render(self : Logger, record : LogRecord) -> String? {
       if record.peer != "" {
         line = line + " peer=" + record.peer
       }
+      if record.listener_id != "" {
+        line = line + " listener_id=" + record.listener_id
+      }
+      if record.transport != "" {
+        line = line + " transport=" + record.transport
+      }
       if record.reason != "" {
         line = line + " reason=" + record.reason
       }
@@ -147,6 +159,12 @@ pub fn Logger::render(self : Logger, record : LogRecord) -> String? {
         ("reason", record.reason),
         ("snapshot_revision", record.snapshot_revision),
       ])
+      if record.listener_id != "" {
+        fields.set("listener_id", record.listener_id)
+      }
+      if record.transport != "" {
+        fields.set("transport", record.transport)
+      }
       Some(@json.to_json(fields).stringify())
     }
   }
