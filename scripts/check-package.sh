@@ -38,7 +38,16 @@ for required in moon.mod README.md README.zh_CN.md LICENSE CHANGELOG.md THIRD_PA
   docs/persistence.md docs/persistence.zh_CN.md \
   docs/compatibility.md docs/compatibility.zh_CN.md \
   docs/architecture.md docs/architecture.zh_CN.md \
-  examples/basic_pubsub.sh src/cmd/broker/main.mbt; do
+  examples/basic_pubsub.sh src/cmd/broker/main.mbt \
+  tests/integration/management_admin.mjs tests/integration/management_admin.sh \
+  tests/integration/management_auth_kick.mjs tests/integration/management_auth_kick.sh \
+  tests/integration/management_snapshot_admin.mjs tests/integration/management_snapshot_admin.sh \
+  tests/integration/management_runtime_admin_smoke.mjs \
+  tests/integration/management_admin_performance.mjs \
+  scripts/verify-management-admin-performance.sh \
+  scripts/verify-management-admin-docker.sh \
+  scripts/verify-management-auth-kick-docker.sh \
+  scripts/verify-management-snapshot-admin-docker.sh; do
   grep -qx "${required}" "${package_list}" || { echo "release package missing ${required}" >&2; exit 1; }
 done
 if grep -Ev '^(moon\.mod|README(\.zh_CN)?\.md|LICENSE|CHANGELOG\.md|THIRD_PARTY_NOTICES\.md|Dockerfile|\.gitignore|docs/|examples/|scripts/|src/|tests/|tools/)' "${package_list}" | grep -q .; then
