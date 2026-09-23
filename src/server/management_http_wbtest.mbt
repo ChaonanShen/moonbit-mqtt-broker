@@ -13,6 +13,8 @@ fn management_http_fixture(
   scopes? : String = "metrics,read",
   request_burst? : Int = 100,
   connection_burst? : Int = 200,
+  request_timeout_ms? : Int = 5000,
+  write_timeout_ms? : Int = 2000,
 ) -> ManagementHttpFixture raise {
   let server_config = ServerConfig::default()
   let state = @router.BrokerState::new(server_config.broker_config())
@@ -21,6 +23,8 @@ fn management_http_fixture(
     token_file="/fixture/tokens",
     request_burst~,
     connection_burst~,
+    request_timeout_ms~,
+    write_timeout_ms~,
   ).unwrap()
   let ledger = state.resource_ledger()
   let budget = @management.ManagementBudget::new(config, ledger).unwrap()
@@ -45,7 +49,7 @@ fn management_http_fixture(
   ).unwrap()
   let rejects = @management.ManagementRejections::new()
   let handler = ManagementHttp::new(
-    config, tokens, cache, rejects, "fixture-boot", now,
+    config, tokens, cache, budget, rejects, "fixture-boot", now,
   ).unwrap()
   { handler, cache, budget, ledger, rejections: rejects, now }
 }
@@ -209,6 +213,126 @@ test "management monotonic clock failure is unavailable rather than rate limit" 
   assert_true(body.has_prefix("HTTP/1.1 503 Service Unavailable"))
   assert_eq(f.rejections.value(@management.RejectedStale), 2L)
   assert_eq(f.rejections.value(@management.RejectedRate), 0L)
+  f.cache.close()
+  assert_true(f.budget.close())
+}
+
+///|
+async test "management TCP serves one request and closes each socket" {
+  let f = management_http_fixture()
+  @async.with_task_group() <| group => {
+    let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    defer listener.close()
+    let server = group.spawn(() => {
+      for _ in 0..<3 {
+        let (connection, _) = listener.accept()
+        f.handler.serve_connection(connection)
+      }
+    })
+    let first = @socket.Tcp::connect(listener.addr)
+    first.write(b"GET /health/live HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    let first_text = management_test_text(first.read_all().binary()).unwrap()
+    assert_true(first_text.has_prefix("HTTP/1.1 200 OK"))
+    assert_true(first_text.contains("{\"status\":\"live\"}"))
+    first.close()
+    let second = @socket.Tcp::connect(listener.addr)
+    second.write(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    let denied = management_test_text(second.read_all().binary()).unwrap()
+    assert_true(denied.has_prefix("HTTP/1.1 401 Unauthorized"))
+    second.close()
+    let third = @socket.Tcp::connect(listener.addr)
+    third.write(
+      @utf8.encode(
+        "GET /v1/status HTTP/1.1\r\nHost: localhost\r\nAuthorization: " +
+        management_test_token() +
+        "\r\n\r\n",
+      ),
+    )
+    let status = management_test_text(third.read_all().binary()).unwrap()
+    assert_true(status.has_prefix("HTTP/1.1 200 OK"))
+    assert_true(status.contains("\"api_version\":\"1\""))
+    third.close()
+    @async.with_timeout(3000, () => server.wait())
+  }
+  assert_eq(f.budget.active_count(), 0)
+  f.cache.close()
+  assert_true(f.budget.close())
+  assert_eq(f.ledger.occupied(), 0L)
+}
+
+///|
+async test "malformed management HTTP is rejected over a real socket" {
+  let f = management_http_fixture()
+  @async.with_task_group() <| group => {
+    let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    defer listener.close()
+    let server = group.spawn(() => {
+      let (connection, _) = listener.accept()
+      f.handler.serve_connection(connection)
+    })
+    let client = @socket.Tcp::connect(listener.addr)
+    client.write(b"GET /health/live HTTP/1.1\nHost: localhost\n\n")
+    let text = management_test_text(client.read_all().binary()).unwrap()
+    assert_true(text.has_prefix("HTTP/1.1 400 Bad Request"))
+    assert_true(text.contains("\"code\":\"bad_request\""))
+    client.close()
+    @async.with_timeout(3000, () => server.wait())
+  }
+  assert_eq(f.budget.active_count(), 0)
+  assert_eq(f.rejections.value(@management.RejectedParse), 1L)
+  f.cache.close()
+  assert_true(f.budget.close())
+}
+
+///|
+async test "slow management header times out and returns its slot" {
+  let f = management_http_fixture(request_timeout_ms=100, write_timeout_ms=100)
+  @async.with_task_group() <| group => {
+    let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    defer listener.close()
+    let server = group.spawn(() => {
+      let (connection, _) = listener.accept()
+      f.handler.serve_connection(connection)
+    })
+    let client = @socket.Tcp::connect(listener.addr)
+    client.write(b"GET /health/live HTTP/1.1\r\nHost: ")
+    @async.sleep(200)
+    assert_eq(client.read_some(), None)
+    client.close()
+    @async.with_timeout(3000, () => server.wait())
+  }
+  assert_eq(f.budget.active_count(), 0)
+  assert_eq(f.rejections.value(@management.RejectedDeadline), 1L)
+  f.cache.close()
+  assert_true(f.budget.close())
+  assert_eq(f.ledger.occupied(), 0L)
+}
+
+///|
+async test "full management request pool closes excess socket" {
+  let f = management_http_fixture()
+  let held : Array[@management.ManagementRequestLease] = []
+  for _ in 0..<16 {
+    held.push(f.budget.acquire().unwrap())
+  }
+  @async.with_task_group() <| group => {
+    let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    defer listener.close()
+    let server = group.spawn(() => {
+      let (connection, _) = listener.accept()
+      f.handler.serve_connection(connection)
+    })
+    let client = @socket.Tcp::connect(listener.addr)
+    client.write(b"GET /health/live HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    let close_result = client.read_some() catch { _ => None }
+    assert_eq(close_result, None)
+    client.close()
+    @async.with_timeout(3000, () => server.wait())
+  }
+  assert_eq(f.rejections.value(@management.RejectedCapacity), 1L)
+  for lease in held {
+    assert_true(lease.release())
+  }
   f.cache.close()
   assert_true(f.budget.close())
 }

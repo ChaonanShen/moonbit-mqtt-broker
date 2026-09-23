@@ -22,6 +22,11 @@ pub fn HttpParser::new(
 }
 
 ///|
+pub fn HttpParser::buffered_bytes(self : HttpParser) -> Int {
+  self.raw.length()
+}
+
+///|
 fn http_token_byte(code : Int) -> Bool {
   if (code >= 48 && code <= 57) ||
     (code >= 65 && code <= 90) ||
