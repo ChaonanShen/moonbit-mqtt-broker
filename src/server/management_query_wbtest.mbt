@@ -198,3 +198,53 @@ test "retained metadata preflight rejects escape expansion before JSON copy" {
   assert_eq(state.retained_count(), 1)
   assert_eq(state.admin_retained_view(name).unwrap().payload_bytes, 1L)
 }
+
+///|
+async test "oversized escaped retained row returns finite 422 without cursor" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  assert_true(state.enable_management_index())
+  let name = @utf8.decode(Bytes::make(33000, 34))
+  ignore(
+    state
+    .apply(
+      @router.Publish({
+        origin: @router.PublishOrigin::Internal,
+        topic: @topic.TopicName::new(name).unwrap(),
+        payload: b"x",
+        qos: @session.QoS0,
+        retain: true,
+      }),
+    )
+    .unwrap(),
+  )
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let config_b = @management.ManagementConfig::new(
+    enabled=true,
+    token_file="/fixture/tokens",
+    details_enabled=true,
+    max_bytes_total=33554432L,
+  ).unwrap()
+  let management = ManagementRuntime::new(
+    listener,
+    { config: config_b, tokens: lifecycle_startup().tokens },
+    state.resource_ledger(),
+  ).unwrap()
+  let driver = RouterDriver::new(BrokerRuntime::new(config, state), management~)
+  assert_true(
+    driver.enable_management_connection_index(config.max_connections()),
+  )
+  let spec : @management.QuerySpec = {
+    kind: @management.Retained,
+    target: "",
+    actor_token_id: "reader",
+    limit: 50,
+    cursor: None,
+    filters: "",
+  }
+  let result = driver.management_query_result(spec, management)
+  assert_eq(result.status, @http_transport.Unprocessable)
+  assert_true(@utf8.decode(result.body).contains("result_too_large"))
+  assert_eq(management.cursor_table.unwrap().live_count(), 0)
+  management.close()
+}
