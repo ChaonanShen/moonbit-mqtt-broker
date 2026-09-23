@@ -33,6 +33,7 @@ pub struct ManagementQueryMailbox {
   queue : @async.Queue[ManagementQueryEvent]
   priv slots : Array[ManagementQuerySlot]
   mut wake : @async.Queue[Unit]?
+  mut closed : Bool
 }
 
 ///|
@@ -48,7 +49,12 @@ pub fn ManagementQueryMailbox::new(capacity : Int) -> ManagementQueryMailbox {
       signal: @async.Queue(kind=Blocking(1)),
     })
   }
-  { queue: @async.Queue(kind=Blocking(capacity)), slots, wake: None }
+  {
+    queue: @async.Queue(kind=Blocking(capacity)),
+    slots,
+    wake: None,
+    closed: false,
+  }
 }
 
 ///|
@@ -64,6 +70,9 @@ pub fn ManagementQueryMailbox::submit(
   self : ManagementQueryMailbox,
   spec : @management.QuerySpec,
 ) -> ManagementQueryTicket? {
+  if self.closed {
+    return None
+  }
   for slot in 0..<self.slots.length() {
     let state = self.slots[slot]
     if !state.occupied && state.generation < 9223372036854775807L {
@@ -183,4 +192,24 @@ pub fn ManagementQueryMailbox::active_count(
     }
   }
   active
+}
+
+///|
+fn ManagementQueryMailbox::close(self : ManagementQueryMailbox) -> Unit {
+  if self.closed {
+    return
+  }
+  self.closed = true
+  for ;; {
+    let event = self.queue.try_get() catch { _ => None }
+    match event {
+      Some(event) =>
+        self.produce(event.ticket, {
+          status: @http_transport.ServiceUnavailable,
+          body: b"{\"error\":{\"code\":\"unavailable\"}}",
+        })
+      None => break
+    }
+  }
+  self.queue.close(clear=true)
 }

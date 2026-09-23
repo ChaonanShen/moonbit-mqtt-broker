@@ -35,6 +35,7 @@ pub struct ManagementCommandMailbox {
   queue : @async.Queue[ManagementCommandEvent]
   priv slots : Array[ManagementCommandSlot]
   mut wake : @async.Queue[Unit]?
+  mut closed : Bool
 }
 
 ///|
@@ -51,7 +52,12 @@ pub fn ManagementCommandMailbox::new(
       signal: @async.Queue(kind=Blocking(1)),
     })
   }
-  { queue: @async.Queue(kind=Blocking(capacity)), slots, wake: None }
+  {
+    queue: @async.Queue(kind=Blocking(capacity)),
+    slots,
+    wake: None,
+    closed: false,
+  }
 }
 
 ///|
@@ -77,6 +83,9 @@ pub fn ManagementCommandMailbox::submit(
   spec : @management.CommandSpec,
   actor : @management.AdminPrincipal,
 ) -> ManagementCommandTicket? {
+  if self.closed {
+    return None
+  }
   for slot in 0..<self.slots.length() {
     let state = self.slots[slot]
     if !state.occupied && state.generation < 9223372036854775807L {
@@ -110,6 +119,9 @@ fn ManagementCommandMailbox::schedule_run(
   operation_id : String,
   spec : @management.CommandSpec,
 ) -> Bool {
+  if self.closed {
+    return false
+  }
   let accepted = self.queue.try_put(RunCommand(operation_id, spec)) catch {
     _ => false
   }
@@ -188,4 +200,32 @@ pub fn ManagementCommandMailbox::release(
     state.ready = false
     state.reply = None
   }
+}
+
+///|
+/// Return accepted-but-unstarted Run IDs to the driver for terminal shutdown
+/// accounting. Queued HTTP submissions receive a bounded unavailable reply.
+fn ManagementCommandMailbox::close(
+  self : ManagementCommandMailbox,
+) -> Array[String] {
+  let queued : Array[String] = []
+  if self.closed {
+    return queued
+  }
+  self.closed = true
+  for ;; {
+    let event = self.queue.try_get() catch { _ => None }
+    match event {
+      Some(SubmitCommand(ticket, _, _)) =>
+        self.produce(ticket, {
+          status: @http_transport.ServiceUnavailable,
+          body: b"{\"error\":{\"code\":\"unavailable\"}}",
+          location: None,
+        })
+      Some(RunCommand(operation_id, _)) => queued.push(operation_id)
+      None => break
+    }
+  }
+  self.queue.close(clear=true)
+  queued
 }

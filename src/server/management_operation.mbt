@@ -251,3 +251,117 @@ fn RouterDriver::run_management_kick(
     sink.try_close(AdminKick)
   }
 }
+
+///|
+/// Fixed work per maintenance turn; no whole-table sweep.
+fn RouterDriver::maintain_management(self : RouterDriver) -> Unit {
+  if self.management is Some(active) {
+    let now = @budget.monotonic_ms()
+    if active.cursor_table is Some(table) {
+      ignore(table.cleanup(now, 16))
+    }
+    if active.operations is Some(table) {
+      ignore(table.cleanup(now, 16))
+    }
+  }
+}
+
+///|
+/// After acceptors and supervisor tasks stop, account for queued and
+/// unconfirmed work. A sent close signal is not reported as a proven socket
+/// close; the terminal error preserves that uncertainty.
+fn RouterDriver::shutdown_management(
+  self : RouterDriver,
+  bus : EventBus,
+) -> Unit {
+  let active = match self.management {
+    Some(value) => value
+    None => return
+  }
+  let queued = bus.close_management()
+  let table = match active.operations {
+    Some(value) => value
+    None => return
+  }
+  let now = @budget.monotonic_ms()
+  let now_wall = @async.now()
+  for id in queued {
+    if table.get_internal(id) is Some(record) &&
+      record.state == @management.Accepted {
+      if record.kind == @management.Kick && active.pending_kick_reservations > 0 {
+        active.pending_kick_reservations -= 1
+      }
+      ignore(
+        table.finish(
+          id,
+          false,
+          false,
+          false,
+          false,
+          Some("shutdown"),
+          None,
+          None,
+          now_wall,
+          now,
+        ),
+      )
+      if active.audit is Some(ring) {
+        ignore(
+          ring.append({
+            sequence: 0L,
+            timestamp_ms: now_wall,
+            actor_token_id: record.actor_token_id,
+            operation_id: id,
+            kind: record.kind,
+            target: record.target,
+            phase: "failed",
+            result: "shutdown",
+            effect_applied: false,
+            state_revision: None,
+          }),
+        )
+      }
+    }
+  }
+  self.poll_management_kicks()
+  let unconfirmed : Array[ConnectionId] = []
+  for connection_id, watch in self.management_closing {
+    if table.get_internal(watch.operation_id) is Some(record) &&
+      record.state == @management.Running {
+      ignore(
+        table.finish(
+          watch.operation_id,
+          false,
+          false,
+          false,
+          true,
+          Some("shutdown_effect_uncertain"),
+          None,
+          None,
+          now_wall,
+          now,
+        ),
+      )
+      if active.audit is Some(ring) {
+        ignore(
+          ring.append({
+            sequence: 0L,
+            timestamp_ms: now_wall,
+            actor_token_id: record.actor_token_id,
+            operation_id: watch.operation_id,
+            kind: @management.Kick,
+            target: record.target,
+            phase: "failed",
+            result: "shutdown_effect_uncertain",
+            effect_applied: false,
+            state_revision: None,
+          }),
+        )
+      }
+    }
+    unconfirmed.push(connection_id)
+  }
+  for connection_id in unconfirmed {
+    self.management_closing.remove(connection_id)
+  }
+}
