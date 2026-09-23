@@ -49,6 +49,8 @@ chmod 0600 "${WORK_DIR}/tokens"
   --management-token-file "${WORK_DIR}/tokens" \
   --management-snapshot-interval-ms 100 \
   --management-snapshot-max-age-ms 500 \
+  --management-request-rate 10000 --management-request-burst 20000 \
+  --management-connection-rate 10000 --management-connection-burst 20000 \
   >"${WORK_DIR}/broker.log" 2>&1 &
 BROKER_PID="$!"
 for _ in $(seq 1 100); do
@@ -90,6 +92,17 @@ grep -qF '"version":"0.2.0"' "${WORK_DIR}/status"
 ! grep -qF "${WORK_DIR}/tokens" "${WORK_DIR}/status"
 ! grep -qF "${METRICS_TOKEN}" "${WORK_DIR}/broker.log"
 ! grep -qF "${READ_TOKEN}" "${WORK_DIR}/broker.log"
+fd_before="$(find "/proc/${BROKER_PID}/fd" -maxdepth 1 -type l | wc -l)"
+node tests/integration/management_read.mjs "${admin_port}" "${mqtt_port}" \
+  "${METRICS_TOKEN}" "${READ_TOKEN}" "${MANAGEMENT_STRESS_REQUESTS:-10000}" \
+  >"${WORK_DIR}/management-process.json"
+cat "${WORK_DIR}/management-process.json"
+sleep 0.2
+fd_after="$(find "/proc/${BROKER_PID}/fd" -maxdepth 1 -type l | wc -l)"
+if (( fd_after > fd_before + 2 )); then
+  echo "management fd growth: before=${fd_before} after=${fd_after}" >&2
+  exit 1
+fi
 # Keep one partial HTTP request blocked in read while SIGTERM drains it.
 node -e '
 const net=require("net"),fs=require("fs");
