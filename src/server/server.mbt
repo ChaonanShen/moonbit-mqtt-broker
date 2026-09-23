@@ -220,6 +220,7 @@ pub async fn serve(
     }
   }
   let allocator = ConnectionIdAllocator::new()
+  errdefer @async.protect_from_cancel(() => driver.shutdown_authentication())
   run_with_snapshot_writer(persistence, driver, () => {
     @async.with_task_group() <| group => {
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
@@ -365,6 +366,7 @@ pub async fn serve_once(
       )
     None => RouterDriver::new(runtime, auth_executor?, auth_infrastructure?)
   }
+  errdefer @async.protect_from_cancel(() => driver.shutdown_authentication())
   run_with_snapshot_writer(persistence, driver, () => {
     @async.with_task_group() <| group => {
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {

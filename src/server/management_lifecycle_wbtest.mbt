@@ -96,3 +96,148 @@ async test "driver observation event refreshes cache without broker mutation" {
   management.close()
   assert_eq(state.resource_ledger().occupied(), 0L)
 }
+
+///|
+async test "second listener bind failure releases first listener port" {
+  let config = ServerConfig::default()
+  let blocker = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let first = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let mqtt_address = first.addr
+  first.close()
+  let startup = lifecycle_startup()
+  let enabled = @management.ManagementConfig::new(
+    enabled=true,
+    token_file="/fixture/tokens",
+    listen=blocker.addr.to_string(),
+  ).unwrap()
+  let completed = @async.with_timeout_opt(1000, () => {
+    let mut failed = false
+    run(
+      mqtt_address.to_string(),
+      config,
+      @router.BrokerState::new(config.broker_config()),
+      management={ config: enabled, tokens: startup.tokens },
+    ) catch {
+      _ => failed = true
+    }
+    assert_true(failed)
+  })
+  assert_true(completed is Some(_))
+  let rebound = @socket.TcpServer(mqtt_address, reuse_addr=true)
+  rebound.close()
+  blocker.close()
+}
+
+///|
+async test "management accept failure drains auth worker and ledger" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  let baseline_tickets = state.resource_ledger().live_tickets()
+  let password = @security.PasswordDatabase::parse(
+    "sensor01:$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM\n",
+  ).unwrap()
+  let policy = @security.SecurityPolicy::new(
+    allow_anonymous=false,
+    passwords=password,
+  )
+  let mqtt_listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let management_listener = @socket.TcpServer(
+    @socket.Addr::parse("127.0.0.1:0"),
+  )
+  let management = ManagementRuntime::new(
+    management_listener,
+    lifecycle_startup(),
+    state.resource_ledger(),
+  ).unwrap()
+  // Enter serve with a mandatory management acceptor that cannot accept.
+  management_listener.close()
+  let completed = @async.with_timeout_opt(3000, () => {
+    let mut failed = false
+    serve(mqtt_listener, config, state, security=policy, management~) catch {
+      _ => failed = true
+    }
+    assert_true(failed)
+  })
+  assert_true(completed is Some(_))
+  management.close()
+  mqtt_listener.close()
+  assert_eq(state.resource_ledger().occupied(), 0L)
+  assert_eq(state.resource_ledger().live_tickets(), baseline_tickets)
+}
+
+///|
+async test "failed final snapshot still drains management ownership" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  ignore(
+    state
+    .apply(
+      @router.CreateSessionWith({
+        client_id: @session.ClientId::new("dirty-management").unwrap(),
+        mode: @session.Persistent,
+        attached: false,
+      }),
+    )
+    .unwrap(),
+  )
+  assert_true(state.snapshot_revision() > 0L)
+  let baseline_tickets = state.resource_ledger().live_tickets()
+  let path = "/tmp/mqtt-management-final-failure-" +
+    @management.new_boot_id().unwrap()
+  let disk = @persistence.PersistenceConfig::new(
+    path,
+    debounce_ms=20L,
+    max_delay_ms=20L,
+    retry_ms=20L,
+  ).unwrap()
+  let store = @persistence.SnapshotStore::open(disk).unwrap()
+  let persistence = PersistenceRuntime::new(store, disk).unwrap()
+  // A closed sink cannot accept the final dirty revision.
+  persistence.sink.close()
+  let mqtt_listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let management_listener = @socket.TcpServer(
+    @socket.Addr::parse("127.0.0.1:0"),
+  )
+  let management = ManagementRuntime::new(
+    management_listener,
+    lifecycle_startup(),
+    state.resource_ledger(),
+    persistence~,
+  ).unwrap()
+  let completed = @async.with_timeout_opt(3000, () => {
+    let mut failed = false
+    serve(
+      mqtt_listener,
+      config,
+      state,
+      persistence~,
+      shutdown_requested=() => true,
+      management~,
+    ) catch {
+      _ => failed = true
+    }
+    assert_true(failed)
+  })
+  assert_true(completed is Some(_))
+  management.close()
+  persistence.close()
+  mqtt_listener.close()
+  assert_eq(state.resource_ledger().live_tickets(), baseline_tickets)
+}
+
+///|
+async test "repeated management startup and close returns fd and ticket baseline" {
+  for _ in 0..<25 {
+    let config = ServerConfig::default()
+    let state = @router.BrokerState::new(config.broker_config())
+    let ledger = state.resource_ledger()
+    let baseline = ledger.live_tickets()
+    let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    let address = listener.addr
+    let runtime = ManagementRuntime::new(listener, lifecycle_startup(), ledger).unwrap()
+    runtime.close()
+    assert_eq(ledger.live_tickets(), baseline)
+    let rebound = @socket.TcpServer(address, reuse_addr=true)
+    rebound.close()
+  }
+}
