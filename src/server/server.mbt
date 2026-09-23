@@ -745,10 +745,7 @@ pub async fn run_listeners(
         @async.now(),
         @observability.Info,
         "broker_listening",
-        message="MQTT listener " +
-          entry.config.id +
-          " listening on " +
-          entry.socket.addr.to_string(),
+        message="MQTT broker listening on " + entry.socket.addr.to_string(),
         peer=entry.socket.addr.to_string(),
         listener_id=entry.config.id,
         transport=entry.config.transport,

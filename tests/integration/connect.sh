@@ -3,6 +3,9 @@ set -euo pipefail
 
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${REPO_ROOT}"
+moon build --target native
+readonly BROKER_EXECUTABLE="${REPO_ROOT}/_build/native/debug/build/cmd/broker/broker.exe"
+test -x "${BROKER_EXECUTABLE}"
 
 BROKER_PID=""
 BROKER_LOG=""
@@ -25,11 +28,11 @@ free_port() {
 start_broker() {
   local port="$1"
   BROKER_LOG="$(mktemp)"
-  stdbuf -oL moon run --target native src/cmd/broker -- \
+  timeout -k 2 15 stdbuf -oL "${BROKER_EXECUTABLE}" \
     --listen "127.0.0.1:${port}" --max-packet-size 1048576 --once \
     >"${BROKER_LOG}" 2>&1 &
   BROKER_PID="$!"
-  for _ in $(seq 1 100); do
+  for _ in $(seq 1 200); do
     if grep -q 'MQTT broker listening' "${BROKER_LOG}"; then
       return
     fi
@@ -37,7 +40,7 @@ start_broker() {
       sed -n '1,120p' "${BROKER_LOG}" >&2
       return 1
     fi
-    sleep 0.02
+    sleep 0.05
   done
   sed -n '1,120p' "${BROKER_LOG}" >&2
   return 1
