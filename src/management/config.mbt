@@ -140,6 +140,9 @@ pub fn ManagementConfig::new(
   if enabled && config.required_bytes() > max_bytes_total {
     return Err(Invalid("max_bytes_total"))
   }
+  if enabled && max_response_bytes < worst_case_response_bytes() {
+    return Err(Invalid("max_response_bytes"))
+  }
   Ok(config)
 }
 

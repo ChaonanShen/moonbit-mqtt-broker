@@ -1,0 +1,126 @@
+# HELP moonbit_mqtt_broker_build_info Broker build information
+# TYPE moonbit_mqtt_broker_build_info gauge
+moonbit_mqtt_broker_build_info{version="0.2.0",target="native"} 1
+# HELP moonbit_mqtt_broker_uptime_seconds Process uptime in seconds
+# TYPE moonbit_mqtt_broker_uptime_seconds gauge
+moonbit_mqtt_broker_uptime_seconds 2
+# HELP moonbit_mqtt_broker_connections_registered Registered MQTT transports
+# TYPE moonbit_mqtt_broker_connections_registered gauge
+moonbit_mqtt_broker_connections_registered 0
+# HELP moonbit_mqtt_broker_connections_active Active MQTT connections
+# TYPE moonbit_mqtt_broker_connections_active gauge
+moonbit_mqtt_broker_connections_active 0
+# HELP moonbit_mqtt_broker_sessions Broker sessions
+# TYPE moonbit_mqtt_broker_sessions gauge
+moonbit_mqtt_broker_sessions 0
+# HELP moonbit_mqtt_broker_subscriptions Installed subscriptions
+# TYPE moonbit_mqtt_broker_subscriptions gauge
+moonbit_mqtt_broker_subscriptions 0
+# HELP moonbit_mqtt_broker_retained_messages Retained messages
+# TYPE moonbit_mqtt_broker_retained_messages gauge
+moonbit_mqtt_broker_retained_messages 0
+# HELP moonbit_mqtt_broker_outbound_inflight Outbound QoS 1 and 2 inflight messages
+# TYPE moonbit_mqtt_broker_outbound_inflight gauge
+moonbit_mqtt_broker_outbound_inflight 0
+# HELP moonbit_mqtt_broker_outbound_pending Outbound QoS 1 and 2 pending messages
+# TYPE moonbit_mqtt_broker_outbound_pending gauge
+moonbit_mqtt_broker_outbound_pending 0
+# HELP moonbit_mqtt_broker_qos2_inbound Inbound QoS 2 exchange states
+# TYPE moonbit_mqtt_broker_qos2_inbound gauge
+moonbit_mqtt_broker_qos2_inbound 0
+# HELP moonbit_mqtt_broker_publish_packets_received_total PUBLISH packets processed
+# TYPE moonbit_mqtt_broker_publish_packets_received_total counter
+moonbit_mqtt_broker_publish_packets_received_total 0
+# HELP moonbit_mqtt_broker_publish_actions_total Downstream publish actions created
+# TYPE moonbit_mqtt_broker_publish_actions_total counter
+moonbit_mqtt_broker_publish_actions_total 0
+# HELP moonbit_mqtt_broker_delivery_dropped_total Dropped deliveries
+# TYPE moonbit_mqtt_broker_delivery_dropped_total counter
+moonbit_mqtt_broker_delivery_dropped_total 0
+# HELP moonbit_mqtt_broker_qos2_received_total QoS 2 inbound packets received
+# TYPE moonbit_mqtt_broker_qos2_received_total counter
+moonbit_mqtt_broker_qos2_received_total 0
+# HELP moonbit_mqtt_broker_qos2_duplicates_total QoS 2 duplicate packets
+# TYPE moonbit_mqtt_broker_qos2_duplicates_total counter
+moonbit_mqtt_broker_qos2_duplicates_total 0
+# HELP moonbit_mqtt_broker_qos2_rejected_total QoS 2 rejected packets
+# TYPE moonbit_mqtt_broker_qos2_rejected_total counter
+moonbit_mqtt_broker_qos2_rejected_total 0
+# HELP moonbit_mqtt_broker_auth_requests_total Authentication attempts
+# TYPE moonbit_mqtt_broker_auth_requests_total counter
+moonbit_mqtt_broker_auth_requests_total 0
+# HELP moonbit_mqtt_broker_auth_successes_total Successful authentications
+# TYPE moonbit_mqtt_broker_auth_successes_total counter
+moonbit_mqtt_broker_auth_successes_total 0
+# HELP moonbit_mqtt_broker_auth_failures_total Failed authentications
+# TYPE moonbit_mqtt_broker_auth_failures_total counter
+moonbit_mqtt_broker_auth_failures_total 0
+# HELP moonbit_mqtt_broker_auth_bad_credentials_total Bad credential decisions
+# TYPE moonbit_mqtt_broker_auth_bad_credentials_total counter
+moonbit_mqtt_broker_auth_bad_credentials_total 0
+# HELP moonbit_mqtt_broker_auth_resource_rejections_total Authentication resource rejections
+# TYPE moonbit_mqtt_broker_auth_resource_rejections_total counter
+moonbit_mqtt_broker_auth_resource_rejections_total 0
+# HELP moonbit_mqtt_broker_auth_deadline_rejections_total Authentication deadline rejections
+# TYPE moonbit_mqtt_broker_auth_deadline_rejections_total counter
+moonbit_mqtt_broker_auth_deadline_rejections_total 0
+# HELP moonbit_mqtt_broker_auth_late_results_total Late authentication results
+# TYPE moonbit_mqtt_broker_auth_late_results_total counter
+moonbit_mqtt_broker_auth_late_results_total 0
+# HELP moonbit_mqtt_broker_auth_tasks_outstanding Unreaped authentication tasks
+# TYPE moonbit_mqtt_broker_auth_tasks_outstanding gauge
+moonbit_mqtt_broker_auth_tasks_outstanding 0
+# HELP moonbit_mqtt_broker_acl_denials_total ACL denials
+# TYPE moonbit_mqtt_broker_acl_denials_total counter
+moonbit_mqtt_broker_acl_denials_total 0
+# HELP moonbit_mqtt_broker_tls_handshake_failures_total TLS handshake failures
+# TYPE moonbit_mqtt_broker_tls_handshake_failures_total counter
+moonbit_mqtt_broker_tls_handshake_failures_total 0
+# HELP moonbit_mqtt_broker_managed_committed_bytes Managed committed bytes
+# TYPE moonbit_mqtt_broker_managed_committed_bytes gauge
+moonbit_mqtt_broker_managed_committed_bytes 0
+# HELP moonbit_mqtt_broker_managed_reserved_bytes Managed reserved bytes
+# TYPE moonbit_mqtt_broker_managed_reserved_bytes gauge
+moonbit_mqtt_broker_managed_reserved_bytes 0
+# HELP moonbit_mqtt_broker_managed_limit_bytes Managed global byte limit
+# TYPE moonbit_mqtt_broker_managed_limit_bytes gauge
+moonbit_mqtt_broker_managed_limit_bytes 0
+# HELP moonbit_mqtt_broker_resource_rejections_total Resource budget rejections
+# TYPE moonbit_mqtt_broker_resource_rejections_total counter
+moonbit_mqtt_broker_resource_rejections_total 0
+# HELP moonbit_mqtt_broker_snapshot_dirty_age_seconds Age of uncommitted snapshot state in seconds
+# TYPE moonbit_mqtt_broker_snapshot_dirty_age_seconds gauge
+moonbit_mqtt_broker_snapshot_dirty_age_seconds 0.000
+# HELP moonbit_mqtt_broker_snapshot_budget_deferred_total Snapshots deferred by budget
+# TYPE moonbit_mqtt_broker_snapshot_budget_deferred_total counter
+moonbit_mqtt_broker_snapshot_budget_deferred_total 0
+# HELP moonbit_mqtt_broker_resource_committed_bytes Committed bytes by fixed resource kind
+# TYPE moonbit_mqtt_broker_resource_committed_bytes gauge
+moonbit_mqtt_broker_resource_committed_bytes{resource="auth_request"} 5
+# HELP moonbit_mqtt_broker_resource_reserved_bytes Reserved bytes by fixed resource kind
+# TYPE moonbit_mqtt_broker_resource_reserved_bytes gauge
+moonbit_mqtt_broker_resource_reserved_bytes{resource="auth_request"} 2
+# HELP moonbit_mqtt_broker_resource_limit_bytes Byte cap by fixed resource kind
+# TYPE moonbit_mqtt_broker_resource_limit_bytes gauge
+moonbit_mqtt_broker_resource_limit_bytes{resource="auth_request"} 100
+# HELP moonbit_mqtt_broker_snapshot_state Snapshot persistence state
+# TYPE moonbit_mqtt_broker_snapshot_state gauge
+moonbit_mqtt_broker_snapshot_state{state="disabled"} 1
+moonbit_mqtt_broker_snapshot_state{state="healthy"} 0
+moonbit_mqtt_broker_snapshot_state{state="degraded"} 0
+# HELP moonbit_mqtt_broker_management_rejected_total Rejected management requests
+# TYPE moonbit_mqtt_broker_management_rejected_total counter
+moonbit_mqtt_broker_management_rejected_total{reason="parse"} 0
+moonbit_mqtt_broker_management_rejected_total{reason="auth"} 0
+moonbit_mqtt_broker_management_rejected_total{reason="role"} 0
+moonbit_mqtt_broker_management_rejected_total{reason="rate"} 0
+moonbit_mqtt_broker_management_rejected_total{reason="capacity"} 0
+moonbit_mqtt_broker_management_rejected_total{reason="deadline"} 0
+moonbit_mqtt_broker_management_rejected_total{reason="stale"} 0
+moonbit_mqtt_broker_management_rejected_total{reason="other"} 0
+# HELP moonbit_mqtt_broker_observation_age_seconds Age of cached observation in seconds
+# TYPE moonbit_mqtt_broker_observation_age_seconds gauge
+moonbit_mqtt_broker_observation_age_seconds 1.500
+# HELP moonbit_mqtt_broker_driver_progress_age_seconds Age of driver progress in seconds
+# TYPE moonbit_mqtt_broker_driver_progress_age_seconds gauge
+moonbit_mqtt_broker_driver_progress_age_seconds 0.500

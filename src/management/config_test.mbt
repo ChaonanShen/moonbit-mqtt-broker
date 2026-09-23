@@ -127,3 +127,28 @@ test "management numeric option boundaries" {
   assert_true(ManagementConfig::new(connection_burst=20000) is Ok(_))
   assert_true(ManagementConfig::new(max_bytes_total=0L) is Err(_))
 }
+
+///|
+test "enabled management response cap fits fixed worst-case schemas" {
+  let required = worst_case_response_bytes()
+  assert_true(required > 4096)
+  assert_true(required < 65536)
+  assert_true(
+    ManagementConfig::new(
+      enabled=true,
+      token_file="/tmp/tokens",
+      max_response_bytes=required - 1,
+      max_bytes_total=100000000L,
+    )
+    is Err(_),
+  )
+  assert_true(
+    ManagementConfig::new(
+      enabled=true,
+      token_file="/tmp/tokens",
+      max_response_bytes=required,
+      max_bytes_total=100000000L,
+    )
+    is Ok(_),
+  )
+}
