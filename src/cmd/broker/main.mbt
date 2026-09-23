@@ -842,6 +842,23 @@ async fn run_main() -> Unit {
   if once && management_config.enabled() {
     raise CliError("--once cannot be combined with management.enabled")
   }
+  if management_config.enabled() {
+    match @management.TokenDatabase::load(management_config.token_file()) {
+      Ok(_) => ()
+      Err(@management.TokenError::CryptoUnavailable) =>
+        raise CliError("management authentication requires libcrypto.so.3")
+      Err(@management.TokenError::TokenFileMissing) =>
+        raise CliError("management token file is unavailable")
+      Err(@management.TokenError::TokenFileTooLarge) =>
+        raise CliError("management token file exceeds 16384 bytes")
+      Err(@management.TokenError::TokenFileUnsafe) =>
+        raise CliError(
+          "management token file must be a private regular file owned by the broker user",
+        )
+      Err(@management.TokenError::InvalidTokenFile) =>
+        raise CliError("invalid management token file")
+    }
+  }
   let tls = match (tls_certificate_file, tls_private_key_file) {
     (None, None) => {
       if tls_timeout_option_used {
@@ -1102,12 +1119,12 @@ async fn run_main() -> Unit {
     print_resource_section_values(resources, "limits")
     return
   }
-  if management_config.enabled() {
-    raise CliError("management listener backend is not available yet")
-  }
   if check_config {
     println("configuration valid")
     return
+  }
+  if management_config.enabled() {
+    raise CliError("management listener backend is not available yet")
   }
   match data_dir {
     None =>
