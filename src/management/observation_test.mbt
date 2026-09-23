@@ -121,3 +121,40 @@ test "stopping and listener failures withdraw readiness" {
   assert_false(down.ready)
   assert_true(down.reasons.contains("listener_down"))
 }
+
+///|
+test "status JSON exposes precise string counters and no secret fields" {
+  let sample = {
+    ..sample_observation(),
+    sessions_total: 12L,
+    messages_sent: 9007199254740993L,
+    snapshot_committed_revision: Some(7L),
+  }
+  let json = @utf8.decode(encode_status(sample, 1500L, 5000L, 5000L)) catch {
+    _ => fail("status was not UTF-8")
+  }
+  assert_true(json.contains("\"api_version\":\"1\""))
+  assert_true(json.contains("\"sessions\":\"12\""))
+  assert_true(json.contains("\"messages_sent\":\"9007199254740993\""))
+  assert_true(json.contains("\"committed_revision\":\"7\""))
+  assert_false(json.contains("token"))
+  assert_false(json.contains("payload"))
+  assert_false(json.contains("password"))
+  let off = @utf8.decode(
+    encode_status(sample_observation(), 1500L, 5000L, 5000L),
+  ) catch {
+    _ => fail("status was not UTF-8")
+  }
+  assert_true(off.contains("\"committed_revision\":null"))
+}
+
+///|
+test "health JSON is deliberately minimal" {
+  let sample = sample_observation()
+  let healthy = evaluate_health(sample, 1500L, 5000L, 5000L)
+  assert_eq(encode_health_live(healthy), b"{\"status\":\"live\"}")
+  assert_eq(encode_health_ready(healthy), b"{\"status\":\"ready\"}")
+  let stale = evaluate_health(sample, 7000L, 5000L, 5000L)
+  assert_eq(encode_health_live(stale), b"{\"status\":\"unavailable\"}")
+  assert_eq(encode_health_ready(stale), b"{\"status\":\"unavailable\"}")
+}

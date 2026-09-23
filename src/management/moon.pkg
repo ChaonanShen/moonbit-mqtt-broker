@@ -1,5 +1,6 @@
 import {
   "moonbitlang/core/string",
   "moonbitlang/core/encoding/utf8",
+  "moonbitlang/core/json",
   "ChaonanShen/moonbit-mqtt-broker/management_native",
 }
