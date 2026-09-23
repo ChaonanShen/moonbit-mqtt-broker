@@ -121,9 +121,17 @@ async function adminOperation() {
       clientId:name,protocolVersion:4,clean:false,reconnectPeriod:0,connectTimeout:2000
     })
     await new Promise((resolve,reject)=>{
-      client.once('connect',resolve);client.once('error',reject)
+      const timer=setTimeout(()=>{
+        client.end(true)
+        reject(new Error('admin fixture MQTT connect timeout'))
+      },2500)
+      client.once('connect',()=>{clearTimeout(timer);resolve()})
+      client.once('error',error=>{clearTimeout(timer);reject(error)})
     })
-    await new Promise(resolve=>client.end(false,resolve))
+    await Promise.race([
+      new Promise(resolve=>client.end(false,resolve)),
+      delay(2500).then(()=>{throw new Error('admin fixture MQTT end timeout')})
+    ])
     let row
     for(let i=0;i<20;i++){
       const result=await adminRequest('GET','/v1/sessions?attached=false&limit=100')

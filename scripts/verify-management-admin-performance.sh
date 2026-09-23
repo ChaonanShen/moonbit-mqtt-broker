@@ -40,6 +40,7 @@ run_one() {
   local mode="$1" round="$2"
   container="moonbit-mqtt-perf-${mode}-${round}-$$"
   local args=(--listen "127.0.0.1:$MQTT_PORT"
+    --rate-limits-enabled false --per-ip-limits-enabled false
     --management-enabled true --management-listen "127.0.0.1:$ADMIN_PORT"
     --management-token-file /secrets/tokens --management-max-connections 32
     --management-max-bytes-total 33554432)
