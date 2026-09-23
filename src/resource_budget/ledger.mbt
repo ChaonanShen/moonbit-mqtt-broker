@@ -22,6 +22,9 @@ pub(all) enum ResourceKind {
   ControlRuntime
   ControlFrame
   ControlWork
+  ManagementInfrastructure
+  ManagementRequest
+  ManagementCache
 } derive(Eq, Hash, Debug)
 
 ///|
@@ -495,6 +498,9 @@ pub fn ResourceKind::name(self : ResourceKind) -> String {
     ControlRuntime => "control_runtime"
     ControlFrame => "control_frame"
     ControlWork => "control_work"
+    ManagementInfrastructure => "management_infrastructure"
+    ManagementRequest => "management_request"
+    ManagementCache => "management_cache"
   }
 }
 
