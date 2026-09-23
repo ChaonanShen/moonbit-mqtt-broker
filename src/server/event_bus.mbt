@@ -38,6 +38,8 @@ priv struct EventBus {
   mut observation_due : Bool
   mut observation_wait_events : Int
   mut management_queries : ManagementQueryMailbox?
+  mut management_commands : ManagementCommandMailbox?
+  mut command_turn : Bool
   mut since_management : Int
   mut deferred_data : DriverEvent?
   mut control_batch : Int
@@ -82,6 +84,8 @@ fn EventBus::new(
     observation_due: false,
     observation_wait_events: 0,
     management_queries: None,
+    management_commands: None,
+    command_turn: true,
     since_management: 0,
     deferred_data: None,
     control_batch: 0,
@@ -98,6 +102,49 @@ fn EventBus::attach_management_queries(
 ) -> Unit {
   self.management_queries = Some(mailbox)
   mailbox.set_wake(self.wake)
+}
+
+///|
+fn EventBus::attach_management_commands(
+  self : EventBus,
+  mailbox : ManagementCommandMailbox,
+) -> Unit {
+  self.management_commands = Some(mailbox)
+  mailbox.set_wake(self.wake)
+}
+
+///|
+fn EventBus::take_management_command(self : EventBus) -> DriverEvent? {
+  match self.management_commands {
+    None => None
+    Some(mailbox) =>
+      match mailbox.take() {
+        None => None
+        Some(command) => {
+          self.since_management = 0
+          Some(ManagementCommand(command))
+        }
+      }
+  }
+}
+
+///|
+fn EventBus::take_management(self : EventBus) -> DriverEvent? {
+  let event = if self.command_turn {
+    match self.take_management_command() {
+      Some(value) => Some(value)
+      None => self.take_management_query()
+    }
+  } else {
+    match self.take_management_query() {
+      Some(value) => Some(value)
+      None => self.take_management_command()
+    }
+  }
+  if event is Some(_) {
+    self.command_turn = !self.command_turn
+  }
+  event
 }
 
 ///|
@@ -374,8 +421,8 @@ async fn EventBus::next(self : EventBus) -> DriverEvent? {
       return None
     }
     if self.since_management >= 8 {
-      if self.take_management_query() is Some(query) {
-        return Some(query)
+      if self.take_management() is Some(event) {
+        return Some(event)
       }
     }
     if self.observation_due &&
@@ -416,8 +463,8 @@ async fn EventBus::next(self : EventBus) -> DriverEvent? {
     if self.observation_due {
       return Some(self.take_observation())
     }
-    if self.take_management_query() is Some(query) {
-      return Some(query)
+    if self.take_management() is Some(event) {
+      return Some(event)
     }
     self.wake.get() catch {
       _ => return None

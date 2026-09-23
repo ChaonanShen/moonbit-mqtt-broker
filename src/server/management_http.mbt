@@ -18,6 +18,8 @@ pub struct ManagementHttp {
   request_bucket : @budget.Bucket
   boot_id : String
   query_mailbox : ManagementQueryMailbox?
+  command_mailbox : ManagementCommandMailbox?
+  command_bucket : @budget.Bucket
   mut next_request_id : Int64
 }
 
@@ -31,6 +33,7 @@ pub fn ManagementHttp::new(
   boot_id : String,
   now_monotonic_ms : Int64,
   query_mailbox? : ManagementQueryMailbox,
+  command_mailbox? : ManagementCommandMailbox,
 ) -> Result[ManagementHttp, @budget.BudgetError] {
   if !config.enabled() {
     return Err(@budget.InvalidConfiguration)
@@ -53,6 +56,15 @@ pub fn ManagementHttp::new(
     Ok(value) => value
     Err(error) => return Err(error)
   }
+  let command_bucket = match
+    @budget.Bucket::new(
+      config.command_rate().to_int64(),
+      config.command_burst().to_int64(),
+      now_monotonic_ms,
+    ) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
   Ok({
     config,
     tokens,
@@ -63,6 +75,8 @@ pub fn ManagementHttp::new(
     request_bucket,
     boot_id,
     query_mailbox,
+    command_mailbox,
+    command_bucket,
     next_request_id: 1L,
   })
 }
@@ -112,6 +126,7 @@ fn ManagementHttp::encode(
   body : Bytes,
   body_type : @http_transport.HttpBodyType,
   allow? : @http_transport.HttpAllow,
+  location? : String,
 ) -> Bytes {
   match
     @http_transport.encode_response(
@@ -120,6 +135,7 @@ fn ManagementHttp::encode(
       body,
       self.config.max_response_bytes(),
       allow?,
+      location?,
     ) {
     Ok(value) => value
     Err(_) =>
@@ -508,4 +524,345 @@ pub async fn ManagementHttp::respond_details(
       )
   }
   self.encode(reply.status, reply.body, @http_transport.JsonBody)
+}
+
+///|
+pub async fn ManagementHttp::respond_command(
+  self : ManagementHttp,
+  head : @http_transport.HttpRequestHead,
+  same_read_suffix_bytes : Int,
+  now_monotonic_ms : Int64,
+) -> Bytes {
+  let request_id = match self.request_id() {
+    Some(value) => value
+    None =>
+      return self.encode(
+        @http_transport.ServiceUnavailable,
+        b"{\"error\":{\"code\":\"id_exhausted\"}}",
+        @http_transport.JsonBody,
+      )
+  }
+  if head.target.contains("%") ||
+    head.target.contains("?") ||
+    head.target.contains("#") ||
+    same_read_suffix_bytes != 0 ||
+    (head.content_length is Some(length) && length != 0) {
+    return self.reject(
+      @http_transport.BadRequest,
+      "bad_request",
+      request_id,
+      @management.RejectedParse,
+    )
+  }
+  for forbidden in ["transfer-encoding", "upgrade", "expect"] {
+    if management_header(head, forbidden) is Some(_) {
+      return self.reject(
+        @http_transport.BadRequest,
+        "bad_request",
+        request_id,
+        @management.RejectedParse,
+      )
+    }
+  }
+  let token = match management_header(head, "authorization") {
+    Some(value) => management_bearer(value)
+    None => None
+  }
+  let actor = match token {
+    Some(value) => self.tokens.authenticate(value)
+    None => None
+  }
+  let actor = match actor {
+    Some(value) => value
+    None =>
+      return self.reject(
+        @http_transport.Unauthorized,
+        "unauthenticated",
+        request_id,
+        @management.RejectedAuth,
+      )
+  }
+  if head.target == "/v1/config/reload" && head.method_name == "POST" {
+    if !actor.allows(@management.ConfigAdmin) {
+      return self.reject(
+        @http_transport.Forbidden,
+        "forbidden",
+        request_id,
+        @management.RejectedRole,
+      )
+    }
+    return self.reject(
+      @http_transport.NotImplemented,
+      "capability_unavailable",
+      request_id,
+      @management.RejectedOther,
+    )
+  }
+  if !actor.allows(@management.Operator) {
+    return self.reject(
+      @http_transport.Forbidden,
+      "forbidden",
+      request_id,
+      @management.RejectedRole,
+    )
+  }
+  let mut if_match : String? = None
+  let mut idempotency_key : String? = None
+  for header in head.headers {
+    if header.name == "if-match" {
+      if if_match is Some(_) {
+        return self.reject(
+          @http_transport.BadRequest,
+          "bad_request",
+          request_id,
+          @management.RejectedParse,
+        )
+      }
+      if_match = Some(header.value)
+    } else if header.name == "idempotency-key" {
+      if idempotency_key is Some(_) {
+        return self.reject(
+          @http_transport.BadRequest,
+          "bad_request",
+          request_id,
+          @management.RejectedParse,
+        )
+      }
+      idempotency_key = Some(header.value)
+    }
+  }
+  if if_match is None || idempotency_key is None {
+    return self.reject(
+      @http_transport.PreconditionRequired,
+      "precondition_required",
+      request_id,
+      @management.RejectedParse,
+    )
+  }
+  let spec = match
+    @management.parse_command(
+      head.method_name,
+      head.target,
+      if_match.unwrap(),
+      idempotency_key.unwrap(),
+      actor.token_id(),
+    ) {
+    Ok(value) => value
+    Err(_) =>
+      return self.reject(
+        @http_transport.BadRequest,
+        "bad_request",
+        request_id,
+        @management.RejectedParse,
+      )
+  }
+  if !self.config.operations_enabled() {
+    return self.reject(
+      @http_transport.ServiceUnavailable,
+      "operations_disabled",
+      request_id,
+      @management.RejectedOther,
+    )
+  }
+  if now_monotonic_ms < 0L ||
+    @budget.admit([(self.command_bucket, 1L)], now_monotonic_ms) is Err(_) {
+    return self.reject(
+      @http_transport.TooManyRequests,
+      "rate_limited",
+      request_id,
+      @management.RejectedRate,
+    )
+  }
+  let mailbox = match self.command_mailbox {
+    Some(value) => value
+    None =>
+      return self.reject(
+        @http_transport.ServiceUnavailable,
+        "unavailable",
+        request_id,
+        @management.RejectedOther,
+      )
+  }
+  let ticket = match mailbox.submit(spec, actor) {
+    Some(value) => value
+    None =>
+      return self.reject(
+        @http_transport.TooManyRequests,
+        "capacity_exhausted",
+        request_id,
+        @management.RejectedCapacity,
+      )
+  }
+  defer mailbox.release(ticket)
+  let reply = @async.with_timeout_opt(self.config.request_timeout_ms(), () => {
+    mailbox.wait(ticket)
+  }) catch {
+    _ => None
+  }
+  match reply {
+    Some(Some(value)) =>
+      self.encode(
+        value.status,
+        value.body,
+        @http_transport.JsonBody,
+        location?=value.location,
+      )
+    _ =>
+      self.reject(
+        @http_transport.ServiceUnavailable,
+        "unavailable",
+        request_id,
+        @management.RejectedDeadline,
+      )
+  }
+}
+
+///|
+pub async fn ManagementHttp::respond_operation(
+  self : ManagementHttp,
+  head : @http_transport.HttpRequestHead,
+  same_read_suffix_bytes : Int,
+  now_monotonic_ms : Int64,
+) -> Bytes {
+  let request_id = match self.request_id() {
+    Some(value) => value
+    None =>
+      return self.encode(
+        @http_transport.ServiceUnavailable,
+        b"{\"error\":{\"code\":\"id_exhausted\"}}",
+        @http_transport.JsonBody,
+      )
+  }
+  if head.method_name != "GET" ||
+    (head.target.contains("?") && !head.target.has_prefix("/v1/audit?")) ||
+    head.target.contains("%") ||
+    head.target.contains("#") ||
+    same_read_suffix_bytes != 0 ||
+    (head.content_length is Some(length) && length != 0) {
+    return self.reject(
+      @http_transport.BadRequest,
+      "bad_request",
+      request_id,
+      @management.RejectedParse,
+    )
+  }
+  let token = match management_header(head, "authorization") {
+    Some(value) => management_bearer(value)
+    None => None
+  }
+  let actor = match token {
+    Some(value) => self.tokens.authenticate(value)
+    None => None
+  }
+  let actor = match actor {
+    Some(value) => value
+    None =>
+      return self.reject(
+        @http_transport.Unauthorized,
+        "unauthenticated",
+        request_id,
+        @management.RejectedAuth,
+      )
+  }
+  if !actor.allows(@management.Operator) &&
+    !actor.allows(@management.ConfigAdmin) {
+    return self.reject(
+      @http_transport.Forbidden,
+      "forbidden",
+      request_id,
+      @management.RejectedRole,
+    )
+  }
+  if now_monotonic_ms < 0L ||
+    @budget.admit([(self.request_bucket, 1L)], now_monotonic_ms) is Err(_) {
+    return self.reject(
+      @http_transport.TooManyRequests,
+      "rate_limited",
+      request_id,
+      @management.RejectedRate,
+    )
+  }
+  if !self.config.operations_enabled() {
+    return self.reject(
+      @http_transport.ServiceUnavailable,
+      "operations_disabled",
+      request_id,
+      @management.RejectedOther,
+    )
+  }
+  let target = head.target
+  let spec : @management.QuerySpec = if target == "/v1/audit" ||
+    target.has_prefix("/v1/audit?") {
+    match
+      @management.parse_read_query(
+        target,
+        actor.token_id(),
+        self.config.default_page_size(),
+        self.config.max_page_size(),
+      ) {
+      Ok(value) if value.kind == @management.Audit => value
+      _ =>
+        return self.reject(
+          @http_transport.BadRequest,
+          "bad_request",
+          request_id,
+          @management.RejectedParse,
+        )
+    }
+  } else {
+    let prefix = "/v1/operations/"
+    if !target.has_prefix(prefix) || target.length() <= prefix.length() {
+      return self.reject(
+        @http_transport.BadRequest,
+        "bad_request",
+        request_id,
+        @management.RejectedParse,
+      )
+    }
+    {
+      kind: @management.Operation,
+      target: target[prefix.length():].to_owned(),
+      actor_token_id: actor.token_id(),
+      limit: 1,
+      cursor: None,
+      filters: "",
+    }
+  }
+  let mailbox = match self.query_mailbox {
+    Some(value) => value
+    None =>
+      return self.reject(
+        @http_transport.ServiceUnavailable,
+        "details_unavailable",
+        request_id,
+        @management.RejectedOther,
+      )
+  }
+  let ticket = match mailbox.submit(spec) {
+    Some(value) => value
+    None =>
+      return self.reject(
+        @http_transport.TooManyRequests,
+        "capacity_exhausted",
+        request_id,
+        @management.RejectedCapacity,
+      )
+  }
+  defer mailbox.release(ticket)
+  let reply = @async.with_timeout_opt(self.config.query_timeout_ms(), () => {
+    mailbox.wait(ticket)
+  }) catch {
+    _ => None
+  }
+  match reply {
+    Some(Some(value)) =>
+      self.encode(value.status, value.body, @http_transport.JsonBody)
+    _ =>
+      self.reject(
+        @http_transport.ServiceUnavailable,
+        "unavailable",
+        request_id,
+        @management.RejectedDeadline,
+      )
+  }
 }

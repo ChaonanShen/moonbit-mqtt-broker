@@ -74,7 +74,21 @@ async fn ManagementHttp::serve_one_request(
       }
       @http_transport.Complete(head, consumed) => {
         let response = if head.target.has_prefix("/v1/") &&
-          head.target != "/v1/status" {
+          (head.method_name == "POST" || head.method_name == "DELETE") {
+          self.respond_command(
+            head,
+            chunk.length() - consumed,
+            @budget.monotonic_ms(),
+          )
+        } else if head.target.has_prefix("/v1/operations/") ||
+          head.target == "/v1/audit" ||
+          head.target.has_prefix("/v1/audit?") {
+          self.respond_operation(
+            head,
+            chunk.length() - consumed,
+            @budget.monotonic_ms(),
+          )
+        } else if head.target.has_prefix("/v1/") && head.target != "/v1/status" {
           self.respond_details(
             head,
             chunk.length() - consumed,

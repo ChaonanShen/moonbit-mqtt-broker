@@ -22,6 +22,9 @@ pub struct ManagementRuntime {
   cache : @management.ObservationCache
   http : ManagementHttp
   query_mailbox : ManagementQueryMailbox?
+  command_mailbox : ManagementCommandMailbox?
+  operations : @management.OperationTable?
+  audit : @management.AuditRing?
   cursor_table : @management.CursorTable?
   mut mqtt_listener_address : String
   rejections : @management.ManagementRejections
@@ -63,6 +66,27 @@ pub fn ManagementRuntime::new(
   } else {
     None
   }
+  let command_mailbox = if startup.config.operations_enabled() {
+    Some(ManagementCommandMailbox::new(startup.config.operation_queue_limit()))
+  } else {
+    None
+  }
+  let operations = if startup.config.operations_enabled() {
+    Some(
+      @management.OperationTable::new(
+        boot_id,
+        startup.config.max_operation_records(),
+        startup.config.operation_retention_ms().to_int64(),
+      ),
+    )
+  } else {
+    None
+  }
+  let audit = if startup.config.operations_enabled() {
+    Some(@management.AuditRing::new(startup.config.max_audit_records()))
+  } else {
+    None
+  }
   let cursor_table = if startup.config.details_enabled() {
     Some(
       @management.CursorTable::new(
@@ -84,6 +108,7 @@ pub fn ManagementRuntime::new(
       boot_id,
       started_at,
       query_mailbox?,
+      command_mailbox?,
     ) {
     Ok(value) => value
     Err(_) => {
@@ -100,6 +125,9 @@ pub fn ManagementRuntime::new(
     cache,
     http,
     query_mailbox,
+    command_mailbox,
+    operations,
+    audit,
     cursor_table,
     mqtt_listener_address: "",
     rejections,

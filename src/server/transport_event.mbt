@@ -12,5 +12,6 @@ pub(all) enum DriverEvent {
   Runtime(RuntimeEvent)
   ObservationDue
   ManagementQuery(ManagementQueryEvent)
+  ManagementCommand(ManagementCommandEvent)
   UnregisterTransport(ConnectionId)
 }

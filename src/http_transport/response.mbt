@@ -92,6 +92,7 @@ pub fn encode_response(
   body : Bytes,
   max_body_bytes : Int,
   allow? : HttpAllow,
+  location? : String,
 ) -> Result[Bytes, HttpEncodeError] {
   if max_body_bytes < 0 || body.length() > max_body_bytes {
     return Err(ResponseTooLarge)
@@ -112,6 +113,12 @@ pub fn encode_response(
   }
   if status == MethodNotAllowed && allow is Some(permitted) {
     header = header + "Allow: " + allowed_method(permitted) + "\r\n"
+  }
+  if location is Some(value) {
+    if value.length() > 256 || value.contains("\r") || value.contains("\n") {
+      return Err(ResponseHeaderTooLarge)
+    }
+    header = header + "Location: " + value + "\r\n"
   }
   header = header + "\r\n"
   let header_bytes = @utf8.encode(header)
