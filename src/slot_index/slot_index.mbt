@@ -20,6 +20,7 @@ pub(all) enum SlotInsert {
 ///|
 pub(all) struct SlotPage {
   keys : Array[String]
+  positions : Array[Int]
   next_slot : Int
   scanned : Int
   has_more : Bool
@@ -115,6 +116,7 @@ pub fn SlotIndex::page(
   accept : (String) -> Bool,
 ) -> SlotPage {
   let keys : Array[String] = []
+  let positions : Array[Int] = []
   let capacity = self.slots.length()
   let mut position = if start < 0 { 0 } else { start }
   let mut scanned = 0
@@ -122,12 +124,19 @@ pub fn SlotIndex::page(
     while position < capacity && scanned < scan_limit && keys.length() < limit {
       if self.slots[position] is Some(key) && accept(key) {
         keys.push(key)
+        positions.push(position)
       }
       position += 1
       scanned += 1
     }
   }
-  { keys, next_slot: position, scanned, has_more: position < capacity }
+  {
+    keys,
+    positions,
+    next_slot: position,
+    scanned,
+    has_more: position < capacity,
+  }
 }
 
 ///|
