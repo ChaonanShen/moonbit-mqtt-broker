@@ -15,6 +15,7 @@ pub(all) struct CursorRecord {
   filters : String
   session_handle : String
   next_slot : Int
+  audit_after_sequence : Int64?
   index_generation : Int64
   expires_monotonic_ms : Int64
 } derive(Eq, Debug)
