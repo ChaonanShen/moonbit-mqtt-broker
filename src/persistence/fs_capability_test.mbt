@@ -107,6 +107,27 @@ async test "persistence task group runs cancelled task cleanup before drain defe
 }
 
 ///|
+async test "persistence recovery truncates only the observed regular WAL tail" {
+  with_capability_dir("wal-tail", path => {
+    let wal = path + "/wal-1.log"
+    @fs.write_file(
+      wal,
+      b"committed-tail",
+      create_mode=CreateNew,
+      permission=0o600,
+    )
+    assert_true(truncate_regular_tail(wal, 14L, 9L) is Ok(_))
+    assert_eq(@fs.read_file(wal).text(), "committed")
+    assert_true(truncate_regular_tail(wal, 14L, 4L) is Err(_))
+    assert_eq(@fs.read_file(wal).text(), "committed")
+    let link = path + "/wal-link.log"
+    @fs.symlink(target="wal-1.log", link)
+    assert_true(truncate_regular_tail(link, 9L, 4L) is Err(_))
+    assert_eq(@fs.read_file(wal).text(), "committed")
+  })
+}
+
+///|
 async test "persistence filesystem supports append and offset writes" {
   with_capability_dir("append-offset", path => {
     let file_path = path + "/wal"

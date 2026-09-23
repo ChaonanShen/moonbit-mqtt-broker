@@ -21,5 +21,9 @@ import {
 } for "wbtest"
 
 options(
-  targets: { "fs_capability_test.mbt": [ "native" ] },
+  "native-stub": [ "wal_fs_native.c" ],
+  targets: {
+    "fs_capability_test.mbt": [ "native" ],
+    "wal_fs_native.mbt": [ "native" ],
+  },
 )
