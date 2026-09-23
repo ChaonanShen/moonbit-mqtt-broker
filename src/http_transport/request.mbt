@@ -24,8 +24,8 @@ pub(all) enum HttpParseError {
 } derive(Eq, Debug)
 
 ///|
-/// consumed is the byte offset immediately after CRLFCRLF. The caller owns
-/// any suffix in the same read and applies its own route/body policy.
+/// consumed is the number of bytes taken from the latest feed chunk up to
+/// and including CRLFCRLF. The caller owns chunk[consumed:] as any suffix.
 pub(all) enum HttpParseResult {
   NeedMore
   Complete(HttpRequestHead, Int)
