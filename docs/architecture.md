@@ -103,3 +103,14 @@ for an existing but incompatible phase close the connection.
 The guarantee applies to each MQTT exchange. Downstream QoS 1 can still repeat.
 PUBREC/PUBCOMP do not imply fsync: crash recovery remains latest-committed
 snapshot recovery, without end-to-end exactly-once or zero-loss durability.
+
+## Read-only management path
+
+The optional HTTP listener owns bounded sockets, parser buffers, request
+leases, fixed-scope token checks and independent rate buckets. It never reads
+mutable MQTT maps directly. RouterDriver publishes a typed observation into
+a bounded cache; HTTP handlers only read that cache. Observation events are
+coalesced and scheduled fairly with MQTT control and data events. A live
+driver heartbeat is separate from cache publication, so a delayed or failed
+sample does not masquerade as progress. Startup and shutdown own both
+listeners, the cache budget and native authentication worker drain.

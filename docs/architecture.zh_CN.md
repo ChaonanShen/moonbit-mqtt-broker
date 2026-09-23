@@ -90,3 +90,12 @@ state revision → debounce/max-delay → snapshot writer
 QoS 保证针对每段 MQTT 交换，降级为 QoS 1 的下游仍可能重复。
 PUBREC/PUBCOMP 不代表已 fsync；崩溃恢复仍以 latest-committed 快照为边界，
 不承诺端到端业务 exactly-once 或崩溃零丢失。
+
+## 只读管理路径
+
+可选 HTTP 监听器持有有界 socket、解析 buffer、请求租约、固定角色令牌
+校验和独立限流桶。它不直接读取可变 MQTT Map。RouterDriver 将类型化
+观测值发布到有界缓存；HTTP handler 只读取缓存。观测事件合并后，与 MQTT
+控制和数据事件公平调度。真实 driver 心跳独立于缓存发布时间，因此延迟
+或失败的采样不会伪装成进度。启动和停机统一管理两个监听器、缓存预算和
+原生认证 worker 的排空。

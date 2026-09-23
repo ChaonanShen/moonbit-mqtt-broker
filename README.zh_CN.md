@@ -11,6 +11,10 @@
 QoS 0/1/2、通配符订阅、保留消息、Will、Keep Alive、持久会话、可选的重启
 持久化、身份认证、ACL、指标、结构化日志和 TOML 配置。
 
+可选的[只读管理 API](docs/management.zh_CN.md)提供 loopback 健康检查、
+按角色授权的 Prometheus 指标和状态摘要。它默认关闭，使用独立的私有
+令牌文件。
+
 ## 0.2.0 新增功能
 
 - 完整的双向 QoS 2，包括重复包处理、重连重放、离线投递、保留消息、Will 和 Snapshot V3 恢复。

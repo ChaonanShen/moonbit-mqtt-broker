@@ -12,6 +12,10 @@ supports multiple TCP or TLS clients, QoS 0/1/2, wildcard subscriptions, retaine
 messages, Wills, Keep Alive, persistent Sessions, optional restart persistence,
 authentication, ACLs, metrics, structured logs, and TOML configuration.
 
+The optional [read-only management API](docs/management.md) provides
+loopback health checks, scoped Prometheus metrics and a status summary. It is
+disabled by default and uses a separate private token file.
+
 ## What is new in 0.2.0
 
 - Complete bidirectional QoS 2 with duplicate handling, reconnect replay, offline delivery, retained messages, Wills and Snapshot V3 recovery.

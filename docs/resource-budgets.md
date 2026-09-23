@@ -89,3 +89,14 @@ Additional `$SYS/broker/` topics are `resources/used_bytes`, `resources/reserved
 Reservation rejections identify the violated scope and account label with used/requested/limit values. Rejection counters describe admission attempts, including optional promotion attempts, not just closed clients. Oldest dirty age tracks actual writer completion rather than queue submission. Prometheus and an administration API remain separate work.
 
 IP expiry rotates through at most 32 existing keys without collecting the entire key table or obtaining a new memory reservation. A key has exactly one rotation entry; cleanup remains possible when the control workspace is otherwise occupied. Fixed server infrastructure reserves 16 KiB of bookkeeping space in addition to queue slots. The `max_auth_result_bytes_total` key bounds completed authentication records until the single-writer loop reaps them; cancellation and timeout do not release running native work early.
+
+## Management accounting
+
+Enabling management reserves one ordinary aggregate ticket for its fixed
+infrastructure, 16 default request slots and two bounded cache buffers.
+The default logical charge is 5,892,096 bytes under its 8 MiB local cap;
+it also remains subject to the Broker's global ordinary budget. Per-request
+leases do not double-charge the reserved storage. The HTTP reader owns each
+lease through the last write or cancellation. Management connection and
+request token buckets are independent of MQTT admission buckets. Failure
+before or after binding releases the parent ticket and both listeners.

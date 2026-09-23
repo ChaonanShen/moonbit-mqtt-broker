@@ -164,3 +164,37 @@ The CLI switches are `--rate-limits-enabled` and `--per-ip-limits-enabled`, acce
 | `server.max_runtime_events_per_connection` | `--max-runtime-events-per-connection` | 32 |
 
 Unless explicitly configured, retained-message and per-connection Will limits follow max_packet_size. Authentication conservatively reserves validated PHC m (KiB) ×1024 + p×256KiB +1MiB; this is logical budgeting, not measured RSS. Restore exceeding a byte cap fails startup instead of truncating old state.
+
+## Read-only management listener
+
+`[management]` is optional and disabled by default. See the
+[management API guide](management.md) for token generation and route behavior.
+CLI switches use the same key with a `--management-` prefix and hyphens.
+For example, `[management] snapshot_max_age_ms` maps to
+`--management-snapshot-max-age-ms`. CLI overrides TOML.
+
+```toml
+[management]
+enabled = true
+listen = "127.0.0.1:9091"
+token_file = "/path/to/management-tokens"
+max_connections = 16
+max_header_bytes = 4096
+max_header_count = 32
+max_response_bytes = 65536
+request_timeout_ms = 5000
+write_timeout_ms = 2000
+snapshot_interval_ms = 1000
+snapshot_max_age_ms = 5000
+ready_require_snapshot_healthy = false
+request_rate = 50
+request_burst = 100
+connection_rate = 100
+connection_burst = 200
+max_bytes_total = 8388608
+```
+
+Only numeric IPv4 loopback is accepted; hostnames, non-loopback addresses and
+IPv6 are rejected. Enabling management requires a private token file and a
+logical budget large enough for the required fixed responses and request
+slots. `--check-config` validates the file and capacity without binding.
