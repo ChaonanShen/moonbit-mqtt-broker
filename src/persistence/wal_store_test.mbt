@@ -145,3 +145,53 @@ async test "WAL store rejects a complete corrupt active frame without truncation
     assert_eq(@fs.read_file(active_path).binary(), damaged)
   })
 }
+
+///|
+async test "WAL recovery replays committed state result without routing" {
+  with_wal_store_dir("replay", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let first = SnapshotStore::open(config).unwrap()
+    let wal = WalStore::bootstrap(first, wal_store_empty_checkpoint()).unwrap()
+    let delta : @router.DurableDelta = {
+      session_puts: [
+        {
+          expected_generation: 0L,
+          generation: 1L,
+          session: {
+            client_id: "client-a",
+            owner_principal: "anonymous",
+            detached_at_ms: 0L,
+            next_packet_id: 1,
+            subscriptions: [{ filter: "state/#", qos: 1 }],
+            inbound_qos2: [],
+            inflight: [],
+            pending: [],
+          },
+        },
+      ],
+      session_deletes: [],
+      retained_puts: [{ topic: "state/value", payload: b"ready", qos: 1 }],
+      retained_deletes: [],
+    }
+    let encoded = encode_durable_delta(delta).unwrap()
+    assert_eq(
+      wal.append_batch({
+        previous_lsn: 0L,
+        transactions: [{ lsn: 1L, delta: encoded }],
+      }),
+      Ok(1L),
+    )
+    wal.close()
+    let second = SnapshotStore::open(config).unwrap()
+    let limits = wal_store_limits()
+    let (recovered, replay) = WalStore::recover(second, limits).unwrap()
+    let restored = replay.restore_state(limits.broker_config(), limits).unwrap()
+    assert_eq(restored.committed_lsn(), 1L)
+    assert_eq(restored.identities(), [{ client_id: "client-a", generation: 1L }])
+    let snapshot = restored.state().export_snapshot()
+    assert_eq(snapshot.sessions.length(), 1)
+    assert_eq(snapshot.sessions[0].subscriptions[0].filter, "state/#")
+    assert_eq(snapshot.retained[0].payload, b"ready")
+    recovered.close()
+  })
+}

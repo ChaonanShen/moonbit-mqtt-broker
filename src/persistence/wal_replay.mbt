@@ -1,0 +1,88 @@
+///|
+pub struct WalRecoveredState {
+  state : @router.BrokerState
+  identities : Array[WalSessionIdentity]
+  committed_lsn : Int64
+}
+
+///|
+pub fn WalRecoveredState::state(
+  self : WalRecoveredState,
+) -> @router.BrokerState {
+  self.state
+}
+
+///|
+pub fn WalRecoveredState::identities(
+  self : WalRecoveredState,
+) -> Array[WalSessionIdentity] {
+  self.identities.copy()
+}
+
+///|
+pub fn WalRecoveredState::committed_lsn(self : WalRecoveredState) -> Int64 {
+  self.committed_lsn
+}
+
+///|
+pub fn WalRecovery::restore_state(
+  self : WalRecovery,
+  broker_config : @router.BrokerConfig,
+  limits : SnapshotDecodeLimits,
+  max_delta_bytes? : Int = 1048576,
+) -> Result[WalRecoveredState, PersistenceError] {
+  let initial = self.checkpoint
+  let generations = initial.identities.map(item => item.generation)
+  let accumulator = match
+    @router.DurableAccumulator::new(
+      broker_config,
+      initial.snapshot,
+      generations,
+    ) {
+    Ok(value) => value
+    Err(_) => return Err(SnapshotImport("invalid WAL checkpoint state"))
+  }
+  let mut expected_lsn = initial.lsn
+  for batch in self.batches {
+    if batch.previous_lsn != expected_lsn {
+      return Err(InvalidValue(field="wal-replay-lsn", offset=0))
+    }
+    for transaction in batch.transactions {
+      if expected_lsn == 9223372036854775807L ||
+        transaction.lsn != expected_lsn + 1L {
+        return Err(InvalidValue(field="wal-replay-lsn", offset=0))
+      }
+      let delta = match
+        decode_durable_delta(
+          transaction.delta,
+          limits,
+          max_bytes=max_delta_bytes,
+        ) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+      match accumulator.apply(delta) {
+        Ok(_) => ()
+        Err(_) => return Err(SnapshotImport("invalid WAL delta state"))
+      }
+      expected_lsn = transaction.lsn
+    }
+  }
+  if expected_lsn != self.committed_lsn {
+    return Err(InvalidValue(field="wal-replay-final-lsn", offset=0))
+  }
+  let (snapshot, generations) = accumulator.export_snapshot()
+  let identities : Array[WalSessionIdentity] = []
+  for index in 0..<snapshot.sessions.length() {
+    identities.push({
+      client_id: snapshot.sessions[index].client_id,
+      generation: generations[index],
+    })
+  }
+  let state = match
+    @router.BrokerState::from_snapshot(broker_config, snapshot) {
+    Ok(value) => value
+    Err(_) => return Err(SnapshotImport("WAL state exceeds configured limits"))
+  }
+  Ok({ state, identities, committed_lsn: expected_lsn })
+}
