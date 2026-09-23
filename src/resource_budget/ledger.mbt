@@ -25,6 +25,11 @@ pub(all) enum ResourceKind {
   ManagementInfrastructure
   ManagementRequest
   ManagementCache
+  ManagementIndex
+  ManagementQuery
+  ManagementCursor
+  ManagementOperation
+  ManagementAudit
 } derive(Eq, Hash, Debug)
 
 ///|
@@ -501,6 +506,11 @@ pub fn ResourceKind::name(self : ResourceKind) -> String {
     ManagementInfrastructure => "management_infrastructure"
     ManagementRequest => "management_request"
     ManagementCache => "management_cache"
+    ManagementIndex => "management_index"
+    ManagementQuery => "management_query"
+    ManagementCursor => "management_cursor"
+    ManagementOperation => "management_operation"
+    ManagementAudit => "management_audit"
   }
 }
 

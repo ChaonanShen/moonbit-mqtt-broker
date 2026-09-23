@@ -152,3 +152,54 @@ test "enabled management response cap fits fixed worst-case schemas" {
     is Ok(_),
   )
 }
+
+///|
+test "B detail and operation switches enforce dependencies and conservative fee" {
+  assert_true(ManagementConfig::new(details_enabled=true) is Err(_))
+  assert_true(ManagementConfig::new(operations_enabled=true) is Err(_))
+  let config = ManagementConfig::new(
+    enabled=true,
+    token_file="/tmp/tokens",
+    details_enabled=true,
+    operations_enabled=true,
+    max_bytes_total=33554432L,
+  ).unwrap()
+  assert_eq(config.index_required_bytes(1024, 128, 16384, 1024), 3563520L)
+  assert_true(config.required_bytes() < 33554432L)
+  assert_true(
+    config.required_bytes() > ManagementConfig::default().required_bytes(),
+  )
+  assert_true(
+    ManagementConfig::new(
+      enabled=true,
+      token_file="/tmp/tokens",
+      details_enabled=true,
+      max_bytes_total=8388608L,
+    )
+    is Err(_),
+  )
+}
+
+///|
+test "B configuration bounds reject zero and inconsistent page and time limits" {
+  assert_true(ManagementConfig::new(query_queue_limit=0) is Err(_))
+  assert_true(ManagementConfig::new(operation_queue_limit=65) is Err(_))
+  assert_true(ManagementConfig::new(max_operation_records=15) is Err(_))
+  assert_true(ManagementConfig::new(max_running_operations=33) is Err(_))
+  assert_true(ManagementConfig::new(operation_timeout_ms=999) is Err(_))
+  assert_true(ManagementConfig::new(operation_retention_ms=3600001) is Err(_))
+  assert_true(ManagementConfig::new(max_cursor_records=15) is Err(_))
+  assert_true(ManagementConfig::new(cursor_ttl_ms=300001) is Err(_))
+  assert_true(ManagementConfig::new(max_page_size=0) is Err(_))
+  assert_true(
+    ManagementConfig::new(default_page_size=101, max_page_size=100) is Err(_),
+  )
+  assert_true(
+    ManagementConfig::new(query_scan_limit=49, max_page_size=50) is Err(_),
+  )
+  assert_true(ManagementConfig::new(query_timeout_ms=99) is Err(_))
+  assert_true(ManagementConfig::new(max_audit_records=63) is Err(_))
+  assert_true(ManagementConfig::new(command_rate=0) is Err(_))
+  assert_true(ManagementConfig::new(command_burst=2001) is Err(_))
+  assert_true(ManagementConfig::new(max_index_bytes=0L) is Err(_))
+}
