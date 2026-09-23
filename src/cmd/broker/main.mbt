@@ -842,9 +842,10 @@ async fn run_main() -> Unit {
   if once && management_config.enabled() {
     raise CliError("--once cannot be combined with management.enabled")
   }
-  if management_config.enabled() {
-    match @management.TokenDatabase::load(management_config.token_file()) {
-      Ok(_) => ()
+  let management_tokens = if management_config.enabled() {
+    let tokens = match
+      @management.TokenDatabase::load(management_config.token_file()) {
+      Ok(value) => value
       Err(@management.TokenError::CryptoUnavailable) =>
         raise CliError("management authentication requires libcrypto.so.3")
       Err(@management.TokenError::TokenFileMissing) =>
@@ -858,6 +859,9 @@ async fn run_main() -> Unit {
       Err(@management.TokenError::InvalidTokenFile) =>
         raise CliError("invalid management token file")
     }
+    Some(tokens)
+  } else {
+    None
   }
   let tls = match (tls_certificate_file, tls_private_key_file) {
     (None, None) => {
@@ -1123,9 +1127,10 @@ async fn run_main() -> Unit {
     println("configuration valid")
     return
   }
-  if management_config.enabled() {
-    raise CliError("management listener backend is not available yet")
-  }
+  let management : @server.ManagementStartup? = management_tokens.map(tokens => {
+    config: management_config,
+    tokens,
+  })
   match data_dir {
     None =>
       @server.run(
@@ -1137,6 +1142,7 @@ async fn run_main() -> Unit {
         tls?,
         security~,
         logger~,
+        management?,
       )
     Some(path) => {
       let persistence_config = match
@@ -1205,6 +1211,7 @@ async fn run_main() -> Unit {
         tls?,
         security~,
         logger~,
+        management?,
       )
     }
   }

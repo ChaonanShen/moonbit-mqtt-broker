@@ -376,3 +376,22 @@ test "Prometheus rejects untrusted categories, duplicates and bad clocks" {
     is Err(InvalidClock),
   )
 }
+
+///|
+test "shutdown withdraws ready before releasing cache ownership" {
+  let config = ManagementConfig::new(enabled=true, token_file="/tmp/tokens").unwrap()
+  let ledger = @budget.Ledger::new(config.required_bytes() + 1024L, 0L).unwrap()
+  let budget = ManagementBudget::new(config, ledger).unwrap()
+  let cache = ObservationCache::new(budget).unwrap()
+  let sample = sample_observation()
+  assert_true(cache.publish(sample))
+  cache.mark_stopping()
+  let health = cache.health(1200L).unwrap()
+  assert_true(health.live)
+  assert_false(health.ready)
+  assert_true(health.reasons.contains("stopping"))
+  assert_true(cache.status_body(1200L) is Err(Stale))
+  assert_false(cache.publish({ ..sample, captured_monotonic_ms: 1300L }))
+  cache.close()
+  assert_true(budget.close())
+}
