@@ -9,7 +9,18 @@ trap 'rm -rf -- "$case_root"' EXIT
 mkdir "$case_root/bin"
 cat >"$case_root/bin/moon" <<'FAKE'
 #!/usr/bin/env bash
-[[ "$1" = update ]] && exit 0
+if [[ "$1" = update ]]; then
+  if [[ "$MOON_TEST_CASE" = registry ]]; then
+    count="$(cat "$MOON_TEST_COUNTER")"
+    count=$((count+1)); echo "$count" >"$MOON_TEST_COUNTER"
+    if [[ "$count" -eq 1 ]]; then
+      echo "failed to clone registry index: fatal: unable to access 'https://mooncakes.io/git/index/': Failed to connect to mooncakes.io port 443: Couldn't connect to server"
+      exit 255
+    fi
+  fi
+  exit 0
+fi
+if [[ "$MOON_TEST_CASE" = registry ]]; then exit 0; fi
 count="$(cat "$MOON_TEST_COUNTER")"
 count=$((count+1)); echo "$count" >"$MOON_TEST_COUNTER"
 if [[ "$MOON_TEST_CASE" = retry && "$count" -ge 2 ]]; then exit 0; fi
@@ -18,7 +29,7 @@ echo 'When installing packages: error sending request for url (https://example.i
 exit 255
 FAKE
 chmod +x "$case_root/bin/moon"
-for case_name in retry type network; do
+for case_name in retry type network registry; do
   counter="$case_root/${case_name}.count"; echo 0 >"$counter"
   status=0
   PATH="$case_root/bin:$PATH" MOON_TEST_COUNTER="$counter" MOON_TEST_CASE="$case_name" \
@@ -28,6 +39,7 @@ for case_name in retry type network; do
     retry) [[ "$status" = 0 && "$(cat "$counter")" = 2 ]] ;;
     type) [[ "$status" = 1 && "$(cat "$counter")" = 1 ]] ;;
     network) [[ "$status" = 255 && "$(cat "$counter")" = 3 ]] ;;
+    registry) [[ "$status" = 0 && "$(cat "$counter")" = 2 ]] ;;
   esac
 done
-echo 'Dependency retry guards passed: transient retry, compiler fail-fast, bounded failure'
+echo 'Dependency retry guards passed: HTTP/registry retry, compiler fail-fast, bounded failure'

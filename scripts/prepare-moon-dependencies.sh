@@ -23,7 +23,7 @@ for ((attempt=1; attempt<=ATTEMPTS; attempt++)); do
   # Compilation failures are never converted into retries or success. Retry
   # only dependency transport/cache installation failures from this fresh run.
   retryable=false
-  if grep -Eiq 'error sending request for url|failed to (fetch|download)|operation timed out|connection reset|could not resolve host' "$log" &&
+  if grep -Eiq 'error sending request for url|failed to (fetch|download)|operation timed out|connection reset|could not resolve host|failed to connect to [^ ]+ port [0-9]+|couldn.t connect to server' "$log" &&
      grep -Eiq 'https?://|registry|installing packages|dependency graph' "$log"; then
     retryable=true
   elif grep -Eiq 'invalid cross-device link' "$log"; then
