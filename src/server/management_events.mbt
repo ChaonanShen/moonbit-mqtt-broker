@@ -75,7 +75,10 @@ pub fn ManagementQueryMailbox::submit(
       ignore(state.signal.try_get()) catch {
         _ => ()
       }
-      let ticket = { slot, generation: state.generation }
+      let ticket : ManagementQueryTicket = {
+        slot,
+        generation: state.generation,
+      }
       let queued = self.queue.try_put({ ticket, spec }) catch { _ => false }
       if !queued {
         state.occupied = false

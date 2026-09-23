@@ -170,6 +170,9 @@ pub async fn serve(
   if management is Some(active) && active.query_mailbox is Some(mailbox) {
     bus.attach_management_queries(mailbox)
   }
+  if management is Some(active) && active.command_mailbox is Some(mailbox) {
+    bus.attach_management_commands(mailbox)
+  }
   let auth_runtime = create_auth_executor(
     config,
     security,

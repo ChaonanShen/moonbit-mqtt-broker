@@ -234,6 +234,163 @@ fn RouterDriver::management_query_result(
 ) -> ManagementQueryReply {
   let state = self.runtime.broker_state()
   let boot_id = active.context.boot_id
+  if spec.kind == @management.Operation {
+    if !active.config.operations_enabled() || active.operations is None {
+      return management_query_error(
+        @http_transport.ServiceUnavailable,
+        "operations_disabled",
+      )
+    }
+    let parts = spec.target.split(".").to_array()
+    if parts.length() != 2 || parts[0].length() != 32 || parts[1] == "" {
+      return management_query_error(@http_transport.BadRequest, "bad_request")
+    }
+    if parts[0] != boot_id {
+      return management_query_error(
+        @http_transport.Expired,
+        "expired_operation",
+      )
+    }
+    let sequence = @string.parse_int64(parts[1].to_owned()) catch {
+      _ =>
+        return management_query_error(@http_transport.BadRequest, "bad_request")
+    }
+    if sequence < 1L || sequence.to_string() != parts[1].to_owned() {
+      return management_query_error(@http_transport.BadRequest, "bad_request")
+    }
+    let record = match
+      active.operations.unwrap().get(spec.target, spec.actor_token_id) {
+      Some(value) => value
+      None =>
+        return management_query_error(@http_transport.NotFound, "not_found")
+    }
+    let bytes = @utf8.encode(record.to_json().stringify())
+    if bytes.length() > active.config.max_response_bytes() {
+      return management_query_error(
+        @http_transport.Unprocessable,
+        "result_too_large",
+      )
+    }
+    return { status: @http_transport.Ok, body: bytes }
+  }
+  if spec.kind == @management.Audit {
+    if !active.config.operations_enabled() ||
+      active.audit is None ||
+      active.cursor_table is None {
+      return management_query_error(
+        @http_transport.ServiceUnavailable,
+        "operations_disabled",
+      )
+    }
+    let cursor_table = active.cursor_table.unwrap()
+    let now = @budget.monotonic_ms()
+    let after = match spec.cursor {
+      None => 0L
+      Some(cursor) =>
+        match
+          cursor_table.lookup(
+            cursor,
+            spec.actor_token_id,
+            "audit",
+            "",
+            "",
+            1L,
+            now,
+          ) {
+          Ok(record) => record.audit_after_sequence.unwrap_or(0L)
+          Err(@management.InvalidCursor) =>
+            return management_query_error(
+              @http_transport.BadRequest,
+              "bad_request",
+            )
+          Err(@management.CursorForbidden) =>
+            return management_query_error(
+              @http_transport.Forbidden,
+              "forbidden",
+            )
+          _ =>
+            return management_query_error(
+              @http_transport.Expired,
+              "expired_cursor",
+            )
+        }
+    }
+    let page = active.audit
+      .unwrap()
+      .page(
+        spec.actor_token_id,
+        after,
+        spec.limit,
+        active.config.query_scan_limit(),
+      )
+    let items : Array[Json] = []
+    let mut used = 256
+    let mut next_after = page.next_after_sequence
+    for item in page.items {
+      let encoded = item.to_json()
+      let bytes = @utf8.encode(encoded.stringify()).length()
+      if used + bytes > active.config.max_response_bytes() {
+        if items.is_empty() {
+          return management_query_error(
+            @http_transport.Unprocessable,
+            "result_too_large",
+          )
+        }
+        next_after = Some(item.sequence - 1L)
+        break
+      }
+      items.push(encoded)
+      used += bytes + 1
+    }
+    let next_cursor = if next_after is Some(sequence) {
+      let record : @management.CursorRecord = {
+        actor_token_id: spec.actor_token_id,
+        route: "audit",
+        filters: "",
+        session_handle: "",
+        next_slot: 0,
+        audit_after_sequence: Some(sequence),
+        index_generation: 1L,
+        expires_monotonic_ms: 0L,
+      }
+      match cursor_table.issue(record, now) {
+        Ok(value) => Some(value)
+        Err(@management.CursorCapacity) =>
+          return management_query_error(
+            @http_transport.TooManyRequests,
+            "capacity_exhausted",
+          )
+        _ =>
+          return management_query_error(
+            @http_transport.ServiceUnavailable,
+            "unavailable",
+          )
+      }
+    } else {
+      None
+    }
+    let fields : Map[String, Json] = Map([
+      ("api_version", "1".to_json()),
+      ("boot_id", boot_id.to_json()),
+      ("items", items.to_json()),
+      ("next_cursor", next_cursor.to_json()),
+      (
+        "oldest_available_sequence",
+        page.oldest_available_sequence.to_string().to_json(),
+      ),
+      ("audit_overwritten_total", page.overwritten_total.to_string().to_json()),
+      ("gap", page.gap.to_json()),
+      ("consistency", "per_page".to_json()),
+    ])
+    let bytes = @utf8.encode(fields.to_json().stringify())
+    if bytes.length() > active.config.max_response_bytes() {
+      return management_query_error(
+        @http_transport.Unprocessable,
+        "result_too_large",
+      )
+    }
+    return { status: @http_transport.Ok, body: bytes }
+  }
   if !active.config.details_enabled() ||
     !state.management_index_available() ||
     !self.management_connection_index_available() {
@@ -554,6 +711,7 @@ fn RouterDriver::management_query_result(
       filters: spec.filters,
       session_handle,
       next_slot,
+      audit_after_sequence: None,
       index_generation: generation,
       expires_monotonic_ms: 0L,
     }
