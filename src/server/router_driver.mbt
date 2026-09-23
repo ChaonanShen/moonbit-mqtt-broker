@@ -7,6 +7,7 @@ pub struct RouterDriver {
   priv mut auth_infrastructure : @budget.Ticket?
   priv auth_cancels : Map[Int64, Bool]
   priv auth_reaps : Map[Int64, Bool]
+  priv mut last_progress_monotonic_ms : Int64
 }
 
 ///|
@@ -63,6 +64,7 @@ pub fn RouterDriver::new(
     auth_infrastructure,
     auth_cancels: Map([]),
     auth_reaps: Map([]),
+    last_progress_monotonic_ms: @budget.monotonic_ms(),
   }
 }
 
@@ -413,6 +415,9 @@ fn RouterDriver::dispatch(
 ///|
 pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
   self.runtime.broker_state().begin_action_scope()
+  defer {
+    self.last_progress_monotonic_ms = @budget.monotonic_ms()
+  }
   defer self.runtime.broker_state().end_action_scope()
   match event {
     Accounted(event, ticket) => {

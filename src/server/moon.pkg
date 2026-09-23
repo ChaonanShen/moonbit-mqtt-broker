@@ -10,6 +10,7 @@ import {
   "ChaonanShen/moonbit-mqtt-broker/security",
   "ChaonanShen/moonbit-mqtt-broker/topic",
   "ChaonanShen/moonbit-mqtt-broker/observability",
+  "ChaonanShen/moonbit-mqtt-broker/management",
   "moonbitlang/async/io",
   "moonbitlang/async/pipe",
   "moonbitlang/async/socket",
