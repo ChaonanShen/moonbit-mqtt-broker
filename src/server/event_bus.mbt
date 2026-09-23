@@ -37,6 +37,8 @@ priv struct EventBus {
   mut metrics : RuntimeEvent?
   mut observation_due : Bool
   mut observation_wait_events : Int
+  mut management_queries : ManagementQueryMailbox?
+  mut since_management : Int
   mut deferred_data : DriverEvent?
   mut control_batch : Int
   mut needs_promotion : Bool
@@ -79,12 +81,38 @@ fn EventBus::new(
     metrics: None,
     observation_due: false,
     observation_wait_events: 0,
+    management_queries: None,
+    since_management: 0,
     deferred_data: None,
     control_batch: 0,
     needs_promotion: false,
     waiting_writers: 0,
     closed: false,
   })
+}
+
+///|
+fn EventBus::attach_management_queries(
+  self : EventBus,
+  mailbox : ManagementQueryMailbox,
+) -> Unit {
+  self.management_queries = Some(mailbox)
+  mailbox.set_wake(self.wake)
+}
+
+///|
+fn EventBus::take_management_query(self : EventBus) -> DriverEvent? {
+  match self.management_queries {
+    None => None
+    Some(mailbox) =>
+      match mailbox.take() {
+        None => None
+        Some(query) => {
+          self.since_management = 0
+          Some(ManagementQuery(query))
+        }
+      }
+  }
 }
 
 ///|
@@ -283,6 +311,9 @@ fn EventBus::selected_other(
   self : EventBus,
   event : DriverEvent,
 ) -> DriverEvent {
+  if self.since_management < 8 {
+    self.since_management += 1
+  }
   if self.observation_due && self.observation_wait_events < 16 {
     self.observation_wait_events += 1
   }
@@ -294,6 +325,9 @@ fn EventBus::take_observation(self : EventBus) -> DriverEvent {
   self.observation_due = false
   self.observation_wait_events = 0
   self.control_batch += 1
+  if self.since_management < 8 {
+    self.since_management += 1
+  }
   ObservationDue
 }
 
@@ -339,6 +373,11 @@ async fn EventBus::next(self : EventBus) -> DriverEvent? {
     if self.closed {
       return None
     }
+    if self.since_management >= 8 {
+      if self.take_management_query() is Some(query) {
+        return Some(query)
+      }
+    }
     if self.observation_due &&
       self.observation_wait_events >= 16 &&
       self.control_batch < 8 {
@@ -376,6 +415,9 @@ async fn EventBus::next(self : EventBus) -> DriverEvent? {
     }
     if self.observation_due {
       return Some(self.take_observation())
+    }
+    if self.take_management_query() is Some(query) {
+      return Some(query)
     }
     self.wake.get() catch {
       _ => return None

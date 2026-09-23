@@ -73,11 +73,16 @@ async fn ManagementHttp::serve_one_request(
         return
       }
       @http_transport.Complete(head, consumed) => {
-        let response = self.respond(
-          head,
-          chunk.length() - consumed,
-          @budget.monotonic_ms(),
-        )
+        let response = if head.target.has_prefix("/v1/") &&
+          head.target != "/v1/status" {
+          self.respond_details(
+            head,
+            chunk.length() - consumed,
+            @budget.monotonic_ms(),
+          )
+        } else {
+          self.respond(head, chunk.length() - consumed, @budget.monotonic_ms())
+        }
         self.write_bounded(connection, response)
         return
       }

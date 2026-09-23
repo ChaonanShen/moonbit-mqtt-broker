@@ -470,6 +470,7 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
           active.rejections.record(@management.RejectedOther)
         }
       }
+    ManagementQuery(query) => self.handle_management_query(query)
     UnregisterTransport(connection_id) => {
       self.sinks.remove(connection_id)
       if self.management_connections is Some(index) &&

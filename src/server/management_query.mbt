@@ -88,3 +88,532 @@ pub fn RouterDriver::management_connection_view(
     closing: false,
   })
 }
+
+///|
+fn management_query_error(
+  status : @http_transport.HttpStatus,
+  code : String,
+) -> ManagementQueryReply {
+  let error : Map[String, Json] = Map([("code", code.to_json())])
+  let body : Map[String, Json] = Map([("error", error.to_json())])
+  { status, body: @utf8.encode(body.to_json().stringify()) }
+}
+
+///|
+fn management_session_json(
+  view : @router.AdminSessionView,
+  boot_id : String,
+) -> Json {
+  let row : Map[String, Json] = Map([
+    ("handle", view.handle.to_string().to_json()),
+    ("client_id", view.client_id.to_json()),
+    ("mode", view.mode.to_json()),
+    ("attached", view.attached.to_json()),
+    ("lifecycle_version", view.lifecycle_version.to_string().to_json()),
+    ("owner", view.owner.to_json()),
+    (
+      "detached_at_ms",
+      view.detached_at_ms.map(value => value.to_string()).to_json(),
+    ),
+    ("subscription_count", view.subscription_count.to_json()),
+    ("inflight_count", view.inflight_count.to_json()),
+    ("pending_count", view.pending_count.to_json()),
+    ("inbound_qos2_count", view.inbound_qos2_count.to_json()),
+    ("inflight_bytes", view.inflight_bytes.to_string().to_json()),
+    ("pending_bytes", view.pending_bytes.to_string().to_json()),
+    ("inbound_bytes", view.inbound_bytes.to_string().to_json()),
+    ("subscription_bytes", view.subscription_bytes.to_string().to_json()),
+    (
+      "etag",
+      @management.session_etag(boot_id, view.handle, view.lifecycle_version).to_json(),
+    ),
+  ])
+  row.to_json()
+}
+
+///|
+fn management_connection_json(
+  view : ManagementConnectionView,
+  boot_id : String,
+) -> Json {
+  let row : Map[String, Json] = Map([
+    ("connection_id", view.connection_id.to_string().to_json()),
+    ("boot_id", boot_id.to_json()),
+    ("phase", view.phase.to_json()),
+    ("client_id", view.client_id.to_json()),
+    ("principal", view.principal.to_json()),
+    ("closing", view.closing.to_json()),
+    (
+      "connection_etag",
+      @management.connection_etag(boot_id, view.connection_id).to_json(),
+    ),
+  ])
+  row.to_json()
+}
+
+///|
+/// Exact byte length of a JSON string under the standard encoder's escaping
+/// rules, before constructing a potentially large Json/String copy.
+fn management_json_string_bytes(value : String) -> Int {
+  let mut count = 2
+  for byte in @utf8.encode(value) {
+    let code = byte.to_int()
+    if code == 34 ||
+      code == 92 ||
+      code == 8 ||
+      code == 9 ||
+      code == 10 ||
+      code == 12 ||
+      code == 13 {
+      count += 2
+    } else if code < 32 {
+      count += 6
+    } else {
+      count += 1
+    }
+  }
+  count
+}
+
+///|
+fn management_row_key_too_large(
+  kind : @management.QueryKind,
+  key : String,
+  state : @router.BrokerState,
+  driver : RouterDriver,
+  max_bytes : Int,
+) -> Bool {
+  let mut bytes = 0
+  match kind {
+    @management.Connections => {
+      let id = @string.parse_int64(key) catch { _ => 0L }
+      if id > 0L && driver.management_connection_view(id) is Some(view) {
+        if view.client_id is Some(value) {
+          bytes += management_json_string_bytes(value)
+        }
+        if view.principal is Some(value) {
+          bytes += management_json_string_bytes(value)
+        }
+      }
+    }
+    @management.Sessions => {
+      let handle = @string.parse_int64(key) catch { _ => 0L }
+      if handle > 0L && state.admin_session_view(handle) is Some(view) {
+        bytes += management_json_string_bytes(view.client_id)
+        bytes += management_json_string_bytes(view.owner)
+      }
+    }
+    @management.Subscriptions =>
+      if state.admin_subscription_view(key) is Some(view) {
+        bytes += management_json_string_bytes(view.filter)
+      }
+    @management.Retained => bytes += management_json_string_bytes(key)
+    _ => ()
+  }
+  bytes > max_bytes
+}
+
+///|
+
+///|
+fn management_query_kind_name(kind : @management.QueryKind) -> String {
+  match kind {
+    Connections => "connections"
+    Sessions => "sessions"
+    Subscriptions => "subscriptions"
+    Retained => "retained"
+    _ => "detail"
+  }
+}
+
+///|
+fn RouterDriver::management_query_result(
+  self : RouterDriver,
+  spec : @management.QuerySpec,
+  active : ManagementRuntime,
+) -> ManagementQueryReply {
+  let state = self.runtime.broker_state()
+  let boot_id = active.context.boot_id
+  if !active.config.details_enabled() ||
+    !state.management_index_available() ||
+    !self.management_connection_index_available() {
+    return management_query_error(
+      @http_transport.ServiceUnavailable,
+      "details_unavailable",
+    )
+  }
+  let index = state.management_index().unwrap()
+  let max_bytes = active.config.max_response_bytes()
+  let observed_at_ms = @async.now()
+  let revision = state.snapshot_revision()
+  if spec.kind == @management.Listeners {
+    let items : Array[Json] = []
+    let mqtt : Map[String, Json] = Map([
+      ("id", "mqtt".to_json()),
+      ("transport", "tcp".to_json()),
+      ("address", active.mqtt_listener_address.to_json()),
+      ("status", "listening".to_json()),
+    ])
+    let management : Map[String, Json] = Map([
+      ("id", "management".to_json()),
+      ("transport", "http".to_json()),
+      ("address", active.config.listen().to_json()),
+      ("status", "listening".to_json()),
+    ])
+    items.push(mqtt.to_json())
+    items.push(management.to_json())
+    return management_query_page_reply(
+      boot_id,
+      observed_at_ms,
+      revision,
+      items,
+      None,
+      max_bytes,
+    )
+  }
+  if spec.kind == @management.Config {
+    let config : Map[String, Json] = Map([
+      ("api_version", "1".to_json()),
+      ("boot_id", boot_id.to_json()),
+      ("details_enabled", active.config.details_enabled().to_json()),
+      ("operations_enabled", active.config.operations_enabled().to_json()),
+      ("max_connections", self.runtime.config.max_connections().to_json()),
+      ("max_sessions", state.config().max_sessions().to_json()),
+      (
+        "max_subscriptions_total",
+        state.config().max_subscriptions_total().to_json(),
+      ),
+      (
+        "max_retained_messages",
+        state.config().max_retained_messages().to_json(),
+      ),
+      ("default_page_size", active.config.default_page_size().to_json()),
+      ("max_page_size", active.config.max_page_size().to_json()),
+      ("query_scan_limit", active.config.query_scan_limit().to_json()),
+      ("max_response_bytes", max_bytes.to_json()),
+    ])
+    let bytes = @utf8.encode(config.to_json().stringify())
+    if bytes.length() > max_bytes {
+      return management_query_error(
+        @http_transport.Unprocessable,
+        "result_too_large",
+      )
+    }
+    return { status: @http_transport.Ok, body: bytes }
+  }
+  if spec.kind == @management.Connection {
+    let id = @string.parse_int64(spec.target) catch {
+      _ =>
+        return management_query_error(@http_transport.BadRequest, "bad_request")
+    }
+    let view = match self.management_connection_view(id) {
+      Some(value) => value
+      None =>
+        return management_query_error(@http_transport.NotFound, "not_found")
+    }
+    let bytes = @utf8.encode(
+      management_connection_json(view, boot_id).stringify(),
+    )
+    if bytes.length() > max_bytes {
+      return management_query_error(
+        @http_transport.Unprocessable,
+        "result_too_large",
+      )
+    }
+    return { status: @http_transport.Ok, body: bytes }
+  }
+  if spec.kind == @management.Session {
+    let handle = @string.parse_int64(spec.target) catch {
+      _ =>
+        return management_query_error(@http_transport.BadRequest, "bad_request")
+    }
+    let view = match state.admin_session_view(handle) {
+      Some(value) => value
+      None =>
+        return management_query_error(@http_transport.NotFound, "not_found")
+    }
+    let bytes = @utf8.encode(management_session_json(view, boot_id).stringify())
+    if bytes.length() > max_bytes {
+      return management_query_error(
+        @http_transport.Unprocessable,
+        "result_too_large",
+      )
+    }
+    return { status: @http_transport.Ok, body: bytes }
+  }
+  let route = management_query_kind_name(spec.kind)
+  let session_handle = if spec.kind == @management.Subscriptions {
+    spec.target
+  } else {
+    ""
+  }
+  let generation = index.generation()
+  let cursor_table = match active.cursor_table {
+    Some(value) => value
+    None =>
+      return management_query_error(
+        @http_transport.ServiceUnavailable,
+        "details_unavailable",
+      )
+  }
+  let now = @budget.monotonic_ms()
+  let start = match spec.cursor {
+    None => 0
+    Some(cursor) =>
+      match
+        cursor_table.lookup(
+          cursor,
+          spec.actor_token_id,
+          route,
+          spec.filters,
+          session_handle,
+          generation,
+          now,
+        ) {
+        Ok(record) => record.next_slot
+        Err(@management.InvalidCursor) =>
+          return management_query_error(
+            @http_transport.BadRequest,
+            "bad_request",
+          )
+        Err(@management.CursorForbidden) =>
+          return management_query_error(@http_transport.Forbidden, "forbidden")
+        Err(@management.CursorMismatch) =>
+          return management_query_error(
+            @http_transport.BadRequest,
+            "bad_request",
+          )
+        _ =>
+          return management_query_error(
+            @http_transport.Expired,
+            "expired_cursor",
+          )
+      }
+  }
+  let page = match spec.kind {
+    @management.Connections =>
+      match
+        self.management_connection_page(
+          start,
+          active.config.query_scan_limit(),
+          spec.limit,
+          fn(view) {
+            spec.filters == "" || spec.filters == "phase=" + view.phase
+          },
+        ) {
+        Some(value) => value
+        None =>
+          return management_query_error(
+            @http_transport.ServiceUnavailable,
+            "details_unavailable",
+          )
+      }
+    @management.Sessions =>
+      index.page(start, active.config.query_scan_limit(), spec.limit, fn(
+        identity,
+      ) {
+        match state.admin_session_view(identity.handle) {
+          None => false
+          Some(view) =>
+            spec.filters == "" ||
+            spec.filters == "attached=" + view.attached.to_string() ||
+            spec.filters == "mode=" + view.mode ||
+            spec.filters ==
+            "attached=" + view.attached.to_string() + "&mode=" + view.mode
+        }
+      })
+    @management.Subscriptions => {
+      let handle = @string.parse_int64(spec.target) catch {
+        _ =>
+          return management_query_error(
+            @http_transport.BadRequest,
+            "bad_request",
+          )
+      }
+      let identity = match index.identity_for_handle(handle) {
+        Some(value) => value
+        None =>
+          return management_query_error(
+            if spec.cursor is Some(_) {
+              @http_transport.Expired
+            } else {
+              @http_transport.NotFound
+            },
+            if spec.cursor is Some(_) {
+              "expired_cursor"
+            } else {
+              "not_found"
+            },
+          )
+      }
+      index.subscription_page(
+        identity.client_id,
+        start,
+        active.config.query_scan_limit(),
+        spec.limit,
+      )
+    }
+    @management.Retained =>
+      index.retained_page(start, active.config.query_scan_limit(), spec.limit)
+    _ => return management_query_error(@http_transport.NotFound, "not_found")
+  }
+  let items : Array[Json] = []
+  let empty : @management.QueryEnvelope = {
+    boot_id,
+    observed_at_ms,
+    state_revision: revision,
+    items: [],
+    next_cursor: None,
+  }
+  let base_without_cursor = @utf8.encode(empty.to_json().stringify()).length()
+  let base_with_cursor = @utf8.encode(
+    {
+      ..empty,
+      next_cursor: Some(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      ),
+    }
+    .to_json()
+    .stringify(),
+  ).length()
+  let mut item_bytes = 0
+  let mut next_slot = page.next_slot
+  let mut has_more = page.has_more
+  for offset in 0..<page.keys.length() {
+    let key = page.keys[offset]
+    if management_row_key_too_large(spec.kind, key, state, self, max_bytes) {
+      return management_query_error(
+        @http_transport.Unprocessable,
+        "result_too_large",
+      )
+    }
+    let row : Json? = match spec.kind {
+      @management.Connections => {
+        let id = @string.parse_int64(key) catch { _ => continue }
+        self
+        .management_connection_view(id)
+        .map(view => management_connection_json(view, boot_id))
+      }
+      @management.Sessions => {
+        let handle = @string.parse_int64(key) catch { _ => continue }
+        state
+        .admin_session_view(handle)
+        .map(view => management_session_json(view, boot_id))
+      }
+      @management.Subscriptions =>
+        state
+        .admin_subscription_view(key)
+        .map(view => {
+          let fields : Map[String, Json] = Map([
+            ("filter", view.filter.to_json()),
+            ("qos", view.qos.to_json()),
+          ])
+          fields.to_json()
+        })
+      @management.Retained =>
+        state
+        .admin_retained_view(key)
+        .map(view => {
+          let fields : Map[String, Json] = Map([
+            ("topic", view.topic.to_json()),
+            ("qos", view.qos.to_json()),
+            ("payload_bytes", view.payload_bytes.to_string().to_json()),
+          ])
+          fields.to_json()
+        })
+      _ => None
+    }
+    if row is Some(value) {
+      let size = @utf8.encode(value.stringify()).length()
+      let comma = if items.length() > 0 { 1 } else { 0 }
+      let needs_cursor = page.has_more || offset + 1 < page.keys.length()
+      let base = if needs_cursor {
+        base_with_cursor
+      } else {
+        base_without_cursor
+      }
+      if base + item_bytes + size + comma > max_bytes {
+        if items.is_empty() {
+          return management_query_error(
+            @http_transport.Unprocessable,
+            "result_too_large",
+          )
+        }
+        next_slot = page.positions[offset]
+        has_more = true
+        break
+      }
+      items.push(value)
+      item_bytes += size + comma
+    }
+  }
+  let next_cursor = if has_more {
+    let record : @management.CursorRecord = {
+      actor_token_id: spec.actor_token_id,
+      route,
+      filters: spec.filters,
+      session_handle,
+      next_slot,
+      index_generation: generation,
+      expires_monotonic_ms: 0L,
+    }
+    match cursor_table.issue(record, now) {
+      Ok(value) => Some(value)
+      Err(@management.CursorCapacity) =>
+        return management_query_error(
+          @http_transport.TooManyRequests,
+          "capacity_exhausted",
+        )
+      _ =>
+        return management_query_error(
+          @http_transport.ServiceUnavailable,
+          "unavailable",
+        )
+    }
+  } else {
+    None
+  }
+  management_query_page_reply(
+    boot_id, observed_at_ms, revision, items, next_cursor, max_bytes,
+  )
+}
+
+///|
+fn management_query_page_reply(
+  boot_id : String,
+  observed_at_ms : Int64,
+  revision : Int64,
+  items : Array[Json],
+  next_cursor : String?,
+  max_bytes : Int,
+) -> ManagementQueryReply {
+  let page : @management.QueryEnvelope = {
+    boot_id,
+    observed_at_ms,
+    state_revision: revision,
+    items,
+    next_cursor,
+  }
+  let bytes = @utf8.encode(page.to_json().stringify())
+  if bytes.length() > max_bytes {
+    management_query_error(@http_transport.Unprocessable, "result_too_large")
+  } else {
+    { status: @http_transport.Ok, body: bytes }
+  }
+}
+
+///|
+fn RouterDriver::handle_management_query(
+  self : RouterDriver,
+  event : ManagementQueryEvent,
+) -> Unit {
+  if self.management is Some(active) && active.query_mailbox is Some(mailbox) {
+    if !mailbox.valid(event.ticket) {
+      return
+    }
+    mailbox.produce(
+      event.ticket,
+      self.management_query_result(event.spec, active),
+    )
+  }
+}

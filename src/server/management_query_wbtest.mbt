@@ -88,3 +88,78 @@ test "connection index capacity failure disables details but not MQTT registrati
   sink1.close()
   sink2.close()
 }
+
+///|
+async test "typed query reads session detail and bounded page from driver" {
+  let config = ServerConfig::default()
+  let state = @router.BrokerState::new(config.broker_config())
+  let client_id = @session.ClientId::new("detail-client").unwrap()
+  ignore(
+    state
+    .apply(
+      @router.CreateSessionWith({
+        client_id,
+        mode: @session.Persistent,
+        attached: false,
+      }),
+    )
+    .unwrap(),
+  )
+  assert_true(state.enable_management_index())
+  let id = state
+    .management_index()
+    .unwrap()
+    .identity_for_client(client_id)
+    .unwrap()
+  let baseline = state.resource_ledger().occupied()
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  let management_config = @management.ManagementConfig::new(
+    enabled=true,
+    token_file="/fixture/tokens",
+    details_enabled=true,
+    max_bytes_total=33554432L,
+  ).unwrap()
+  let management = ManagementRuntime::new(
+    listener,
+    { config: management_config, tokens: lifecycle_startup().tokens },
+    state.resource_ledger(),
+  ).unwrap()
+  let driver = RouterDriver::new(BrokerRuntime::new(config, state), management~)
+  assert_true(
+    driver.enable_management_connection_index(config.max_connections()),
+  )
+  let mailbox = management.query_mailbox.unwrap()
+  let detail : @management.QuerySpec = {
+    kind: @management.Session,
+    target: id.handle.to_string(),
+    actor_token_id: "reader",
+    limit: 50,
+    cursor: None,
+    filters: "",
+  }
+  let ticket = mailbox.submit(detail).unwrap()
+  let event = mailbox.take().unwrap()
+  driver.handle(ManagementQuery(event))
+  let result = mailbox.wait(ticket).unwrap()
+  let body = @utf8.decode(result.body)
+  assert_eq(result.status, @http_transport.Ok)
+  assert_true(body.contains("\"client_id\":\"detail-client\""))
+  assert_true(body.contains("\"lifecycle_version\":\"1\""))
+  mailbox.release(ticket)
+  let list : @management.QuerySpec = {
+    kind: @management.Sessions,
+    target: "",
+    actor_token_id: "reader",
+    limit: 1,
+    cursor: None,
+    filters: "",
+  }
+  let ticket2 = mailbox.submit(list).unwrap()
+  driver.handle(ManagementQuery(mailbox.take().unwrap()))
+  let page = mailbox.wait(ticket2).unwrap()
+  assert_eq(page.status, @http_transport.Ok)
+  assert_true(@utf8.decode(page.body).contains("\"consistency\":\"per_page\""))
+  mailbox.release(ticket2)
+  management.close()
+  assert_eq(state.resource_ledger().occupied(), baseline)
+}
