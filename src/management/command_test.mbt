@@ -40,3 +40,16 @@ test "command paths are precise and normalize method target and etag" {
     is Err(InvalidCommandPath),
   )
 }
+
+///|
+test "single-digit connection etag is valid and canonical" {
+  let boot = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  let tag = "\"" + boot + ":c:2\""
+  assert_eq(parse_strong_etag(tag, "c").unwrap().target, 2L)
+  assert_true(
+    parse_command(
+      "POST", "/v1/connections/2/disconnect", tag, "Key_0123456789abc", "operator",
+    )
+    is Ok(_),
+  )
+}

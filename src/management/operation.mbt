@@ -423,30 +423,19 @@ pub fn OperationRecord::to_json(self : OperationRecord) -> Json {
     ("state", operation_state_name(self.state).to_json()),
     ("stage", operation_stage_name(self.stage).to_json()),
     ("accepted_at_ms", self.accepted_at_ms.to_string().to_json()),
-    (
-      "started_at_ms",
-      self.started_at_ms.map(value => value.to_string()).to_json(),
-    ),
-    (
-      "finished_at_ms",
-      self.finished_at_ms.map(value => value.to_string()).to_json(),
-    ),
+    ("started_at_ms", optional_decimal_json(self.started_at_ms)),
+    ("finished_at_ms", optional_decimal_json(self.finished_at_ms)),
     ("effect_applied", self.effect_applied.to_json()),
     ("transport_closed", self.transport_closed.to_json()),
     ("timed_out", self.timed_out.to_json()),
     ("completion_scope", self.completion_scope.to_json()),
     ("persistence_mode", self.persistence_mode.to_json()),
-    (
-      "state_revision_after",
-      self.state_revision_after.map(value => value.to_string()).to_json(),
-    ),
+    ("state_revision_after", optional_decimal_json(self.state_revision_after)),
     (
       "snapshot_committed_revision_at_finish",
-      self.snapshot_committed_revision_at_finish
-      .map(value => value.to_string())
-      .to_json(),
+      optional_decimal_json(self.snapshot_committed_revision_at_finish),
     ),
-    ("error_code", self.error_code.to_json()),
+    ("error_code", optional_string_json(self.error_code)),
   ])
   fields.to_json()
 }

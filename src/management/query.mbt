@@ -55,7 +55,7 @@ pub fn QueryEnvelope::to_json(self : QueryEnvelope) -> Json {
     ("state_revision", self.state_revision.to_string().to_json()),
     ("consistency", "per_page".to_json()),
     ("items", self.items.to_json()),
-    ("next_cursor", self.next_cursor.to_json()),
+    ("next_cursor", optional_string_json(self.next_cursor)),
   ])
   object.to_json()
 }
@@ -243,4 +243,20 @@ pub fn parse_read_query(
     return Err(QueryBadRequest)
   }
   Ok({ kind, target: target_id, actor_token_id, limit, cursor, filters })
+}
+
+///|
+pub fn optional_string_json(value : String?) -> Json {
+  match value {
+    Some(text) => text.to_json()
+    None => @json.to_json(())
+  }
+}
+
+///|
+pub fn optional_decimal_json(value : Int64?) -> Json {
+  match value {
+    Some(number) => number.to_string().to_json()
+    None => @json.to_json(())
+  }
 }

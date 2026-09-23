@@ -59,7 +59,7 @@ pub fn parse_strong_etag(
   value : String,
   expected_kind : String,
 ) -> Result[StrongEtag, CommandParseError] {
-  if value.length() < 39 ||
+  if value.length() < (if expected_kind == "c" { 37 } else { 39 }) ||
     value.length() > 100 ||
     value[0].to_int() != 34 ||
     value[value.length() - 1].to_int() != 34 {
