@@ -24,6 +24,7 @@ pub(all) enum CloseReason {
   KeepAliveTimeout
   ConnectTimeout
   ClientTakeover
+  AdminKick
   SlowConsumer
   EncodeFailure
   ResourceExhausted

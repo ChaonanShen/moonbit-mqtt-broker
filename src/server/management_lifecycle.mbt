@@ -25,6 +25,7 @@ pub struct ManagementRuntime {
   command_mailbox : ManagementCommandMailbox?
   operations : @management.OperationTable?
   audit : @management.AuditRing?
+  mut pending_kick_reservations : Int
   cursor_table : @management.CursorTable?
   mut mqtt_listener_address : String
   rejections : @management.ManagementRejections
@@ -128,6 +129,7 @@ pub fn ManagementRuntime::new(
     command_mailbox,
     operations,
     audit,
+    pending_kick_reservations: 0,
     cursor_table,
     mqtt_listener_address: "",
     rejections,

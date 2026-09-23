@@ -122,6 +122,7 @@ fn close_reason_name(reason : CloseReason) -> String {
     KeepAliveTimeout => "keep_alive_timeout"
     ConnectTimeout => "connect_timeout"
     ClientTakeover => "client_takeover"
+    AdminKick => "admin_kick"
     SlowConsumer => "slow_consumer"
     EncodeFailure => "encode_failure"
     RateLimited => "rate_limited"

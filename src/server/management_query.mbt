@@ -85,7 +85,7 @@ pub fn RouterDriver::management_connection_view(
     phase,
     client_id,
     principal: meta.principal.map(value => value.storage_value()),
-    closing: false,
+    closing: self.management_closing.contains(connection_id),
   })
 }
 
@@ -111,10 +111,7 @@ fn management_session_json(
     ("attached", view.attached.to_json()),
     ("lifecycle_version", view.lifecycle_version.to_string().to_json()),
     ("owner", view.owner.to_json()),
-    (
-      "detached_at_ms",
-      view.detached_at_ms.map(value => value.to_string()).to_json(),
-    ),
+    ("detached_at_ms", @management.optional_decimal_json(view.detached_at_ms)),
     ("subscription_count", view.subscription_count.to_json()),
     ("inflight_count", view.inflight_count.to_json()),
     ("pending_count", view.pending_count.to_json()),
@@ -140,8 +137,8 @@ fn management_connection_json(
     ("connection_id", view.connection_id.to_string().to_json()),
     ("boot_id", boot_id.to_json()),
     ("phase", view.phase.to_json()),
-    ("client_id", view.client_id.to_json()),
-    ("principal", view.principal.to_json()),
+    ("client_id", @management.optional_string_json(view.client_id)),
+    ("principal", @management.optional_string_json(view.principal)),
     ("closing", view.closing.to_json()),
     (
       "connection_etag",
@@ -373,7 +370,7 @@ fn RouterDriver::management_query_result(
       ("api_version", "1".to_json()),
       ("boot_id", boot_id.to_json()),
       ("items", items.to_json()),
-      ("next_cursor", next_cursor.to_json()),
+      ("next_cursor", @management.optional_string_json(next_cursor)),
       (
         "oldest_available_sequence",
         page.oldest_available_sequence.to_string().to_json(),
