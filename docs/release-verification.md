@@ -10,7 +10,7 @@ An Argon2id fixture previously passed in the development image but aborted throu
 
 The supported environment is Ubuntu 24.04, Linux amd64, the native backend, MoonBit compiler `0.10.10+f8a486b6f` and Node.js `22.23.1`, as defined by the Dockerfile. MoonBit dependencies and client tools follow `moon.mod` and the lock files. These results do not establish support for other operating systems, architectures, backends or arbitrary toolchain versions.
 
-Run commands from the Linux repository root, following the applicable workspace instructions. Maintenance uses the remote authoritative workspace; do not create a Windows source copy to reproduce tests.
+Development and user-run tests use the remote authoritative workspace. GitHub Actions may temporarily check out a pushed candidate for automated verification; this is not another development workspace. Preserve CI logs and safe artifacts in Actions; when the user later requests review, archive required evidence to the remote workspace within retention. Do not create a Windows source copy.
 
 ```bash
 git status --short --branch
@@ -37,14 +37,17 @@ Allow disk space for fresh volumes, runtime images and evidence. Dependency down
 
 Mooncakes does not install OS libraries. An evaluator must use the declared Docker environment or install the declared native dependencies.
 
-## 2. Daily checks, targeted diagnostics and release runs
+## 2. Branch development, CI verification and user-run checks
 
-For uncommitted development changes:
+Start every new development task on a new remote task branch after reading instructions and checking HEAD/status/diff; preserve existing changes and record the base SHA. Do not commit or push directly to main. An authorized feature implementation includes committing and pushing its task branch to trigger CI without requesting permission for each push. It does not authorize merging, force-pushing, release tags or publication. A planning/document-only task does not automatically push.
+
+Track implementation, CI, remaining user-run checks and formal acceptance separately. CI owns complete correctness and other suitable automated verification; do not duplicate the full suite on the development machine. For mandatory checks not covered by suitable CI, the agent supplies real commands and logging launch scripts tied to the final candidate SHA. For all future feature implementations and related fixes, the default stopping point is a successful task-branch push, immediately followed by delivery of branch/SHA, the Actions entry or an already available run link, and user test launch/live-log/result commands. End the turn then; do not wait for CI or user tests, run watch/poll loops, create automatic monitors/follow-ups, or enter a post-push repair loop. Review results only after a later user request or notification that tests have run.
+
+During development, select a few tests or process scenarios that directly address the current risk, or a necessary compile/link check. Combine adjacent changes. Commits, small steps and feature-group boundaries do not trigger extra development-side tests; pushing the task branch triggers the configured CI. These commands are options, not a checklist for every change:
 
 ```bash
 scripts/moon-docker.sh fmt --check
 scripts/moon-docker.sh check --target native --deny-warn
-scripts/moon-docker.sh test --target native --deny-warn
 scripts/moon-docker.sh build --target native
 ```
 
@@ -59,34 +62,48 @@ docker run --rm --platform linux/amd64 --entrypoint bash \
 
 The environment regression independently checks the reference fixture before simulating a missing runtime in child processes. It does not rewrite expected hashes. Do not disable assertions, skip authentication tests or use snapshot updates to accept an unexplained result. See [security](security.md) for fixture generation.
 
-For a release, review and commit the entire candidate, then run:
+Prove high-risk boundaries when wiring them: WAL commit/recovery, revocation, native-task reap, protocol order, resource accounting and new library dependencies. Evidence may come from current-candidate CI; development-side runs are limited to implementation decisions and minimal failure reproductions. Missing evidence must not be called a pass.
+
+Once the feature, necessary tests, scripts and documentation are ready, push the task branch and default to one complete functional run for that capability in CI without a full development-side pre-run, covering every applicable functional invariant and affected compatibility case. After fixes settle, rerun affected coverage only if the fixes affect previously verified behavior; use a complete functional rerun for broad or inseparable effects. Do not schedule a second complete run in advance or impose a hard debugging limit.
+
+Functional development completion is separate from formal release-candidate acceptance. The complete functional run is not the full repository release chain, four-profile distribution, long soak or complete performance comparison. If a ready capability proceeds directly to formal acceptance, its functional gate inside the strict chain can serve both purposes without a duplicate run before or after. Capabilities accepted together on the same candidate can share one strict chain.
+
+Matrix IDs identify assertions, not independent executions. Map multiple IDs to one case/process gate or still-valid development evidence with a recorded SHA, configuration and change-impact assessment. Do not duplicate 10,000-request stress, performance or four-profile runs per ID or feature group. All gates inside the strict entry point still run. Every actual run records its purpose, candidate SHA (plus diff/content identity for an uncommitted tree), command, parameters, log path and exit status. Keep handoffs short; do not rerun just to fill a record when there is no code change, risk change or failure to investigate.
+
+After the feature, tests, scripts and documentation are ready, commit and push the task branch so CI invokes the strict entry point below. It already includes cumulative correctness, package reconstruction and four runtime profiles; do not run it on the development machine before pushing or repeat it there after CI succeeds.
 
 ```bash
+# Runs on the checked-out CI candidate, not a developer pre-push checklist.
 git status --short --branch
 git log -1 --oneline
 scripts/verify-distribution-docker.sh
 ```
 
-Tracked modifications, including staged changes, block this entry point. Untracked candidate files also block it, except root-level local `AGENTS.md` and `AGENTS.local.md`. The exception preserves local maintenance instructions; those files are still excluded from the committed archive. Never hide source changes in ignored paths or instruction files to bypass the guard.
+The entry point validates actual HEAD. Tracked modifications and uncommitted candidate files block it, except root-level local AGENTS.local.md (the guard also permits a legacy AGENTS.md), which remains outside the archive. Never hide candidate source in ignored paths.
 
-For a long remote run, choose an unused tmux session name:
+Ending implementation after push is not an acceptance pass. Formal acceptance still requires one complete successful strict record for the same SHA and artifacts, all four profiles, hashes and outer exit status 0. Qualified CI evidence satisfies this requirement without another remote full run. Distinguish a PR's temporary merge SHA, branch HEAD and release SHA; changed candidates need new evidence, not a combination of partial runs.
 
-```bash
-mkdir -p .local
-repo_root="$PWD"
-tmux new-session -d -s mqtt-release-verify -c "$repo_root" \
-  'scripts/verify-distribution-docker.sh >.local/release-launch.log 2>&1'
-```
+The existing push/PR workflow runs strict distribution even though an ordinary Git commit is not formal acceptance. Required performance/soak is supplied by suitable jobs or inputs. A successful push does not imply passing verification.
 
-`tail -n 80 .local/release-launch.log` shows startup output and the result path. Reusing this command overwrites that launcher log, but each verifier run has its own result directory. A tmux session ending does not imply success. Do not interrupt another session to reuse its name.
-
-For the extended stability profile:
+Prefer CI with soak enabled when the extended stability profile is required:
 
 ```bash
 RELEASE_SOAK=1 scripts/verify-distribution-docker.sh
 ```
 
-Defaults are `RELEASE_SOAK_SECONDS=600` and `RELEASE_SOAK_PUBLICATIONS=100000`; the existing stability script supplies the workload assertions. This command runs the entire verifier with soak enabled. Record any parameter overrides explicitly; a shorter custom run is not the default ten-minute profile. The normal command has soak disabled.
+Defaults are `RELEASE_SOAK_SECONDS=600` and `RELEASE_SOAK_PUBLICATIONS=100000`; the existing stability script supplies the workload assertions. This command runs the entire verifier with soak enabled. Run performance or long workloads on suitable CI runners after the behavior exists, for a concrete performance risk or a formal candidate. Only mandatory checks requiring unsupported hardware/storage or otherwise not covered by suitable CI are handed to the user with exact commands; the agent does not run these complete/long checks for the user. First use a short targeted load to check fixture connectivity/rate limits, bounded waits, sampling and cleanup, then perform one formal measurement. Keep the measurement protocol's paired rounds, thresholds and required soak duration. A fixture failure is a fixture failure/incomplete measurement, not a product failure: diagnose it, fix it and repeat the short check before another long run. Run performance and soak separately without overlapping loads. If soak is required, enable it in the strict run from the outset rather than first running the same candidate's full chain without soak.
+
+Record any parameter overrides explicitly; a shorter custom run is not the default ten-minute profile. The normal command has soak disabled.
+
+### User-run command handoff and durable logs
+
+For every remaining mandatory check, provide its CI coverage gap, candidate SHA, prerequisites, estimated resources/duration, exact launch/live-log/result commands and acceptance criteria. Prepare a remote `run-<case>.sh` with real implemented commands and no placeholders. The user starts it through tmux or the existing scheduler. After a successful branch push the agent hands over these commands and stops without waiting for CI or launching the complete/long run. If no extra manual test is required, state that explicitly and still stop. A failed push must be reported as a failure, not as submitted CI.
+
+- Create a unique run directory and launcher log on every attempt, for example `.local/manual-verification/<capability>/<SHA>/<run-id>/`. Never overwrite a shared `release-launch.log`.
+- Persist stdout/stderr from startup, command/parameters, SHA, relevant environment/image identity, start/end time, task ID, raw samples, child logs and actual exit status. Keep evidence outside disposable containers; exclude credentials and full environment dumps.
+- Write output directly to the log and use a separate `tail -F` for viewing. Pipelines must preserve the test's exit status. Failures, interruptions and retries keep separate evidence; do not delete prior output.
+- Do not switch branches or edit the candidate during a user run. Arrange an isolated committed-candidate environment first if development must continue concurrently. Verify candidate identity at both ends. Missing completion records, including after SIGKILL, mean incomplete; a vanished tmux session is not a pass.
+- Only after a later user request to inspect CI, or notification supplying RUN_DIR/session/launcher-log identity, does the agent resume evidence review; do not poll or wait after handoff. For user tests, read remote evidence and checks command, complete output, exit status, assertions/thresholds, raw data and hashes. Report verified, failed or incomplete with precise gaps. Do not ask for repeated full log pastes or silently restart the full suite.
 
 ## 3. Verification stages
 
@@ -159,7 +176,7 @@ This reads evidence; it does not run omitted stages or publish anything. An earl
 | `runtime/broker` | Exported executable for hash verification | Yes |
 | Temporary runtime certificates, key and password file | Per-run test fixtures | No |
 
-CI uploads artifact `distribution-evidence` with 30-day retention, including `package.zip`, `artifacts.sha256`, and `runtime/broker`. Verify both files from the artifact directory with `sha256sum --check artifacts.sha256`. Archive required evidence to remote `.local/ci-evidence/<SHA>/<run-id>/` before expiry and record run/job URLs.
+CI uploads artifact `distribution-evidence` with 30-day retention, including `package.zip`, `artifacts.sha256`, and `runtime/broker`. Verify both files from the artifact directory with `sha256sum --check artifacts.sha256`. When the user later requests review, archive required evidence to remote `.local/ci-evidence/<SHA>/<run-id>/` within retention and record run/job URLs; do not wait for CI or create an automatic follow-up to archive it during the implementation turn.
 
 Keep results on the remote workspace according to project policy. Record the directory, commit, package hash and CI run, and preserve permitted evidence before CI expiry if needed for a release. Do not copy temporary private keys into source, distributables or acceptance submissions; test fixtures are not production credentials.
 
@@ -170,7 +187,7 @@ Keep results on the remote workspace according to project policy. Record the dir
 | Dirty/untracked candidate guard | Review and commit intended content; never bypass it |
 | Missing/wrong development image | Prepare the Dockerfile-defined image and inspect real versions/ID |
 | Missing Argon2 runtime | Use the development image or install declared dependencies; retain assertions |
-| Fixture mismatch | Check reference generation, accidental password newline and shell `$` expansion; fix and retest |
+| Fixture mismatch or workload-harness failure | Check reference data, password newline/`$` expansion, rate limits, bounded waits and cleanup; fix and retest narrowly. Do not classify it as a product failure. After fixes settle, formal acceptance still needs a complete strict run |
 | Compile/assertion failure or panic | Diagnose the first relevant error, fix the cause and add a meaningful regression |
 | Runtime inventory mismatch | Fix the image scenario rather than relaxing assertions |
 | Permissions, read-only path, TLS/configuration failure | Check the documented runtime contract; do not simply switch to root or disable certificate verification |
@@ -178,11 +195,11 @@ Keep results on the remote workspace according to project policy. Record the dir
 | Interrupted task or missing completion record | Not a pass; retain output and rerun |
 | Commit/hash mismatch | Treat changed content as a new candidate and obtain fresh evidence |
 
-Exit numbers alone are insufficient: 255 has appeared for both network errors and native-process crashes. Use the stage and actual diagnostic. A retry must keep all checks. Normal exit attempts to clean its volume/container; after forced interruption inspect only precisely identified resources from this run, not every Docker resource on the shared server.
+Exit numbers alone are insufficient: 255 has appeared for both network errors and native-process crashes. Use the stage and actual diagnostic. For formal acceptance, a retry must keep all checks; first diagnose and retest narrowly, then retry the complete strict entry point after related fixes settle. Do not combine incomplete runs into a pass. Normal exit attempts to clean its volume/container; after forced interruption inspect only precisely identified resources from this run, not every Docker resource on the shared server.
 
 ## 7. Changes that invalidate a result
 
-Recommit and rerun after changes to production code, tests, C FFI, build scripts, manifests/lock files, version/metadata, package file selection, packaged documentation/examples, toolchains/images/system libraries, workload settings or claimed platform support.
+The old formal result is invalidated by the changes below. Recommit and obtain a new complete successful strict run when the fixes have settled and the candidate is submitted for formal acceptance; this does not require an immediate strict run after every development edit. This applies to production code, tests, C FFI, build scripts, manifests/lock files, version/metadata, package file selection, packaged documentation/examples, toolchains/images/system libraries, workload settings or claimed platform support.
 
 Every new native library needs a dependency/version declaration, installation instructions, real positive coverage, a missing-library case and appropriate inventory assertions. Expand the matrix before claiming another OS, architecture or toolchain.
 
@@ -226,7 +243,7 @@ Published version/commit/artifact correspondence:
 - [release-gate.sh](../scripts/release-gate.sh): legacy three-pass plus soak workflow; does not automatically invoke the new matrix and cannot replace the strict entry point.
 - [release-check.sh](../scripts/release-check.sh): read-only final preflight that matches the package to strict four-profile soak evidence and the candidate commit.
 
-CI runs on push, pull request and manual dispatch; manual dispatch can enable soak. The job timeout is 45 minutes. Artifacts can be uploaded from failed jobs, so their presence is not evidence of a successful job. Update this runbook with changes to the scripts or CI.
+CI runs the complete strict chain on push, pull request and manual dispatch. Push/PR runs for the same branch share a concurrency group, so newer development runs cancel older ones; manually dispatched formal runs use distinct groups and are preserved. An ordinary local commit does not trigger GitHub CI. Manual dispatch can enable soak. The job timeout is 75 minutes. Artifacts can be uploaded from failed jobs, so their presence is not evidence of a successful job. Update this runbook with changes to the scripts or CI.
 
 ## 10. Historical implementation evidence
 
@@ -304,6 +321,8 @@ Keep `runtime-*-management.log` and `runtime-*-admin.log` alongside MQTT
 runtime logs. Same HEAD, same artifact hashes, four profile PASS records
 and the outermost exit code 0 are required. A-only and disabled coverage
 must remain when B is added.
+
+The full performance protocol and thresholds below remain required where applicable. Prefer a dedicated CI job after the behavior exists and there is a concrete performance risk or a formal candidate, not once per matrix ID. The current workflow does not invoke this script or upload its JSON/TSV/raw samples. Future integration must add safe artifact coverage, including the executable needed for complete hash verification. Until a suitable runner satisfies the measurement contract, the agent hands exact commands to the user. Keep short fixture checks distinct from formal measurement; handle fixture failure as described above. Historical management evidence is unchanged.
 
 The separate `scripts/verify-management-admin-performance.sh` compares
 the same Native binary and 32 MiB parent-cap configuration with B off
