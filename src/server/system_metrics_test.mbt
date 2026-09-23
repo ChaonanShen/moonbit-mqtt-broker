@@ -53,6 +53,7 @@ test "system metrics are qos0 read-only and do not feed back into state" {
       }),
     )
   }
+  let mut checked_values = 0
   for action in actions {
     match action {
       SendPacket({ connection_id, packet: Publish(packet) }) => {
@@ -60,10 +61,21 @@ test "system metrics are qos0 read-only and do not feed back into state" {
         assert_true(packet.topic.has_prefix("$SYS/broker/"))
         assert_eq(packet.qos, QoS0)
         assert_false(packet.retain)
+        if packet.topic == "$SYS/broker/clients/connected" ||
+          packet.topic == "$SYS/broker/sessions/count" ||
+          packet.topic == "$SYS/broker/subscriptions/count" {
+          assert_eq(packet.payload, b"2")
+          checked_values += 1
+        }
+        if packet.topic == "$SYS/broker/messages/sent" {
+          assert_eq(packet.payload, b"0")
+          checked_values += 1
+        }
       }
       _ => fail("expected internal QoS 0 metric")
     }
   }
+  assert_eq(checked_values, 4)
   assert_eq(rt.broker_state().snapshot_revision(), revision)
   assert_eq(rt.broker_state().retained_count(), retained)
   assert_eq(metrics.messages_sent(), 0L)

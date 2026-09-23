@@ -42,6 +42,18 @@ pub fn PersistenceRuntime::close(self : PersistenceRuntime) -> Unit {
 }
 
 ///|
+pub fn PersistenceRuntime::committed_revision(
+  self : PersistenceRuntime,
+) -> Int64 {
+  self.sink.committed_revision()
+}
+
+///|
+pub fn PersistenceRuntime::is_degraded(self : PersistenceRuntime) -> Bool {
+  self.writer.is_degraded()
+}
+
+///|
 pub fn PersistenceRuntime::state(self : PersistenceRuntime) -> String {
   if self.writer.is_degraded() {
     "degraded"
