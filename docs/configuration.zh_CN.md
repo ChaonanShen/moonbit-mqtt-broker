@@ -82,6 +82,47 @@ wal_disk_reserve_bytes = 268435456
 `--print-effective-config` 还会应用命令行覆盖，并以规范 TOML 输出最终配置；
 私钥和密码文件的值会替换为 `<redacted>`。
 
+## 在线配置热更新
+
+热更新默认关闭。启动时使用绝对路径的 `--config` 和私有的版本 1
+bundle manifest。manifest 列出有效配置及其引用的密码库、ACL、MQTT
+TLS/WSS 证书与私钥的绝对路径和 SHA-256 摘要。完整发布材料和 manifest
+后，再发 SIGHUP 或调用[配置管理热更新](management.zh_CN.md)。
+`scripts/build-config-bundle.sh` 可生成不可变版本目录与 manifest，
+四个参数依次是 `SOURCE_DIR VERSION_DIR CONFIG_TARGET MANIFEST_TARGET`；
+目标路径必须与运行中 Broker 读取的路径一致。保留旧材料以便回滚和
+strict 恢复。
+
+```toml
+[reload]
+enabled = true
+manifest_file = "/etc/moonbit-mqtt-broker/manifest.toml"
+# 配置 MQTT TLS 或 WSS 监听器时必填。
+material_runtime_dir = "/var/lib/moonbit-mqtt-broker/tls-material"
+prepare_timeout_ms = 30000
+max_source_bytes = 16777216
+max_generation_bytes = 67108864
+max_reconcile_items_per_turn = 64
+max_reconcile_bytes_per_turn = 1048576
+max_accounts = 4096
+max_acl_rules = 4096
+```
+
+材料运行目录必须是私有、可写的绝对路径，且与来源及持久化目录分开。
+Broker 在准备候选前捕获并核验整个 bundle；无效或读取中变化的来源
+不会替换现役代际。`--check-config` 可以校验配置的 bundle，不激活
+配置，也不创建运行期 TLS 材料。CLI 覆盖在重新解析 TOML 时仍保持
+启动时的优先级。
+
+可热更新匿名开关、密码库、ACL、既有 MQTT TLS/WSS 证书与私钥内容、
+日志级别/格式、系统指标周期和管理快照周期。其他有效标量、
+监听拓扑/地址/传输、管理令牌及 reload 资源限制均需重启。
+混合热字段与需重启字段的修改会整次拒绝；无变化请求不推进配置代际。
+管理关闭时 SIGHUP 仍可用；HTTP 路由要求已启用管理监听器和
+`config_admin` 令牌。旧 TLS 连接持有原材料 lease，新握手使用新代际。
+详见[安全撤权](security.zh_CN.md#在线安全撤权)及
+[持久化恢复](persistence.zh_CN.md#热更新与恢复)。
+
 ## 具名 MQTT 监听器与 WS/WSS
 
 用 `[[listeners]]` 在同一 Broker 进程中同时启用 TCP、TLS、WS 和 WSS。
