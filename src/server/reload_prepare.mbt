@@ -101,11 +101,32 @@ pub async fn prepare_reload_candidate(
     max_generation_bytes > 268435456L {
     raise ResourceStartupFailure("invalid reload prepare limits")
   }
+  let capacity_bytes = (max_generation_bytes - 4096L) / 3L
+  let capture_limit = if max_source_bytes.to_int64() < capacity_bytes {
+    max_source_bytes
+  } else {
+    capacity_bytes.to_int()
+  }
+  if capture_limit < 16384 {
+    raise ResourceStartupFailure("reload source budget unavailable")
+  }
+  let reservation = capture_limit.to_int64() * 3L + 4096L
+  let ticket = match pool.reserve(reservation) {
+    Ok(value) => value
+    Err(_) =>
+      raise ResourceStartupFailure("reload generation budget unavailable")
+  }
+  ticket.commit().unwrap()
+  let mut transferred = false
+  errdefer (if !transferred { ticket.release().unwrap() })
   @async.with_timeout(timeout_ms, () => {
-    let bundle = @bundle.capture_bundle(manifest_path, max_source_bytes~) catch {
+    let bundle = @bundle.capture_bundle(
+      manifest_path,
+      max_source_bytes=capture_limit,
+    ) catch {
       @bundle.BundleError(message) =>
         if message == "source_changed" {
-          @bundle.capture_bundle(manifest_path, max_source_bytes~)
+          @bundle.capture_bundle(manifest_path, max_source_bytes=capture_limit)
         } else {
           raise @bundle.BundleError(message)
         }
@@ -127,6 +148,8 @@ pub async fn prepare_reload_candidate(
     if bundle.same_effective_generation(
         effective, previous_bundle, previous_effective,
       ) {
+      ticket.release().unwrap()
+      transferred = true
       return ReloadNoChange
     }
     let source_bytes = bundle
@@ -136,13 +159,6 @@ pub async fn prepare_reload_candidate(
     if cost > max_generation_bytes {
       raise ResourceStartupFailure("reload generation exceeds byte limit")
     }
-    let ticket = match pool.reserve(cost) {
-      Ok(value) => value
-      Err(_) =>
-        raise ResourceStartupFailure("reload generation budget unavailable")
-    }
-    ticket.commit().unwrap()
-    errdefer ticket.release().unwrap()
     let fingerprint = bundle.policy_fingerprint(effective)
     let previous_fingerprint = previous_bundle.policy_fingerprint(
       previous_effective,
@@ -158,6 +174,7 @@ pub async fn prepare_reload_candidate(
     } else {
       Some(prepare_tls_generation(bundle, effective, pool, runtime_root))
     }
+    transferred = true
     ReloadPrepared({
       bundle,
       effective,
