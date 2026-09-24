@@ -100,9 +100,39 @@ async test "reload prepare distinguishes cosmetic change, hot change, and restar
   )
   assert_true(no_change is ReloadNoChange)
   assert_eq(ledger.occupied(), baseline)
+  write_reload_prepare_fixture(config_path, manifest_path, "[server]\n")
+  let removed_default = prepare_reload_candidate(
+    manifest_path,
+    config_path,
+    [],
+    initial,
+    effective,
+    @security.SecurityPolicy::permissive(),
+    pool,
+    root,
+    30000,
+    16777216,
+    67108864L,
+  )
+  assert_true(removed_default is ReloadNoChange)
+  let cli_effective = initial.evaluate(config_path, ["--log-level", "warn"])
   write_reload_prepare_fixture(
     config_path, manifest_path, "[observability]\nlog_level = \"debug\"\n",
   )
+  let cli_overridden = prepare_reload_candidate(
+    manifest_path,
+    config_path,
+    ["--log-level", "warn"],
+    initial,
+    cli_effective,
+    @security.SecurityPolicy::permissive(),
+    pool,
+    root,
+    30000,
+    16777216,
+    67108864L,
+  )
+  assert_true(cli_overridden is ReloadNoChange)
   let changed = prepare_reload_candidate(
     manifest_path,
     config_path,
@@ -157,7 +187,7 @@ async test "reload prepare distinguishes cosmetic change, hot change, and restar
   handle.close()
   assert_eq(ledger.occupied(), baseline)
   write_reload_prepare_fixture(
-    config_path, manifest_path, "[server]\nmax_packet_size = 2048\n",
+    config_path, manifest_path, "[server]\nmax_packet_size = 2048\n[observability]\nlog_level = \"debug\"\n",
   )
   let rejected = try {
     ignore(
