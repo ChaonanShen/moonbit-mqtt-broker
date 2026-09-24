@@ -1,4 +1,12 @@
 ///|
+priv struct StrictReloadPending {
+  candidate : PreparedReload
+  expected_epoch : Int64
+  reply : @async.Queue[ReloadDriverReply]
+  mut committed : Bool
+}
+
+///|
 pub struct RouterDriver {
   runtime : BrokerRuntime
   sinks : Map[ConnectionId, TransportSink]
@@ -17,6 +25,7 @@ pub struct RouterDriver {
   priv mut retired_generations : Array[ConfigGeneration]
   priv mut reload_reconciler : @router.PolicyReconciler?
   priv mut reload_issue : @router.PolicyIssue?
+  priv mut strict_reload_pending : StrictReloadPending?
   priv reload_reconcile_items : Int
   priv reload_reconcile_bytes : Int64
   priv mut strict_checkpoint_cursor : @router.SnapshotExportCursor?
@@ -106,6 +115,7 @@ pub fn RouterDriver::new(
     retired_generations: [],
     reload_reconciler: None,
     reload_issue: None,
+    strict_reload_pending: None,
     reload_reconcile_items,
     reload_reconcile_bytes,
     strict_checkpoint_cursor: None,
@@ -617,7 +627,11 @@ fn RouterDriver::dispatch(
 
 ///|
 pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
-  self.handle_scoped(event)
+  match event {
+    ReloadControl(command) => self.handle_reload_control(command)
+    _ => self.handle_scoped(event)
+  }
+  self.finish_committed_reload()
   self.advance_reload_reconciliation()
 }
 
@@ -709,6 +723,7 @@ fn RouterDriver::handle_scoped(
         self.handle_management_command(command)
       }
     ManagementMaintenance => self.maintain_management()
+    ReloadControl(_) => abort("reload control entered scoped handler")
     UnregisterTransport(connection_id) => {
       self.sinks.remove(connection_id)
       if self.management_closing.get(connection_id) is Some(watch) {
