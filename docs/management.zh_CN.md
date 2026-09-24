@@ -60,7 +60,7 @@ max_bytes_total = 33554432
 | `DELETE /v1/sessions/{handle}` | operator | 只删除离线持久 Session |
 | `GET /v1/operations/{id}` | operator 或 config_admin | 本 token 的进程内 Operation |
 | `GET /v1/audit` | operator 或 config_admin | 本 token 的近期进程内审计 |
-| `POST /v1/config/reload` | config_admin | 尚无协调器时返回 501 `capability_unavailable` |
+| `POST /v1/config/reload` | config_admin | 启用 reload 且请求被接纳时返回 202；禁用时返回 503 `reload_disabled` |
 
 连接阶段为 `await_connect`、`authenticating`、`active`。MQTT 注册之前的 TLS
 握手不在列表中。具名 TCP/TLS/WS/WSS MQTT 监听器共享同一 Broker 状态；管理 HTTP
