@@ -255,10 +255,13 @@ async fn write_transport(
         return PeerEof
       }
       WriteFrame(frame) => {
-        let ticket = sink.take_frame_ticket(frame)
+        let (ticket, authorization) = sink.take_owned_frame(frame)
         defer release_optional(ticket)
         if sink.ws_closing {
           continue
+        }
+        if authorization is Some(value) && !sink.authorize(value) {
+          return PolicyRevoked
         }
         connection.write(frame) catch {
           _ => return WriteFailure
@@ -268,10 +271,13 @@ async fn write_transport(
         }
       }
       WriteFrameThenClose(frame, reason) => {
-        let ticket = sink.take_frame_ticket(frame)
+        let (ticket, authorization) = sink.take_owned_frame(frame)
         defer release_optional(ticket)
         if sink.ws_closing {
           continue
+        }
+        if authorization is Some(value) && !sink.authorize(value) {
+          return PolicyRevoked
         }
         connection.write(frame) catch {
           _ => return WriteFailure

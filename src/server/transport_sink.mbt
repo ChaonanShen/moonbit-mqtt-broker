@@ -7,6 +7,19 @@ pub(all) enum OutboundCommand {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct OutboundAuthorization {
+  connection_id : ConnectionId
+  client_id : @session.ClientId
+  session_incarnation : Int64?
+  topic : @topic.TopicName
+}
+
+///|
+fn OutboundAuthorization::cost(self : OutboundAuthorization) -> Int64 {
+  128L + @budget.utf8_bytes(self.topic.value())
+}
+
+///|
 priv struct FrameReservation {
   ticket : @budget.Ticket
   pool : @budget.Pool
@@ -15,7 +28,8 @@ priv struct FrameReservation {
 ///|
 priv struct OwnedFrame {
   frame : Bytes
-  ticket : @budget.Ticket
+  ticket : @budget.Ticket?
+  authorization : OutboundAuthorization?
 }
 
 ///|
@@ -23,6 +37,7 @@ pub struct TransportSink {
   priv mut handshake : (FrameReservation, @budget.Ticket)?
   priv mut budget : (@budget.Ledger, @budget.Pool, @budget.Pool)?
   priv mut owned : Array[OwnedFrame]
+  priv mut writer_gate : ((OutboundAuthorization) -> Bool)?
   priv mut handshake_resolved : Bool
   priv handshake_gate : @async.Queue[Bool]
   outbound : @async.Queue[OutboundCommand]
@@ -39,6 +54,7 @@ pub fn TransportSink::new(max_outbound : Int) -> TransportSink {
     handshake: None,
     budget: None,
     owned: [],
+    writer_gate: None,
     handshake_resolved: false,
     handshake_gate: @async.Queue(kind=Blocking(1)),
     outbound: @async.Queue(kind=Blocking(max_outbound)),
@@ -100,9 +116,10 @@ pub fn TransportSink::close(self : TransportSink) -> Unit {
     self.handshake = None
   }
   for frame in self.owned {
-    frame.ticket.release().unwrap()
+    release_optional(frame.ticket)
   }
   self.owned = []
+  self.writer_gate = None
   if !self.handshake_resolved {
     self.resolve_handshake(false)
   }
@@ -111,6 +128,25 @@ pub fn TransportSink::close(self : TransportSink) -> Unit {
   self.close_signal.close(clear=true)
   self.ws_close_ack.close(clear=true)
   self.ws_control.close(clear=true)
+}
+
+///|
+fn TransportSink::set_writer_gate(
+  self : TransportSink,
+  gate : (OutboundAuthorization) -> Bool,
+) -> Unit {
+  self.writer_gate = Some(gate)
+}
+
+///|
+fn TransportSink::authorize(
+  self : TransportSink,
+  authorization : OutboundAuthorization,
+) -> Bool {
+  match self.writer_gate {
+    Some(gate) => gate(authorization)
+    None => false
+  }
 }
 
 ///|
@@ -153,20 +189,29 @@ fn TransportSink::enqueue_frame(
   frame : Bytes,
   reservation : FrameReservation?,
   close : CloseReason?,
+  authorization? : OutboundAuthorization,
 ) -> Bool {
   let command = match close {
     None => WriteFrame(frame)
     Some(reason) => WriteFrameThenClose(frame, reason)
   }
   let accepted = self.outbound.try_put(command) catch { _ => false }
-  if reservation is Some(r) {
-    if accepted {
-      r.ticket.replace([r.pool.allocation(frame.length().to_int64())]).unwrap()
-      r.ticket.commit().unwrap()
-      self.owned.push({ frame, ticket: r.ticket })
-    } else {
-      r.ticket.release().unwrap()
-    }
+  let ticket = match reservation {
+    Some(r) =>
+      if accepted {
+        let cost = frame.length().to_int64() +
+          authorization.map(value => value.cost()).unwrap_or(0L)
+        r.ticket.replace([r.pool.allocation(cost)]).unwrap()
+        r.ticket.commit().unwrap()
+        Some(r.ticket)
+      } else {
+        r.ticket.release().unwrap()
+        None
+      }
+    None => None
+  }
+  if accepted {
+    self.owned.push({ frame, ticket, authorization })
   }
   accepted
 }
@@ -189,7 +234,7 @@ fn TransportSink::enqueue_ws_control(
   if reservation is Some(r) {
     if accepted {
       r.ticket.commit().unwrap()
-      self.owned.push({ frame, ticket: r.ticket })
+      self.owned.push({ frame, ticket: Some(r.ticket), authorization: None })
     } else {
       r.ticket.release().unwrap()
     }
@@ -210,7 +255,7 @@ fn TransportSink::enqueue_ws_close(self : TransportSink, frame : Bytes) -> Bool 
   if reservation is Some(r) {
     if accepted {
       r.ticket.commit().unwrap()
-      self.owned.push({ frame, ticket: r.ticket })
+      self.owned.push({ frame, ticket: Some(r.ticket), authorization: None })
     } else {
       r.ticket.release().unwrap()
     }
@@ -233,13 +278,13 @@ fn TransportSink::take_ws_control(self : TransportSink) -> Bytes? {
 }
 
 ///|
-fn TransportSink::take_frame_ticket(
+fn TransportSink::take_owned_frame(
   self : TransportSink,
   frame : Bytes,
-) -> @budget.Ticket? {
+) -> (@budget.Ticket?, OutboundAuthorization?) {
   for index in 0..<self.owned.length() {
     if physical_equal(self.owned[index].frame, frame) {
-      let ticket = self.owned[index].ticket
+      let owned = self.owned[index]
       let remaining : Array[OwnedFrame] = []
       for i in 0..<self.owned.length() {
         if i != index {
@@ -247,10 +292,18 @@ fn TransportSink::take_frame_ticket(
         }
       }
       self.owned = remaining
-      return Some(ticket)
+      return (owned.ticket, owned.authorization)
     }
   }
-  None
+  (None, None)
+}
+
+///|
+fn TransportSink::take_frame_ticket(
+  self : TransportSink,
+  frame : Bytes,
+) -> @budget.Ticket? {
+  self.take_owned_frame(frame).0
 }
 
 ///|
