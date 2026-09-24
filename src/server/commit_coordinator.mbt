@@ -9,6 +9,7 @@ pub(all) enum PreparedBrokerMutation {
   Lifecycle(@router.DurableLifecyclePlan)
   Subscribe(@router.DurableSubscribePlan)
   Unsubscribe(@router.DurableUnsubscribePlan)
+  PolicyRecord(@persistence.WalPolicyRecord)
 }
 
 ///|
@@ -25,6 +26,7 @@ fn PreparedBrokerMutation::delta(
     Lifecycle(value) => value.delta()
     Subscribe(value) => value.delta()
     Unsubscribe(value) => value.delta()
+    PolicyRecord(_) => @router.DurableDelta::empty()
   }
 }
 
@@ -42,6 +44,7 @@ fn PreparedBrokerMutation::commit(
     Lifecycle(value) => value.commit()
     Subscribe(value) => value.commit()
     Unsubscribe(value) => value.commit()
+    PolicyRecord(_) => Ok([])
   }
 }
 
@@ -63,6 +66,7 @@ fn PreparedBrokerMutation::cancel(self : PreparedBrokerMutation) -> Unit {
     Lifecycle(value) => value.cancel()
     Subscribe(value) => value.cancel()
     Unsubscribe(value) => value.cancel()
+    PolicyRecord(_) => ()
   }
 }
 
@@ -222,6 +226,13 @@ pub fn CommitCoordinator::has_pending(self : CommitCoordinator) -> Bool {
 ///|
 pub fn CommitCoordinator::policy_required(self : CommitCoordinator) -> Bool {
   self.writer.policy_required()
+}
+
+///|
+pub fn CommitCoordinator::policy_state(
+  self : CommitCoordinator,
+) -> @persistence.WalPolicyState? {
+  self.writer.policy_state()
 }
 
 ///|
@@ -491,18 +502,34 @@ pub fn CommitCoordinator::submit(
     self.fenced = true
     return Err(CommitLsnExhausted)
   }
+  if plan is PolicyRecord(_) && !self.writer.policy_required() {
+    plan.cancel()
+    self.fenced = true
+    return Err(CommitFenced)
+  }
   let delta = plan.delta()
   if !self.can_collect(plan, delta) {
     plan.cancel()
     return Err(CommitBusy)
   }
-  let encoded = match
-    @persistence.encode_durable_delta(delta, max_bytes=self.max_delta_bytes) {
-    Ok(value) => value
-    Err(_) => {
-      plan.cancel()
-      return Err(CommitEncoding)
-    }
+  let encoded = match plan {
+    PolicyRecord(record) =>
+      match @persistence.encode_wal_policy_record(record) {
+        Ok(value) => value
+        Err(_) => {
+          plan.cancel()
+          return Err(CommitEncoding)
+        }
+      }
+    _ =>
+      match
+        @persistence.encode_durable_delta(delta, max_bytes=self.max_delta_bytes) {
+        Ok(value) => value
+        Err(_) => {
+          plan.cancel()
+          return Err(CommitEncoding)
+        }
+      }
   }
   let frame_overhead = (self.collecting.length().to_int64() + 1L) * 21L + 41L
   if encoded.length().to_int64() >

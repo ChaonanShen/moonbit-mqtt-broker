@@ -91,6 +91,11 @@ pub fn WalWriter::policy_required(self : WalWriter) -> Bool {
 }
 
 ///|
+pub fn WalWriter::policy_state(self : WalWriter) -> WalPolicyState? {
+  self.store.policy_state()
+}
+
+///|
 pub fn WalWriter::poll(self : WalWriter) -> WalCompletion? {
   self.completions.try_get() catch {
     _ => None
