@@ -353,6 +353,10 @@ verification, and private TLS material capture. CI supplies the complete
 functional and distribution record for the committed candidate; development
 uses only focused checks.
 
+## P1-04 reload gate
+
+The cumulative release entry runs the reload lifecycle, TLS/WSS material rotation, strict recovery, and security revocation process cases. The security case runs in off, snapshot, and strict modes and checks anonymous revocation, closure of idle connections after a password change, and delivery blocking after an ACL restriction. Distribution evidence permits only per-mode summaries and sanitized event logs; password databases, manifests, and private keys are excluded.
+
 ## P1-01 strict durability gate
 
 The committed-candidate release chain calls `durability_transports.sh` and

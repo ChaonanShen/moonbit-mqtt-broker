@@ -13,6 +13,9 @@ SAFE_RELOAD_FILES = {
     "lifecycle-summary.txt", "lifecycle-events.log",
     "tls-summary.txt", "tls-events.log",
     "durability-summary.txt", "durability-events.log",
+    "security-off-summary.txt", "security-off-events.log",
+    "security-snapshot-summary.txt", "security-snapshot-events.log",
+    "security-strict-summary.txt", "security-strict-events.log",
 }
 
 

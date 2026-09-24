@@ -20,9 +20,12 @@ readonly RELOAD_EVIDENCE_DIR="${RELEASE_ARTIFACT_DIR:-$REPO_ROOT/.local/reload-i
 export RELOAD_EVIDENCE_DIR
 mkdir -p "$RELOAD_EVIDENCE_DIR"
 printf 'candidate_sha=%s\ncommands=%s\n' "${CANDIDATE_SHA:-unbound}" \
-  'reload_lifecycle.sh reload_tls.sh reload_durability.sh' \
+  'reload_lifecycle.sh reload_tls.sh reload_durability.sh reload_security.sh(off,snapshot,strict)' \
   >"$RELOAD_EVIDENCE_DIR/reload-metadata.txt"
 tests/integration/reload_lifecycle.sh
 tests/integration/reload_tls.sh
 tests/integration/reload_durability.sh
+for mode in off snapshot strict; do
+  RELOAD_TEST_MODE="$mode" tests/integration/reload_security.sh
+done
 echo 'RELEASE verification passed'
