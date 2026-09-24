@@ -1844,6 +1844,20 @@ async fn run_main() -> Unit {
     println("configuration valid")
     return
   }
+  let reload_tls : (
+    @bundle.CapturedBundle,
+    @bundle.ReloadEffectiveCandidate,
+    String,
+  )? = match startup_sources {
+    Some((bundle, candidate, _)) => {
+      if !candidate.hot().tls_sources.is_empty() &&
+        !reload_material_runtime_dir.has_prefix("/") {
+        raise CliError("reload TLS requires an absolute private material root")
+      }
+      Some((bundle, candidate, reload_material_runtime_dir))
+    }
+    None => None
+  }
   let management : @server.ManagementStartup? = management_tokens.map(tokens => {
     config: management_config,
     tokens,
@@ -1869,6 +1883,7 @@ async fn run_main() -> Unit {
         security~,
         logger~,
         management?,
+        reload_tls?,
       )
     }
     Some(path) => {
@@ -2023,6 +2038,7 @@ async fn run_main() -> Unit {
           security~,
           logger~,
           management?,
+          reload_tls?,
         )
         return
       }
@@ -2090,6 +2106,7 @@ async fn run_main() -> Unit {
         security~,
         logger~,
         management?,
+        reload_tls?,
       )
     }
   }

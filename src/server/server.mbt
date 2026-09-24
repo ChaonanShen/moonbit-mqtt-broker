@@ -660,6 +660,11 @@ pub async fn run_listeners(
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
   logger? : @observability.Logger = @observability.Logger::new(),
   management? : ManagementStartup,
+  reload_tls? : (
+    @bundle.CapturedBundle,
+    @bundle.ReloadEffectiveCandidate,
+    String,
+  ),
 ) -> Unit {
   defer (match persistence {
     Some(runtime) => runtime.close()
@@ -695,6 +700,28 @@ pub async fn run_listeners(
     }
   }
   let materials = TlsMaterialProvider::new()
+  let prepared_tls : PreparedTlsGeneration? = match reload_tls {
+    None => None
+    Some((bundle, candidate, root)) => {
+      let limits = config.broker_config().resources()
+      let pool = initial_state
+        .resource_ledger()
+        .pool(Infrastructure, limits.get("max_managed_bytes_total"))
+        .unwrap()
+      Some(prepare_tls_generation(bundle, candidate, pool, root))
+    }
+  }
+  defer (if prepared_tls is Some(value) { value.release() })
+  let expected_tls_ids : Array[String] = []
+  for entry in listeners {
+    if entry.tls is Some(_) {
+      expected_tls_ids.push(entry.id)
+    }
+  }
+  if prepared_tls is Some(value) &&
+    !value.install_initial(materials, expected_tls_ids) {
+    raise ResourceStartupFailure("prepared TLS listener set mismatch")
+  }
   let material_tickets : Array[@budget.Ticket] = []
   defer (for ticket in material_tickets {
     ticket.release().unwrap()
@@ -705,6 +732,24 @@ pub async fn run_listeners(
     match entry.tls {
       None => prepared.push(entry)
       Some(tls) => {
+        if prepared_tls is Some(_) {
+          let captured_config = match materials.current_config(entry.id) {
+            Some(value) => value
+            None =>
+              raise ResourceStartupFailure("prepared TLS listener missing")
+          }
+          prepared.push(
+            ListenerConfig::new(
+              entry.id,
+              entry.listen,
+              entry.max_connections,
+              tls=captured_config,
+              transport=entry.transport,
+              websocket?=entry.websocket,
+            ).unwrap(),
+          )
+          continue
+        }
         let limits = config.broker_config().resources()
         let pool = initial_state
           .resource_ledger()

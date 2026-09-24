@@ -85,3 +85,14 @@ pub fn TlsMaterialProvider::publish_generation(
   }
   true
 }
+
+///|
+fn TlsMaterialProvider::current_config(
+  self : TlsMaterialProvider,
+  listener_id : String,
+) -> TlsServerConfig? {
+  match self.active.get(listener_id) {
+    Some(lease) => Some(lease.config)
+    None => None
+  }
+}

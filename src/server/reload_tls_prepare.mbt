@@ -30,6 +30,36 @@ pub fn PreparedTlsGeneration::publish(
 }
 
 ///|
+/// Transfers the captured root references only after the entire listener set
+/// matches the prepared generation. No path is reopened during installation.
+pub fn PreparedTlsGeneration::install_initial(
+  self : PreparedTlsGeneration,
+  provider : TlsMaterialProvider,
+  expected_ids : Array[String],
+) -> Bool {
+  if self.transferred ||
+    provider.closed ||
+    provider.active.length() != 0 ||
+    self.leases.length() != expected_ids.length() {
+    return false
+  }
+  let seen : Map[String, Bool] = Map([])
+  for item in self.leases {
+    let (id, _) = item
+    if seen.contains(id) || !expected_ids.contains(id) {
+      return false
+    }
+    seen.set(id, true)
+  }
+  for item in self.leases {
+    let (id, lease) = item
+    provider.add_initial(id, lease)
+  }
+  self.transferred = true
+  true
+}
+
+///|
 async fn finish_tls_worker(worker : @native.CaptureWorker) -> Unit {
   @async.protect_from_cancel(() => {
     for ;; {
