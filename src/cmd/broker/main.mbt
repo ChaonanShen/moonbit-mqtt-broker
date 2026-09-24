@@ -1838,11 +1838,13 @@ async fn run_main() -> Unit {
       reload_max_acl_rules > 4096 {
       raise CliError("reload resource limit exceeds supported range")
     }
-    raise CliError("reload coordinator is not yet available")
   }
   if check_config {
     println("configuration valid")
     return
+  }
+  if reload_enabled {
+    raise CliError("reload coordinator is not yet available")
   }
   let reload_tls : (
     @bundle.CapturedBundle,
