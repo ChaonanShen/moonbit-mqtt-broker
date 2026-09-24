@@ -357,6 +357,20 @@ uses only focused checks.
 
 The cumulative release entry runs the reload lifecycle, TLS/WSS material rotation, strict recovery, and security revocation process cases. The security case runs in off, snapshot, and strict modes and checks anonymous revocation, closure of idle connections after a password change, and delivery blocking after an ACL restriction. The reload limits case checks the largest supported per-Session pending queue boundary (4096 accepted, 4097 rejected). A separate strict case holds the policy WAL fsync, sends SIGTERM, releases the write, and checks that the matching bundle is admitted on recovery. Distribution evidence permits only per-mode summaries and sanitized event logs; password databases, manifests, and private keys are excluded. The exported binary also runs reload-enabled check-config in base, argon2, tls, and full runtime images. Plain reload succeeds only where Argon2 is available; TLS reload succeeds only in full. Each profile records both expected outcomes in `evidence.txt`.
 
+The fixed-host reload performance comparison is a separate user-run gate:
+`PERF_EXPECTED_SHA=<candidate> scripts/run-p1-04-performance.sh`. It runs
+three paired rounds for off, snapshot, and strict modes, comparing static TLS
+and password authentication with reload enabled but idle and with a combined
+password/TLS rotation. Each scenario warms for 10 seconds and measures for
+30 seconds. Idle throughput must remain at least 90% of the static baseline;
+idle QoS 1 ACK P99 must stay within max(2x baseline, baseline + 20 ms).
+During activation, ACK P99 must stay within max(3x idle, idle + 50 ms), and
+the reload Operation must finish within 10 seconds. The script preserves
+per-scenario JSON, broker logs, resource samples, binary hash, host details,
+command, and final exit code under `.local/manual-verification/p1-04/<SHA>/`.
+`PERF_QUICK=1` runs a two-second fixture check only and is not a formal
+measurement. Run this comparison separately from distribution soak.
+
 ## P1-01 strict durability gate
 
 The committed-candidate release chain calls `durability_transports.sh` and

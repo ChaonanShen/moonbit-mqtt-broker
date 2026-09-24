@@ -416,6 +416,18 @@ Upgrade、WebSocket 帧边界、验证证书的 WSS，以及私有 TLS 材料捕
 
 累计入口依次运行 reload 生命周期、TLS/WSS 材料轮换、strict 恢复和安全撤权进程测试。安全撤权脚本分别以 off、snapshot、strict 模式验证匿名关闭、密码变更时空闲连接断开，以及 ACL 收紧后的投递阻断。reload 限额脚本检查单会话待发队列最大支持边界（4096 接受、4097 拒绝）。另一个 strict 用例在 policy WAL fsync 处暂停，发送 SIGTERM，放行写入后核对退出与匹配 bundle 的恢复接入。分发证据只放行各模式的摘要和脱敏事件日志；密码库、manifest 和私钥不得上传。导出的二进制还在 base、argon2、tls、full 四种运行镜像中分别执行启用 reload 的 check-config：普通 reload 仅在具备 Argon2 的环境成功，TLS reload 仅在 full 成功；每种 profile 的预期结果写入 `evidence.txt`。
 
+固定硬件的 reload 性能对照另由用户运行：
+`PERF_EXPECTED_SHA=<候选SHA> scripts/run-p1-04-performance.sh`。
+脚本对 off、snapshot、strict 各做三轮配对，比较静态 TLS/密码认证、
+启用 reload 但空闲，以及同时轮换密码与 TLS 材料；每个场景预热 10 秒、
+测量 30 秒。空闲吞吐须不低于静态基线的 90%；QoS 1 ACK P99 须不超过
+max(基线 2 倍、基线 +20 ms)。激活期间 ACK P99 须不超过
+max(空闲 3 倍、空闲 +50 ms)，reload Operation 须在 10 秒内完成。
+各场景 JSON、Broker 日志、资源采样、二进制哈希、宿主环境、命令及最终
+退出码保存在 `.local/manual-verification/p1-04/<SHA>/`。
+`PERF_QUICK=1` 只运行两秒夹具检查，不计正式测量。性能对照与分发
+soak 分开执行。
+
 ## P1-01 强持久性门禁
 
 已提交候选的 `verify-release.sh` 各调用一次 `durability_transports.sh`
