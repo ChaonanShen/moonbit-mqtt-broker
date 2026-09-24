@@ -12,6 +12,9 @@ pub struct RouterDriver {
   priv strict_management_held : @deque.Deque[ManagementCommandEvent]
   priv mut strict_fenced : Bool
   priv mut reload_barrier : Bool
+  priv generation : GenerationHandle?
+  priv material_provider : TlsMaterialProvider?
+  priv mut retired_generations : Array[ConfigGeneration]
   priv mut strict_checkpoint_cursor : @router.SnapshotExportCursor?
   priv mut strict_checkpoint_lsn : Int64
   priv mut strict_checkpoint_inflight : Bool
@@ -65,6 +68,8 @@ pub fn RouterDriver::new(
   management? : ManagementRuntime,
   strict? : CommitCoordinator,
   strict_generations? : Map[@session.ClientId, Int64] = Map([]),
+  generation? : GenerationHandle,
+  material_provider? : TlsMaterialProvider,
 ) -> RouterDriver {
   let snapshot = snapshot.map(config => SnapshotDriverState::{
     oldest_uncommitted_ms: None,
@@ -90,6 +95,9 @@ pub fn RouterDriver::new(
     strict_management_held: @deque.Deque([]),
     strict_fenced: false,
     reload_barrier: false,
+    generation,
+    material_provider,
+    retired_generations: [],
     strict_checkpoint_cursor: None,
     strict_checkpoint_lsn: 0L,
     strict_checkpoint_inflight: false,
@@ -694,6 +702,7 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
     }
   }
   self.poll_authentication()
+  self.retire_released_generations()
   if self.strict is Some(_) {
     self.poll_strict_completion()
     if self.strict is Some(coordinator) &&

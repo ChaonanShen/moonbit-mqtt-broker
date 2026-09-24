@@ -188,6 +188,7 @@ pub async fn serve_listeners(
   logger? : @observability.Logger = @observability.Logger::silent(),
   management? : ManagementRuntime,
   material_provider? : TlsMaterialProvider,
+  generation? : GenerationHandle,
   reload_enabled? : Bool = false,
 ) -> Unit {
   if persistence is Some(_) && strict is Some(_) {
@@ -235,6 +236,9 @@ pub async fn serve_listeners(
     metrics~,
     logger~,
     async_auth=auth_executor is Some(_),
+    initial_policy_epoch=generation
+      .map(value => value.active().policy_epoch())
+      .unwrap_or(0L),
   )
   let strict_coordinator = strict.map(value => value.coordinator())
   let strict_generations = strict
@@ -250,6 +254,8 @@ pub async fn serve_listeners(
         management?,
         strict?=strict_coordinator,
         strict_generations~,
+        generation?,
+        material_provider?,
       )
     None =>
       RouterDriver::new(
@@ -259,6 +265,8 @@ pub async fn serve_listeners(
         management?,
         strict?=strict_coordinator,
         strict_generations~,
+        generation?,
+        material_provider?,
       )
   }
   if management is Some(active) && active.config.details_enabled() {
@@ -704,6 +712,36 @@ pub async fn run_listeners(
     }
   }
   let materials = TlsMaterialProvider::new()
+  let generation : GenerationHandle? = match reload_tls {
+    Some((bundle, candidate, _)) => {
+      let fingerprint = bundle.policy_fingerprint(candidate) catch {
+        _ =>
+          raise ResourceStartupFailure("initial policy fingerprint unavailable")
+      }
+      let policy_epoch = match strict {
+        Some(runtime) =>
+          runtime
+          .coordinator()
+          .policy_state()
+          .map(value => value.sequence)
+          .unwrap_or(0L)
+        None => 0L
+      }
+      Some(
+        GenerationHandle::new(
+          ConfigGeneration::initial(
+            bundle,
+            candidate,
+            security,
+            fingerprint,
+            policy_epoch~,
+          ),
+        ),
+      )
+    }
+    None => None
+  }
+  defer (if generation is Some(value) { value.close() })
   let prepared_tls : PreparedTlsGeneration? = match reload_tls {
     None => None
     Some((bundle, candidate, root)) => {
@@ -889,6 +927,7 @@ pub async fn run_listeners(
       logger~,
       management?=management_runtime,
       material_provider=materials,
+      generation?,
       reload_enabled~,
     )
   }

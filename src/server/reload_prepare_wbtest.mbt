@@ -104,10 +104,29 @@ async test "reload prepare distinguishes cosmetic change, hot change, and restar
       initial.policy_fingerprint(effective),
     ),
   )
-  let retired = handle.publish(candidate, 0L).unwrap()
+  let broker_config = @router.BrokerConfig::new(4, 16, 4).unwrap()
+  let server_config = ServerConfig::new(
+    4, 1024, 2048, 8, 32, 1000, 100, broker_config,
+  ).unwrap()
+  let logger = @observability.Logger::new()
+  let runtime = BrokerRuntime::new(
+    server_config,
+    @router.BrokerState::new(broker_config),
+    logger~,
+  )
+  let driver = RouterDriver::new(runtime, generation=handle)
+  assert_eq(
+    driver.activate_prepared_reload(candidate, 0L),
+    ReloadActivated(1L, 0L),
+  )
   assert_eq(handle.active().config_epoch(), 1L)
   assert_eq(handle.active().policy_epoch(), 0L)
-  retired.release()
+  assert_true(
+    logger.render(
+      @observability.LogRecord::new(1L, @observability.Debug, "hot_log"),
+    )
+    is Some(_),
+  )
   candidate.release()
   assert_true(ledger.occupied() > baseline)
   handle.close()
