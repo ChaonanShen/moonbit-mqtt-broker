@@ -123,6 +123,25 @@ for profile in base argon2 tls full; do
       ! grep -Eq 'PanicError|SIGABRT|MQTT broker listening' "${RESULTS}/missing-${profile}-${feature}.log"
     fi
   done
+  for reload_kind in plain tls; do
+    reload_log="${RESULTS}/reload-${profile}-${reload_kind}.log"
+    reload_status=0
+    docker run --rm "${runtime_options[@]}" "${runtime_image}" \
+      --check-config --config "/artifact/reload-${reload_kind}.toml" \
+      >"$reload_log" 2>&1 || reload_status=$?
+    if [[ "$has_argon2" -eq 0 ]]; then
+      [[ "$reload_status" -gt 0 && "$reload_status" -lt 125 ]]
+      grep -qF 'reload security validation failed' "$reload_log"
+    elif [[ "$reload_kind" = tls && "$has_tls" -eq 0 ]]; then
+      [[ "$reload_status" -gt 0 && "$reload_status" -lt 125 ]]
+      grep -qF 'reload TLS material validation failed' "$reload_log"
+    else
+      [[ "$reload_status" -eq 0 ]]
+      grep -qF 'configuration valid' "$reload_log"
+    fi
+    ! grep -Eq 'PanicError|SIGABRT|MQTT broker listening' "$reload_log"
+    printf 'runtime_%s_reload_%s=PASS\n' "$profile" "$reload_kind" >>"${RESULTS}/evidence.txt"
+  done
   feature_args=(); scheme=mqtt; auth_mode=anonymous
   if [[ "${has_argon2}" -eq 1 ]]; then
     feature_args+=(--allow-anonymous false --password-file /artifact/passwords)
