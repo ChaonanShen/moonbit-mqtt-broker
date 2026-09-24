@@ -58,3 +58,67 @@ test "durable reconcile commits one denied filter and pending head" {
   assert_eq(state.export_snapshot(), accumulator.export_snapshot().0)
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "runtime cleanup can discard a clean Session pending item" {
+  let config = BrokerConfig::new(
+    4,
+    16,
+    4,
+    max_sessions=4,
+    max_inflight_per_session=0,
+    max_inflight_total=0,
+    max_pending_per_session=2,
+    max_pending_total=2,
+  ).unwrap()
+  let state = BrokerState::new(config)
+  state.enable_policy_index().unwrap()
+  let client = @session.ClientId::new("clean").unwrap()
+  ignore(state.apply(CreateSession(client)).unwrap())
+  ignore(
+    state
+    .apply(
+      Subscribe({
+        client_id: client,
+        entries: [
+          {
+            filter: @topic.TopicFilter::new("private/#").unwrap(),
+            qos: @session.QoS1,
+          },
+        ],
+      }),
+    )
+    .unwrap(),
+  )
+  ignore(
+    state
+    .apply(
+      Publish({
+        origin: Internal,
+        topic: @topic.TopicName::new("private/value").unwrap(),
+        payload: b"x",
+        qos: @session.QoS1,
+        retain: false,
+      }),
+    )
+    .unwrap(),
+  )
+  assert_eq(state.pending_qos1_count(), 1)
+  let acl = @security.AclPolicy::parse("").unwrap()
+  assert_true(state.set_security_policy(@security.SecurityPolicy::new(acl~)))
+  let before = state.snapshot_revision()
+  let plan = state
+    .prepare_durable_reconcile(
+      client,
+      DropPendingHead("private/value", 1, 1),
+      1L,
+      require_persistent=false,
+    )
+    .unwrap()
+  state.begin_action_scope()
+  assert_eq(plan.commit(), Ok([]))
+  state.end_action_scope()
+  assert_eq(state.pending_qos1_count(), 0)
+  assert_eq(state.snapshot_revision(), before)
+  assert_eq(state.check_invariants(), Ok(()))
+}

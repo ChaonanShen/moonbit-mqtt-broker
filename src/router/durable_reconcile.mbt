@@ -31,9 +31,11 @@ pub fn BrokerState::prepare_durable_reconcile(
   client_id : @session.ClientId,
   change : DurablePolicyChange,
   generation : Int64,
+  require_persistent? : Bool = true,
 ) -> Result[DurableReconcilePlan, RouterError] {
   let session = match self.sessions.get(client_id) {
-    Some(value) if value.mode() == @session.Persistent => value
+    Some(value) if !require_persistent || value.mode() == @session.Persistent =>
+      value
     _ => return Err(InvalidSessionState(client_id))
   }
   let incarnation = match self.policy_session_incarnation(client_id) {
@@ -230,7 +232,9 @@ pub fn DurableReconcilePlan::commit(
     subscriptions: self.next_subscription_bytes,
     pending: self.next_pending_bytes,
   }
-  self.broker.mark_snapshot_dirty()
+  if session.mode() == @session.Persistent {
+    self.broker.mark_snapshot_dirty()
+  }
   self.finished = true
   self.scratch.release().unwrap()
   Ok([])
