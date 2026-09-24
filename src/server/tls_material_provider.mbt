@@ -53,16 +53,15 @@ fn TlsMaterialProvider::close(self : TlsMaterialProvider) -> Unit {
 }
 
 ///|
-/// Swaps the entire prepared TLS generation at one non-awaiting event boundary.
-/// Rejection leaves all candidate leases owned by the caller.
-pub fn TlsMaterialProvider::publish_generation(
+/// Preflight a complete replacement without taking candidate ownership.
+pub fn TlsMaterialProvider::can_publish_generation(
   self : TlsMaterialProvider,
   candidates : Array[(String, TlsMaterialLease)],
 ) -> Bool {
   if self.closed || candidates.length() != self.active.length() {
     return false
   }
-  let next : Map[String, TlsMaterialLease] = Map([])
+  let seen : Map[String, Bool] = Map([])
   let directories : Map[String, Bool] = Map([])
   for item in candidates {
     let (listener_id, lease) = item
@@ -70,13 +69,31 @@ pub fn TlsMaterialProvider::publish_generation(
       Some(value) => value
       None => return false
     }
-    if next.contains(listener_id) ||
+    if seen.contains(listener_id) ||
       old.directory == lease.directory ||
       directories.contains(lease.directory) {
       return false
     }
-    next.set(listener_id, lease)
+    seen.set(listener_id, true)
     directories.set(lease.directory, true)
+  }
+  true
+}
+
+///|
+/// Swaps the entire prepared TLS generation at one non-awaiting event boundary.
+/// Rejection leaves all candidate leases owned by the caller.
+pub fn TlsMaterialProvider::publish_generation(
+  self : TlsMaterialProvider,
+  candidates : Array[(String, TlsMaterialLease)],
+) -> Bool {
+  if !self.can_publish_generation(candidates) {
+    return false
+  }
+  let next : Map[String, TlsMaterialLease] = Map([])
+  for item in candidates {
+    let (listener_id, lease) = item
+    next.set(listener_id, lease)
   }
   let old = self.active
   self.active = next
