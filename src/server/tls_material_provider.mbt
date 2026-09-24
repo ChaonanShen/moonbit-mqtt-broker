@@ -2,7 +2,7 @@
 /// Owns one reference to each active TLS material lease. Handshakes and
 /// established transports hold separate references until their task exits.
 pub struct TlsMaterialProvider {
-  active : Map[String, TlsMaterialLease]
+  mut active : Map[String, TlsMaterialLease]
   mut closed : Bool
 }
 
@@ -53,18 +53,35 @@ fn TlsMaterialProvider::close(self : TlsMaterialProvider) -> Unit {
 }
 
 ///|
-/// Publishes a fully prepared lease for an existing listener. The caller owns
-/// a rejected candidate; on success the provider takes its root reference.
-pub fn TlsMaterialProvider::publish_prepared(
+/// Swaps the entire prepared TLS generation at one non-awaiting event boundary.
+/// Rejection leaves all candidate leases owned by the caller.
+pub fn TlsMaterialProvider::publish_generation(
   self : TlsMaterialProvider,
-  listener_id : String,
-  candidate : TlsMaterialLease,
+  candidates : Array[(String, TlsMaterialLease)],
 ) -> Bool {
-  if self.closed || !self.active.contains(listener_id) {
+  if self.closed || candidates.length() != self.active.length() {
     return false
   }
-  let old = self.active.get(listener_id).unwrap()
-  self.active.set(listener_id, candidate)
-  old.release()
+  let next : Map[String, TlsMaterialLease] = Map([])
+  let directories : Map[String, Bool] = Map([])
+  for item in candidates {
+    let (listener_id, lease) = item
+    let old = match self.active.get(listener_id) {
+      Some(value) => value
+      None => return false
+    }
+    if next.contains(listener_id) ||
+      old.directory == lease.directory ||
+      directories.contains(lease.directory) {
+      return false
+    }
+    next.set(listener_id, lease)
+    directories.set(lease.directory, true)
+  }
+  let old = self.active
+  self.active = next
+  for _, lease in old {
+    lease.release()
+  }
   true
 }
