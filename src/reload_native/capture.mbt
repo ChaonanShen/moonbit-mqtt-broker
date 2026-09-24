@@ -84,6 +84,36 @@ extern "C" fn ffi_stop(handle : Int64) -> Int = "moonbit_mqtt_capture_worker_sto
 extern "C" fn ffi_destroy(handle : Int64) -> Int = "moonbit_mqtt_capture_worker_destroy"
 
 ///|
+#borrow(input, output)
+extern "C" fn ffi_sha256(
+  input : Bytes,
+  length : Int,
+  output : FixedArray[Byte],
+  capacity : Int,
+) -> Int = "moonbit_mqtt_reload_sha256"
+
+///|
+pub fn sha256(input : Bytes) -> Result[Bytes, CaptureError] {
+  if input.length() > 1024 {
+    return Err(InvalidInput)
+  }
+  let output : FixedArray[Byte] = FixedArray::make(32, 0)
+  match ffi_sha256(input, input.length(), output, output.length()) {
+    0 => {
+      let bytes : Array[Byte] = []
+      for value in output {
+        bytes.push(value)
+      }
+      Ok(Bytes::from_array(bytes))
+    }
+    -2 => Err(BackendUnavailable)
+    _ => Err(CryptoFailure)
+  }
+}
+
+///|
+
+///|
 pub fn CaptureWorker::new() -> Result[CaptureWorker, CaptureError] {
   let handle = ffi_create()
   if handle == 0L {

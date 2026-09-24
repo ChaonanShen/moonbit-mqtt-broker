@@ -74,3 +74,40 @@ pub fn CapturedBundle::evaluate(
   }
   { hot, restart }
 }
+
+///|
+/// The durable fingerprint covers only effective MQTT security materials. It
+/// never writes PHC text, ACL text, source paths, or TLS private keys to WAL.
+pub fn CapturedBundle::policy_fingerprint(
+  self : CapturedBundle,
+  candidate : ReloadEffectiveCandidate,
+) -> Bytes raise BundleError {
+  let input : Array[Byte] = []
+  for byte in @utf8.encode("moonbit-mqtt-broker/policy/v1") {
+    input.push(byte)
+  }
+  let hot = candidate.hot()
+  input.push(if hot.allow_anonymous { 1 } else { 0 })
+  for
+    item in [
+      ("passwords", hot.password_file is Some(_)),
+      ("acl", hot.acl_file is Some(_)),
+    ] {
+    let (role, present) = item
+    input.push(if present { 1 } else { 0 })
+    if present {
+      let digest = match
+        self.manifest.materials.filter(material => material.role == role) {
+        [value] => value.sha256
+        _ => raise BundleError("security digest role mismatch")
+      }
+      for byte in digest {
+        input.push(byte)
+      }
+    }
+  }
+  match @native.sha256(Bytes::from_array(input)) {
+    Ok(value) => value
+    Err(_) => raise BundleError("policy fingerprint unavailable")
+  }
+}
