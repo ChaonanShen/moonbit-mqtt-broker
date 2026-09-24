@@ -985,7 +985,7 @@ async fn run_main() -> Unit {
       }
       "--reload-max-reconcile-bytes-per-turn" => {
         reload_max_reconcile_bytes_per_turn = parse_bounded_int(
-          args, index, "--reload-max-reconcile-bytes-per-turn", 1,
+          args, index, "--reload-max-reconcile-bytes-per-turn", 131328,
         )
         index += 2
       }
