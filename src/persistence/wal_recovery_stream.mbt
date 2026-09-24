@@ -4,6 +4,7 @@ fn replay_wal_batches(
   batches : Array[WalBatch],
   starting_lsn : Int64,
   starting_policy : WalPolicyState?,
+  policy_required : Bool,
   limits : SnapshotDecodeLimits,
 ) -> Result[(Int64, WalPolicyState?), PersistenceError] {
   let mut lsn = starting_lsn
@@ -17,6 +18,9 @@ fn replay_wal_batches(
         return Err(InvalidValue(field="wal-replay-transaction-chain", offset=0))
       }
       if is_wal_policy_record(transaction.delta) {
+        if !policy_required {
+          return Err(InvalidValue(field="wal-policy-capability", offset=0))
+        }
         let record = match decode_wal_policy_record(transaction.delta) {
           Ok(value) => value
           Err(error) => return Err(error)
@@ -77,7 +81,8 @@ pub async fn WalStore::recover_state(
       Err(error) => raise error
     }
     if checkpoint.generation != manifest.checkpoint_generation ||
-      checkpoint.lsn != manifest.checkpoint_lsn {
+      checkpoint.lsn != manifest.checkpoint_lsn ||
+      (!manifest.policy_required && checkpoint.policy is Some(_)) {
       raise wal_corrupt("checkpoint-manifest-mismatch", 0)
     }
     let generations = checkpoint.identities.map(item => item.generation)
@@ -115,6 +120,7 @@ pub async fn WalStore::recover_state(
           scan.batches,
           previous_lsn,
           policy,
+          manifest.policy_required,
           limits,
         ) {
         Ok(value) => value
@@ -140,6 +146,7 @@ pub async fn WalStore::recover_state(
         scan.batches,
         previous_lsn,
         policy,
+        manifest.policy_required,
         limits,
       ) {
       Ok(value) => value
@@ -206,7 +213,13 @@ pub async fn WalStore::recover_state(
           fenced: false,
           closed: false,
         },
-        { state, identities, policy, committed_lsn },
+        {
+          state,
+          identities,
+          policy,
+          policy_required: manifest.policy_required,
+          committed_lsn,
+        },
       ),
     )
   } catch {

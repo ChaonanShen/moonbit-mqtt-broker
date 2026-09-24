@@ -3,6 +3,7 @@ pub struct WalRecoveredState {
   state : @router.BrokerState
   identities : Array[WalSessionIdentity]
   policy : WalPolicyState?
+  policy_required : Bool
   committed_lsn : Int64
 }
 
@@ -28,6 +29,11 @@ pub fn WalRecoveredState::committed_lsn(self : WalRecoveredState) -> Int64 {
 ///|
 pub fn WalRecoveredState::policy(self : WalRecoveredState) -> WalPolicyState? {
   self.policy
+}
+
+///|
+pub fn WalRecoveredState::policy_required(self : WalRecoveredState) -> Bool {
+  self.policy_required
 }
 
 ///|
@@ -60,6 +66,9 @@ pub fn WalRecovery::restore_state(
         return Err(InvalidValue(field="wal-replay-lsn", offset=0))
       }
       if is_wal_policy_record(transaction.delta) {
+        if !self.policy_required {
+          return Err(InvalidValue(field="wal-policy-capability", offset=0))
+        }
         let record = match decode_wal_policy_record(transaction.delta) {
           Ok(value) => value
           Err(error) => return Err(error)
@@ -102,5 +111,11 @@ pub fn WalRecovery::restore_state(
     Ok(value) => value
     Err(_) => return Err(SnapshotImport("WAL state exceeds configured limits"))
   }
-  Ok({ state, identities, policy, committed_lsn: expected_lsn })
+  Ok({
+    state,
+    identities,
+    policy,
+    policy_required: self.policy_required,
+    committed_lsn: expected_lsn,
+  })
 }
