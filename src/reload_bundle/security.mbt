@@ -54,3 +54,44 @@ pub async fn CapturedBundle::prepare_security(
     acl?,
   )
 }
+
+///|
+async fn stop_security_maintenance(worker : @security.AuthExecutor) -> Unit {
+  @async.protect_from_cancel(() => {
+    for ;; {
+      if worker.stop() == @security.ControlDone {
+        break
+      }
+      @async.sleep(1)
+    }
+    for ;; {
+      if worker.is_stopped() == Some(true) {
+        break
+      }
+      @async.sleep(1)
+    }
+    for ;; {
+      if worker.destroy() == @security.ControlDone {
+        break
+      }
+      @async.sleep(1)
+    }
+  })
+}
+
+///|
+/// Owns a separate one-worker maintenance executor for initial policy
+/// validation. Stop, drain, and destroy complete before startup continues.
+pub async fn CapturedBundle::prepare_security_isolated(
+  self : CapturedBundle,
+  candidate : ReloadEffectiveCandidate,
+) -> @security.SecurityPolicy {
+  let worker = match @security.AuthExecutor::new(1, 1) {
+    Ok(value) => value
+    Err(_) => raise BundleError("security maintenance backend unavailable")
+  }
+  errdefer stop_security_maintenance(worker)
+  let policy = self.prepare_security(candidate, worker)
+  stop_security_maintenance(worker)
+  policy
+}
