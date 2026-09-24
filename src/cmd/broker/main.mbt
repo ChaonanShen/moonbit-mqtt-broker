@@ -1270,6 +1270,7 @@ async fn run_main() -> Unit {
   } else {
     None
   }
+  let use_captured_tls = reload_enabled || reload_manifest_file != ""
   let tls = match (tls_certificate_file, tls_private_key_file) {
     (None, None) => {
       if tls_timeout_option_used {
@@ -1280,32 +1281,36 @@ async fn run_main() -> Unit {
       None
     }
     (Some(certificate_file), Some(private_key_file)) => {
-      let certificate_kind = @fs.kind(certificate_file, follow_symlink=false) catch {
-        _ => raise CliError("--tls-cert must name a readable regular file")
-      }
-      if certificate_kind != @fs.Regular {
-        raise CliError("--tls-cert must name a readable regular file")
-      }
-      match private_key_status(private_key_file) {
-        0 => ()
-        1 => raise CliError("--tls-key must name a readable regular file")
-        2 =>
-          raise CliError(
-            "--tls-key must be a regular file, not a symlink or special file",
-          )
-        3 =>
-          raise CliError(
-            "--tls-key must not grant permissions to group or other users",
-          )
-        _ => raise CliError("--tls-key validation failed")
+      if !use_captured_tls {
+        let certificate_kind = @fs.kind(certificate_file, follow_symlink=false) catch {
+          _ => raise CliError("--tls-cert must name a readable regular file")
+        }
+        if certificate_kind != @fs.Regular {
+          raise CliError("--tls-cert must name a readable regular file")
+        }
+        match private_key_status(private_key_file) {
+          0 => ()
+          1 => raise CliError("--tls-key must name a readable regular file")
+          2 =>
+            raise CliError(
+              "--tls-key must be a regular file, not a symlink or special file",
+            )
+          3 =>
+            raise CliError(
+              "--tls-key must not grant permissions to group or other users",
+            )
+          _ => raise CliError("--tls-key validation failed")
+        }
       }
       let value = @server.TlsServerConfig::new(
         certificate_file,
         private_key_file,
         handshake_timeout_ms=tls_handshake_timeout_ms,
       ).unwrap()
-      @server.validate_tls_config(value) catch {
-        _ => raise CliError("TLS certificate/private key validation failed")
+      if !use_captured_tls {
+        @server.validate_tls_config(value) catch {
+          _ => raise CliError("TLS certificate/private key validation failed")
+        }
       }
       Some(value)
     }
@@ -1357,22 +1362,27 @@ async fn run_main() -> Unit {
         if draft.cert == "" || draft.key == "" {
           raise CliError("TLS listener requires tls_cert and tls_key")
         }
-        let certificate_kind = @fs.kind(draft.cert, follow_symlink=false) catch {
-          _ => raise CliError("listener TLS certificate is unavailable")
-        }
-        if certificate_kind != @fs.Regular || private_key_status(draft.key) != 0 {
-          raise CliError("listener TLS material must be safe regular files")
+        if !use_captured_tls {
+          let certificate_kind = @fs.kind(draft.cert, follow_symlink=false) catch {
+            _ => raise CliError("listener TLS certificate is unavailable")
+          }
+          if certificate_kind != @fs.Regular ||
+            private_key_status(draft.key) != 0 {
+            raise CliError("listener TLS material must be safe regular files")
+          }
         }
         let value = @server.TlsServerConfig::new(
           draft.cert,
           draft.key,
           handshake_timeout_ms=draft.handshake_timeout_ms,
         ).unwrap()
-        @server.validate_tls_config(value) catch {
-          _ =>
-            raise CliError(
-              "listener TLS certificate/private key validation failed",
-            )
+        if !use_captured_tls {
+          @server.validate_tls_config(value) catch {
+            _ =>
+              raise CliError(
+                "listener TLS certificate/private key validation failed",
+              )
+          }
         }
         Some(value)
       } else {
@@ -1583,6 +1593,26 @@ async fn run_main() -> Unit {
           raise CliError("persistence configuration: " + error.category())
       }
     None => ()
+  }
+  if check_config || print_effective_config {
+    if startup_sources is Some((bundle, candidate, _)) &&
+      !candidate.hot().tls_sources.is_empty() {
+      if !reload_material_runtime_dir.has_prefix("/") {
+        raise CliError("reload TLS requires an absolute private material root")
+      }
+      let state = @router.BrokerState::new(broker_config)
+      let limits = broker_config.resources()
+      let pool = state
+        .resource_ledger()
+        .pool(@budget.Infrastructure, limits.get("max_managed_bytes_total"))
+        .unwrap()
+      let prepared = @server.prepare_tls_generation(
+        bundle, candidate, pool, reload_material_runtime_dir,
+      ) catch {
+        _ => raise CliError("reload TLS material validation failed")
+      }
+      prepared.release()
+    }
   }
   if print_effective_config {
     let quote = fn(value : String) { @json.to_json(value).stringify() }
