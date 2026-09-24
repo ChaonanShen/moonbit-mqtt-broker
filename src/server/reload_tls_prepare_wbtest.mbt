@@ -61,7 +61,9 @@ async test "captured TLS bytes publish a leased generation without source reread
     .pool(Infrastructure, limits.get("max_managed_bytes_total"))
     .unwrap()
   let baseline = ledger.occupied()
-  let prepared = prepare_tls_generation(bundle, effective, pool)
+  let runtime_root = fixture + "/tls-runtime"
+  @fs.mkdir(runtime_root, permission=0o700)
+  let prepared = prepare_tls_generation(bundle, effective, pool, runtime_root)
   let provider = TlsMaterialProvider::new()
   provider.add_initial(
     "edge",
@@ -80,5 +82,6 @@ async test "captured TLS bytes publish a leased generation without source reread
   assert_eq(ledger.occupied(), baseline)
   @fs.remove(manifest_path)
   @fs.remove(config_path)
+  @fs.rmdir(runtime_root)
   @fs.rmdir(fixture)
 }

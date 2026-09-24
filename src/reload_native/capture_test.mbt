@@ -138,6 +138,26 @@ async test "TLS native worker validates and owns material until transfer" {
   assert_eq(wait_capture(worker), 3L)
   assert_eq(worker.result_info(3L), Err(TlsInvalid))
   assert_eq(worker.reap(3L), Ok(()))
+  let unsafe_root = fixture + "/unsafe"
+  @fs.mkdir(unsafe_root, permission=0o755)
+  assert_eq(
+    worker.submit_tls(4L, cert_bytes, key_bytes, runtime_root=unsafe_root),
+    Ok(()),
+  )
+  assert_eq(wait_capture(worker), 4L)
+  assert_eq(worker.result_info(4L), Err(UnsafeSource))
+  assert_eq(worker.reap(4L), Ok(()))
+  let safe_root = fixture + "/safe"
+  @fs.mkdir(safe_root, permission=0o700)
+  let link = fixture + "/link"
+  @fs.symlink(target="safe", link)
+  assert_eq(
+    worker.submit_tls(5L, cert_bytes, key_bytes, runtime_root=link),
+    Ok(()),
+  )
+  assert_eq(wait_capture(worker), 5L)
+  assert_eq(worker.result_info(5L), Err(UnsafeSource))
+  assert_eq(worker.reap(5L), Ok(()))
   stop_capture(worker)
   @fs.rmdir(fixture, recursive=true)
 }

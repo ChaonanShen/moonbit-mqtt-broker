@@ -34,7 +34,7 @@ extern "C" fn ffi_submit(
 ) -> Int = "moonbit_mqtt_capture_worker_submit"
 
 ///|
-#borrow(cert, key)
+#borrow(cert, key, root)
 extern "C" fn ffi_submit_tls(
   handle : Int64,
   task_id : Int64,
@@ -42,6 +42,8 @@ extern "C" fn ffi_submit_tls(
   cert_length : Int,
   key : Bytes,
   key_length : Int,
+  root : Bytes,
+  root_length : Int,
 ) -> Int = "moonbit_mqtt_capture_worker_submit_tls"
 
 ///|
@@ -131,9 +133,20 @@ pub fn CaptureWorker::submit_tls(
   task_id : Int64,
   cert : Bytes,
   key : Bytes,
+  runtime_root? : String = "/tmp",
 ) -> Result[Unit, CaptureError] {
+  let root = @utf8.encode(runtime_root)
   match
-    ffi_submit_tls(self.handle, task_id, cert, cert.length(), key, key.length()) {
+    ffi_submit_tls(
+      self.handle,
+      task_id,
+      cert,
+      cert.length(),
+      key,
+      key.length(),
+      root,
+      root.length(),
+    ) {
     0 => Ok(())
     1 => Err(Busy)
     -2 => Err(AllocationFailure)
@@ -145,12 +158,13 @@ pub fn CaptureWorker::submit_tls(
 pub fn CaptureWorker::take_tls_directory(
   self : CaptureWorker,
   task_id : Int64,
+  runtime_root? : String = "/tmp",
 ) -> Result[String, CaptureError] {
   let (length, _) = match self.result_info(task_id) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  if length < 24 || length > 127 {
+  if length < 24 || length > 639 {
     return Err(InvalidState)
   }
   let chunk = match self.copy_chunk(task_id, 0) {
@@ -158,8 +172,9 @@ pub fn CaptureWorker::take_tls_directory(
     _ => return Err(InvalidState)
   }
   let path = @utf8.decode(chunk) catch { _ => return Err(InvalidState) }
-  if !path.has_prefix("/tmp/moonbit-mqtt-tls-") ||
-    path[21:].contains("/") ||
+  let prefix = runtime_root + "/moonbit-mqtt-tls-"
+  if !path.has_prefix(prefix) ||
+    path[prefix.length():].contains("/") ||
     ffi_take_tls_directory(self.handle, task_id) != 0 {
     return Err(InvalidState)
   }

@@ -141,7 +141,8 @@ typedef struct {
   unsigned char *key;
   int cert_length;
   int key_length;
-  char directory[128];
+  char root[513];
+  char directory[640];
   int directory_taken;
   int max_bytes;
   int private_file;
@@ -254,10 +255,37 @@ static int cancelled(capture_worker *worker) {
   return value;
 }
 
-static void release_tls_directory(const char *directory) {
-  if (strncmp(directory, "/tmp/moonbit-mqtt-tls-", 21) != 0 ||
-      strchr(directory + 21, '/') != NULL) return;
-  char cert_path[160], key_path[160];
+static int root_stable(const char *root, const struct stat *before) {
+  int fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0) return 0;
+  struct stat after;
+  int result = fstat(fd, &after) == 0 &&
+    before->st_dev == after.st_dev && before->st_ino == after.st_ino;
+  close(fd);
+  return result;
+}
+
+static int open_tls_root(const char *root, struct stat *status) {
+  int fd = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0) return -1;
+  if (fstat(fd, status) != 0 || !S_ISDIR(status->st_mode) ||
+      (strcmp(root, "/tmp") != 0 &&
+       (status->st_uid != geteuid() || (status->st_mode & 0077) != 0))) {
+    close(fd);
+    return -1;
+  }
+  return fd;
+}
+
+static void release_tls_directory(
+  const char *directory, const char *root
+) {
+  size_t root_length = strlen(root);
+  if (strncmp(directory, root, root_length) != 0 ||
+      directory[root_length] != '/' ||
+      strncmp(directory + root_length + 1, "moonbit-mqtt-tls-", 17) != 0 ||
+      strchr(directory + root_length + 1, '/') != NULL) return;
+  char cert_path[700], key_path[700];
   snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory);
   snprintf(key_path, sizeof(key_path), "%s/key.pem", directory);
   unlink(cert_path);
@@ -317,9 +345,24 @@ static int validate_tls_pair(const char *cert_path, const char *key_path) {
 }
 
 static int materialize_tls(capture_worker *worker) {
-  char directory[] = "/tmp/moonbit-mqtt-tls-XXXXXX";
-  if (mkdtemp(directory) == NULL) return CAPTURE_IO;
-  char cert_path[160], key_path[160];
+  struct stat root_status;
+  int root_fd = open_tls_root(worker->root, &root_status);
+  if (root_fd < 0) return CAPTURE_UNSAFE;
+  char directory[640];
+  int length = snprintf(
+    directory, sizeof(directory), "%s/moonbit-mqtt-tls-XXXXXX", worker->root
+  );
+  if (length <= 0 || length >= (int)sizeof(directory) ||
+      mkdtemp(directory) == NULL) {
+    close(root_fd);
+    return CAPTURE_IO;
+  }
+  close(root_fd);
+  if (!root_stable(worker->root, &root_status)) {
+    release_tls_directory(directory, worker->root);
+    return CAPTURE_CHANGED;
+  }
+  char cert_path[700], key_path[700];
   snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory);
   snprintf(key_path, sizeof(key_path), "%s/key.pem", directory);
   int status = write_private_bytes(
@@ -334,19 +377,19 @@ static int materialize_tls(capture_worker *worker) {
   }
   if (status == CAPTURE_OK && cancelled(worker)) status = CAPTURE_CANCELLED;
   if (status != CAPTURE_OK) {
-    release_tls_directory(directory);
+    release_tls_directory(directory, worker->root);
     return status;
   }
-  size_t length = strlen(directory);
-  worker->data = malloc(length + 1);
+  size_t path_length = strlen(directory);
+  worker->data = malloc(path_length + 1);
   if (worker->data == NULL) {
-    release_tls_directory(directory);
+    release_tls_directory(directory, worker->root);
     return CAPTURE_IO;
   }
-  memcpy(worker->data, directory, length + 1);
-  worker->length = (int)length;
-  worker->max_bytes = (int)length;
-  memcpy(worker->directory, directory, length + 1);
+  memcpy(worker->data, directory, path_length + 1);
+  worker->length = (int)path_length;
+  worker->max_bytes = (int)path_length;
+  memcpy(worker->directory, directory, path_length + 1);
   memset(worker->digest, 0, 32);
   return CAPTURE_OK;
 }
@@ -369,7 +412,7 @@ static void *worker_main(void *argument) {
       (worker->job_kind == JOB_TLS ? materialize_tls(worker) : capture(worker));
     pthread_mutex_lock(&worker->lock);
     if (worker->cancel && result == CAPTURE_OK) {
-      if (worker->job_kind == JOB_TLS) release_tls_directory(worker->directory);
+      if (worker->job_kind == JOB_TLS) release_tls_directory(worker->directory, worker->root);
       clear_bytes(worker->data, (size_t)worker->max_bytes + 1);
       free(worker->data);
       worker->data = NULL;
@@ -447,11 +490,15 @@ MOONBIT_FFI_EXPORT
 int32_t moonbit_mqtt_capture_worker_submit_tls(
   int64_t handle, int64_t id,
   moonbit_bytes_t cert, int32_t cert_length,
-  moonbit_bytes_t key, int32_t key_length
+  moonbit_bytes_t key, int32_t key_length,
+  moonbit_bytes_t root, int32_t root_length
 ) {
   capture_worker *worker = from_handle(handle);
   if (worker == NULL || id <= 0 || cert_length < 1 || key_length < 1 ||
-      cert_length > 1048576 || key_length > 1048576) return -1;
+      cert_length > 1048576 || key_length > 1048576 ||
+      root_length < 2 || root_length > 512 || root[0] != '/' ||
+      root[root_length - 1] == '/' ||
+      memchr(root, '\0', (size_t)root_length) != NULL) return -1;
   unsigned char *cert_copy = malloc((size_t)cert_length);
   unsigned char *key_copy = malloc((size_t)key_length);
   if (cert_copy == NULL || key_copy == NULL) {
@@ -473,6 +520,8 @@ int32_t moonbit_mqtt_capture_worker_submit_tls(
   worker->key = key_copy;
   worker->cert_length = cert_length;
   worker->key_length = key_length;
+  memcpy(worker->root, root, (size_t)root_length);
+  worker->root[root_length] = '\0';
   worker->directory[0] = '\0';
   worker->directory_taken = 0;
   worker->cancel = 0;
@@ -575,7 +624,7 @@ int32_t moonbit_mqtt_capture_worker_reap(int64_t handle, int64_t id) {
   }
   if (worker->job_kind == JOB_TLS && !worker->directory_taken &&
       worker->directory[0] != '\0') {
-    release_tls_directory(worker->directory);
+    release_tls_directory(worker->directory, worker->root);
   }
   if (worker->cert != NULL) {
     clear_bytes(worker->cert, (size_t)worker->cert_length);
@@ -602,6 +651,7 @@ int32_t moonbit_mqtt_capture_worker_reap(int64_t handle, int64_t id) {
   worker->cert_length = 0;
   worker->key_length = 0;
   worker->directory[0] = '\0';
+  worker->root[0] = '\0';
   worker->directory_taken = 0;
   worker->job_kind = 0;
   worker->id = 0;
