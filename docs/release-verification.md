@@ -176,7 +176,7 @@ This reads evidence; it does not run omitted stages or publish anything. An earl
 | `runtime/broker` | Exported executable for hash verification | Yes |
 | Temporary runtime certificates, key and password file | Per-run test fixtures | No |
 
-CI uploads artifact `distribution-evidence` with 30-day retention, including `package.zip`, `artifacts.sha256`, and `runtime/broker`. Verify both files from the artifact directory with `sha256sum --check artifacts.sha256`. When the user later requests review, archive required evidence to remote `.local/ci-evidence/<SHA>/<run-id>/` within retention and record run/job URLs; do not wait for CI or create an automatic follow-up to archive it during the implementation turn.
+CI first stages an explicit allowlist of result files in runner-readable `test-results/distribution-upload/`, keeping private test data directories, WAL files and keys out of the upload. It then uploads artifact `distribution-evidence` with 30-day retention, including `package.zip`, `artifacts.sha256`, and `runtime/broker`. Verify both files from the artifact directory with `sha256sum --check artifacts.sha256`. When the user later requests review, archive required evidence to remote `.local/ci-evidence/<SHA>/<run-id>/` within retention and record run/job URLs; do not wait for CI or create an automatic follow-up to archive it during the implementation turn.
 
 Keep results on the remote workspace according to project policy. Record the directory, commit, package hash and CI run, and preserve permitted evidence before CI expiry if needed for a release. Do not copy temporary private keys into source, distributables or acceptance submissions; test fixtures are not production credentials.
 
