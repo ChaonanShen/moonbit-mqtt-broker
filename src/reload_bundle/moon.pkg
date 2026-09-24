@@ -1,0 +1,14 @@
+import {
+  "ChaonanShen/moonbit-mqtt-broker/config",
+  "ChaonanShen/moonbit-mqtt-broker/reload_native" @native,
+  "moonbitlang/async",
+  "moonbitlang/core/encoding/utf8",
+}
+
+import {
+  "moonbitlang/async/fs",
+} for "test"
+
+options(
+  targets: { "bundle.mbt": [ "native" ], "bundle_test.mbt": [ "native" ] },
+)
