@@ -91,3 +91,41 @@ pub fn decode_wal_policy_record(
     error => Err(error)
   }
 }
+
+///|
+fn is_wal_policy_record(data : Bytes) -> Bool {
+  data.length() >= 8 && data[:8] == wal_policy_magic
+}
+
+///|
+fn apply_policy_record(
+  current : WalPolicyState?,
+  record : WalPolicyRecord,
+) -> Result[WalPolicyState, PersistenceError] {
+  match record.transition {
+    PolicyActivated => {
+      let expected = match current {
+        None => 1L
+        Some(value) if !value.reconcile_pending &&
+          value.sequence < 9223372036854775807L => value.sequence + 1L
+        _ => return Err(InvalidValue(field="wal-policy-order", offset=0))
+      }
+      if record.sequence != expected {
+        return Err(InvalidValue(field="wal-policy-sequence", offset=0))
+      }
+      Ok({
+        sequence: record.sequence,
+        fingerprint: record.fingerprint,
+        reconcile_pending: true,
+      })
+    }
+    PolicyReconciled =>
+      match current {
+        Some(value) if value.sequence == record.sequence &&
+          value.reconcile_pending &&
+          value.fingerprint == record.fingerprint =>
+          Ok({ ..value, reconcile_pending: false })
+        _ => Err(InvalidValue(field="wal-policy-order", offset=0))
+      }
+  }
+}
