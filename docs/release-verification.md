@@ -355,7 +355,7 @@ uses only focused checks.
 
 ## P1-04 reload gate
 
-The cumulative release entry runs the reload lifecycle, TLS/WSS material rotation, strict recovery, and security revocation process cases. The security case runs in off, snapshot, and strict modes and checks anonymous revocation, closure of idle connections after a password change, and delivery blocking after an ACL restriction. Distribution evidence permits only per-mode summaries and sanitized event logs; password databases, manifests, and private keys are excluded. The exported binary also runs reload-enabled check-config in base, argon2, tls, and full runtime images. Plain reload succeeds only where Argon2 is available; TLS reload succeeds only in full. Each profile records both expected outcomes in `evidence.txt`.
+The cumulative release entry runs the reload lifecycle, TLS/WSS material rotation, strict recovery, and security revocation process cases. The security case runs in off, snapshot, and strict modes and checks anonymous revocation, closure of idle connections after a password change, and delivery blocking after an ACL restriction. The reload limits case checks the largest supported per-Session pending queue boundary (4096 accepted, 4097 rejected). Distribution evidence permits only per-mode summaries and sanitized event logs; password databases, manifests, and private keys are excluded. The exported binary also runs reload-enabled check-config in base, argon2, tls, and full runtime images. Plain reload succeeds only where Argon2 is available; TLS reload succeeds only in full. Each profile records both expected outcomes in `evidence.txt`.
 
 ## P1-01 strict durability gate
 
