@@ -9,6 +9,9 @@ import {
   "ChaonanShen/moonbit-mqtt-broker/session",
   "ChaonanShen/moonbit-mqtt-broker/slot_index",
   "ChaonanShen/moonbit-mqtt-broker/security",
+  "ChaonanShen/moonbit-mqtt-broker/reload_bundle" @bundle,
+  "ChaonanShen/moonbit-mqtt-broker/reload_native" @native,
+  "ChaonanShen/moonbit-mqtt-broker/config",
   "ChaonanShen/moonbit-mqtt-broker/topic",
   "ChaonanShen/moonbit-mqtt-broker/observability",
   "ChaonanShen/moonbit-mqtt-broker/management",
@@ -30,6 +33,7 @@ warnings = "-alert_internal"
 
 import {
   "moonbitlang/async/fs",
+  "moonbitlang/async/process",
 } for "wbtest"
 
 import {
@@ -43,6 +47,8 @@ options(
     "connection_server.mbt": [ "native" ],
     "websocket_native.mbt": [ "native" ],
     "tls_material_native.mbt": [ "native" ],
+    "reload_tls_prepare.mbt": [ "native" ],
+    "reload_tls_prepare_wbtest.mbt": [ "native" ],
     "websocket_native_test.mbt": [ "native" ],
     "websocket_handshake_test.mbt": [ "native" ],
     "websocket_codec_test.mbt": [ "native" ],
