@@ -1,0 +1,13 @@
+import {
+  "moonbitlang/core/encoding/utf8",
+}
+
+import {
+  "moonbitlang/async",
+  "moonbitlang/async/fs",
+} for "test"
+
+options(
+  "native-stub": [ "native.c" ],
+  targets: { "capture.mbt": [ "native" ], "capture_test.mbt": [ "native" ] },
+)
