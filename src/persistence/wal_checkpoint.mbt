@@ -12,6 +12,7 @@ pub(all) struct WalCheckpoint {
   generation : Int64
   lsn : Int64
   identities : Array[WalSessionIdentity]
+  policy : WalPolicyState?
   snapshot : @router.BrokerSnapshotV3
 } derive(Eq, Debug)
 
@@ -24,6 +25,10 @@ fn validate_wal_checkpoint(
     checkpoint.snapshot.version != 3 ||
     checkpoint.identities.length() != checkpoint.snapshot.sessions.length() {
     raise wal_corrupt("checkpoint-header-or-identities", 0)
+  }
+  if checkpoint.policy is Some(policy) &&
+    (policy.sequence < 1L || policy.fingerprint.length() != 32) {
+    raise wal_corrupt("checkpoint-policy", 0)
   }
   for index in 0..<checkpoint.identities.length() {
     let identity = checkpoint.identities[index]
@@ -54,8 +59,22 @@ pub fn encode_wal_checkpoint(
     }
     let writer = BinaryWriter::new(max_bytes=max_checkpoint_bytes)
     writer.write_raw(wal_checkpoint_magic)
-    writer.write_u16(1, "wal-checkpoint-version")
-    writer.write_u16(3, "wal-logical-schema")
+    writer.write_u16(
+      if checkpoint.policy is Some(_) {
+        2
+      } else {
+        1
+      },
+      "wal-checkpoint-version",
+    )
+    writer.write_u16(
+      if checkpoint.policy is Some(_) {
+        4
+      } else {
+        3
+      },
+      "wal-logical-schema",
+    )
     writer.write_positive_i64(
       checkpoint.generation,
       "wal-checkpoint-generation",
@@ -65,6 +84,18 @@ pub fn encode_wal_checkpoint(
     for identity in checkpoint.identities {
       writer.write_string(identity.client_id)
       writer.write_positive_i64(identity.generation, "wal-session-generation")
+    }
+    if checkpoint.policy is Some(policy) {
+      writer.write_positive_i64(policy.sequence, "wal-policy-sequence")
+      writer.write_raw(policy.fingerprint)
+      writer.write_u8(
+        if policy.reconcile_pending {
+          1
+        } else {
+          0
+        },
+        "wal-policy-pending",
+      )
     }
     writer.write_bytes(snapshot)
     let prefix = writer.finish()
@@ -95,10 +126,10 @@ pub fn decode_wal_checkpoint(
       raise InvalidMagic
     }
     let version = reader.read_u16()
-    if version != 1 {
+    if version != 1 && version != 2 {
       raise UnsupportedEnvelopeVersion(version)
     }
-    if reader.read_u16() != 3 {
+    if reader.read_u16() != (if version == 2 { 4 } else { 3 }) {
       raise wal_corrupt("checkpoint-logical-schema", 10)
     }
     let generation = reader.read_positive_i64("wal-checkpoint-generation")
@@ -118,6 +149,19 @@ pub fn decode_wal_checkpoint(
         generation: reader.read_positive_i64("wal-session-generation"),
       })
     }
+    let policy : WalPolicyState? = if version == 2 {
+      let sequence = reader.read_positive_i64("wal-policy-sequence")
+      let fingerprint = reader.read_raw(32)
+      let pending = match reader.read_u8() {
+        0 => false
+        1 => true
+        _ =>
+          raise wal_corrupt("checkpoint-policy-pending", reader.position() - 1)
+      }
+      Some({ sequence, fingerprint, reconcile_pending: pending })
+    } else {
+      None
+    }
     let snapshot_bytes = reader.read_bytes(limits.max_snapshot_bytes())
     let expected = reader.read_u32_bits()
     if reader.remaining() != 0 {
@@ -131,7 +175,7 @@ pub fn decode_wal_checkpoint(
       Ok(value) => value
       Err(error) => raise error
     }
-    let checkpoint = { generation, lsn, identities, snapshot }
+    let checkpoint = { generation, lsn, identities, policy, snapshot }
     validate_wal_checkpoint(checkpoint)
     Ok(checkpoint)
   } catch {

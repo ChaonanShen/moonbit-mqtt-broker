@@ -1765,7 +1765,7 @@ async fn run_main() -> Unit {
           let wal_store = match
             @persistence.WalStore::bootstrap(
               store,
-              { generation: 1L, lsn: 0L, identities, snapshot },
+              { generation: 1L, lsn: 0L, identities, policy: None, snapshot },
               disk_max_bytes=wal_disk_max_bytes,
               disk_reserve_bytes=wal_disk_reserve_bytes,
             ) {

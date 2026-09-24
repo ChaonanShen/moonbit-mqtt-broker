@@ -2,6 +2,13 @@
 let wal_policy_magic : Bytes = b"MBMPOL01"
 
 ///|
+pub(all) struct WalPolicyState {
+  sequence : Int64
+  fingerprint : Bytes
+  reconcile_pending : Bool
+} derive(Eq, Debug)
+
+///|
 pub(all) enum WalPolicyTransition {
   PolicyActivated
   PolicyReconciled

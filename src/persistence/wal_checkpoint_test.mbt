@@ -12,6 +12,7 @@ fn wal_checkpoint_fixture() -> WalCheckpoint {
     generation: 2L,
     lsn: 10L,
     identities: [{ client_id: "client-a", generation: 7L }],
+    policy: None,
     snapshot: {
       version: 3,
       sessions: [
@@ -53,4 +54,34 @@ test "WAL checkpoint rejects missing identity rather than inventing one" {
   let fixture = wal_checkpoint_fixture()
   let invalid : WalCheckpoint = { ..fixture, identities: [] }
   assert_true(encode_wal_checkpoint(invalid) is Err(InvalidValue(..)))
+}
+
+///|
+test "WAL checkpoint v2 keeps policy gate and unfinished reconcile" {
+  let digest : Array[Byte] = []
+  for _ in 0..<32 {
+    digest.push(9)
+  }
+  let policy : WalPolicyState = {
+    sequence: 4L,
+    fingerprint: Bytes::from_array(digest),
+    reconcile_pending: true,
+  }
+  let checkpoint : WalCheckpoint = {
+    ..wal_checkpoint_fixture(),
+    policy: Some(policy),
+  }
+  let bytes = encode_wal_checkpoint(checkpoint).unwrap()
+  assert_true(bytes.length() > 40)
+  assert_eq(
+    decode_wal_checkpoint(bytes, wal_checkpoint_limits()),
+    Ok(checkpoint),
+  )
+  assert_true(
+    encode_wal_checkpoint({
+      ..checkpoint,
+      policy: Some({ ..policy, fingerprint: b"short" }),
+    })
+    is Err(_),
+  )
 }

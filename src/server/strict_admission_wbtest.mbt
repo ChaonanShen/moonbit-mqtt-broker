@@ -33,6 +33,7 @@ async test "oversized strict transaction closes only its connection before WAL w
       generation: 1L,
       lsn: 0L,
       identities: [],
+      policy: None,
       snapshot: { version: 3, sessions: [], retained: [] },
     }).unwrap(),
   )

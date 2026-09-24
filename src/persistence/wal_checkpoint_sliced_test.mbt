@@ -5,6 +5,7 @@ async test "sliced checkpoint encoding equals the stable format and yields contr
     generation: 2L,
     lsn: 7L,
     identities: [{ client_id: "large", generation: 3L }],
+    policy: None,
     snapshot: {
       version: 3,
       sessions: [
@@ -36,4 +37,27 @@ async test "sliced checkpoint encoding equals the stable format and yields contr
     assert_true(ticks > 0)
     ticker.wait()
   }
+}
+
+///|
+async test "sliced policy checkpoint equals direct encoding" {
+  let digest : Array[Byte] = []
+  for _ in 0..<32 {
+    digest.push(5)
+  }
+  let checkpoint : WalCheckpoint = {
+    generation: 1L,
+    lsn: 0L,
+    identities: [],
+    policy: Some({
+      sequence: 1L,
+      fingerprint: Bytes::from_array(digest),
+      reconcile_pending: false,
+    }),
+    snapshot: { version: 3, sessions: [], retained: [] },
+  }
+  assert_eq(
+    encode_wal_checkpoint_sliced(checkpoint).unwrap(),
+    encode_wal_checkpoint(checkpoint).unwrap(),
+  )
 }

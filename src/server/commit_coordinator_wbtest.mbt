@@ -10,6 +10,7 @@ async test "strict coordinator releases activation only after WAL completion" {
     generation: 1L,
     lsn: 0L,
     identities: [],
+    policy: None,
     snapshot: { version: 3, sessions: [], retained: [] },
   }
   let store = @persistence.WalStore::bootstrap(lock, checkpoint).unwrap()
@@ -81,6 +82,7 @@ async test "timed-out WAL commit fences without ACK while restart may replay it"
     generation: 1L,
     lsn: 0L,
     identities: [],
+    policy: None,
     snapshot: { version: 3, sessions: [], retained: [] },
   }).unwrap()
   let writer = @persistence.WalWriter::new(store)

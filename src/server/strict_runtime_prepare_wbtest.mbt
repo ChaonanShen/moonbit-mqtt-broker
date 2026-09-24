@@ -53,6 +53,7 @@ async test "strict QoS1 ACK and fanout wait for WAL completion" {
         2L
       },
     }),
+    policy: None,
     snapshot,
   }
   let persistence_config = @persistence.PersistenceConfig::new(path).unwrap()

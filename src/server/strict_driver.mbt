@@ -516,6 +516,7 @@ fn RouterDriver::poll_strict_checkpoint(self : RouterDriver) -> Unit {
     generation: coordinator.checkpoint_generation() + 1L,
     lsn: self.strict_checkpoint_lsn,
     identities,
+    policy: None,
     snapshot,
   }
   if coordinator.submit_checkpoint(checkpoint) {
