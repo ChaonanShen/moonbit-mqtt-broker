@@ -387,21 +387,48 @@ async fn ConnectionTransport::read_some(
 }
 
 ///|
+suberror PolicyWriteRevoked {
+  PolicyWriteRevoked
+} derive(Debug)
+
+///|
 async fn ConnectionTransport::write(
   self : ConnectionTransport,
   bytes : Bytes,
+  still_allowed? : () -> Bool,
 ) -> Unit {
   match self {
-    Raw(raw) => raw.write(bytes)
+    Raw(raw) =>
+      if still_allowed is None {
+        raw.write(bytes)
+      } else {
+        let gate = still_allowed.unwrap()
+        let mut offset = 0
+        while offset < bytes.length() {
+          if !gate() {
+            raise PolicyWriteRevoked
+          }
+          let end = if bytes.length() - offset < 16384 {
+            bytes.length()
+          } else {
+            offset + 16384
+          }
+          raw.write(Bytes::from_array(bytes[offset:end].to_array()))
+          offset = end
+        }
+      }
     WebSocket(stream) => {
       let mut offset = 0
       while offset < bytes.length() {
+        if still_allowed is Some(gate) && !gate() {
+          raise PolicyWriteRevoked
+        }
         let end = if bytes.length() - offset < 16384 {
           bytes.length()
         } else {
           offset + 16384
         }
-        let payload = Bytes::from_array(bytes.to_array()[offset:end].to_owned())
+        let payload = Bytes::from_array(bytes[offset:end].to_array())
         stream.raw.write(websocket_encode_frame(2, payload).unwrap())
         offset = end
         if stream.sink is Some(sink) {

@@ -298,3 +298,34 @@ async test "queued MQTT publish is denied at writer start after policy change" {
   connection.close()
   assert_eq(client.read_some(), None)
 }
+
+///|
+async test "partial TCP publish stops before the next chunk when policy changes" {
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  defer listener.close()
+  let client = @socket.Tcp::connect(listener.addr)
+  defer client.close()
+  let (connection, _) = listener.accept()
+  let mut checks = 0
+  let payload = Bytes::make(32768, b'x')
+  let interrupted = try {
+    ConnectionTransport::plain(connection).write(payload, still_allowed=() => {
+      checks += 1
+      checks == 1
+    })
+    false
+  } catch {
+    _ => true
+  }
+  assert_true(interrupted)
+  assert_eq(checks, 2)
+  connection.close()
+  let mut received = 0
+  for ;; {
+    match client.read_some(max_len=32768) {
+      Some(bytes) => received += bytes.length()
+      None => break
+    }
+  }
+  assert_eq(received, 16384)
+}

@@ -263,7 +263,11 @@ async fn write_transport(
         if authorization is Some(value) && !sink.authorize(value) {
           return PolicyRevoked
         }
-        connection.write(frame) catch {
+        let gate : (() -> Bool)? = authorization.map(value => {
+          () => sink.authorize(value)
+        })
+        connection.write(frame, still_allowed?=gate) catch {
+          PolicyWriteRevoked => return PolicyRevoked
           _ => return WriteFailure
         }
         if bus is Some(bus) && bus.needs_promotion {
@@ -279,7 +283,11 @@ async fn write_transport(
         if authorization is Some(value) && !sink.authorize(value) {
           return PolicyRevoked
         }
-        connection.write(frame) catch {
+        let gate : (() -> Bool)? = authorization.map(value => {
+          () => sink.authorize(value)
+        })
+        connection.write(frame, still_allowed?=gate) catch {
+          PolicyWriteRevoked => return PolicyRevoked
           _ => return WriteFailure
         }
         return reason
