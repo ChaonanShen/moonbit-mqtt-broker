@@ -21,11 +21,12 @@ pub struct SubscriptionIndex {
     Map[@topic.TopicFilter, @session.DeliveryQoS],
   ]
   priv mut count : Int
+  priv mut policy_slots : PolicySubscriptionSlots?
 }
 
 ///|
 pub fn SubscriptionIndex::new() -> SubscriptionIndex {
-  { by_filter: Map([]), by_client: Map([]), count: 0 }
+  { by_filter: Map([]), by_client: Map([]), count: 0, policy_slots: None }
 }
 
 ///|
@@ -57,6 +58,9 @@ pub fn SubscriptionIndex::put(
   filters.set(filter, qos)
   clients.set(client_id, qos)
   if !existed {
+    if self.policy_slots is Some(slots) && !slots.track(client_id, filter) {
+      abort("core policy subscription slot exhausted")
+    }
     self.count = self.count + 1
   }
   !existed
@@ -82,6 +86,10 @@ pub fn SubscriptionIndex::remove(
           clients.remove(client_id)
           if clients.length() == 0 {
             self.by_filter.remove(filter)
+          }
+          if self.policy_slots is Some(slots) &&
+            !slots.untrack(client_id, filter) {
+            abort("core policy subscription identity missing")
           }
           self.count = self.count - 1
           true
@@ -243,7 +251,11 @@ pub fn SubscriptionIndex::check_invariants(self : SubscriptionIndex) -> Bool {
   }
   forward_count == self.count &&
   reverse_count == self.count &&
-  forward_count == reverse_count
+  forward_count == reverse_count &&
+  (
+    self.policy_slots is None ||
+    self.policy_slots.unwrap().check_invariants(self.count)
+  )
 }
 
 ///|

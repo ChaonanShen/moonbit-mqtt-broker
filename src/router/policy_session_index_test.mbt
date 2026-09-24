@@ -72,3 +72,47 @@ test "clean replacement advances core incarnation while restore keeps it" {
   assert_true(state.policy_session_incarnation(id).unwrap() > original)
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "core subscription scan identities survive deletion and slot reuse" {
+  let state = BrokerState::new(
+    BrokerConfig::new(4, 4, 0, max_sessions=4).unwrap(),
+  )
+  let client = @session.ClientId::new("client").unwrap()
+  ignore(state.apply(CreateSession(client)))
+  let a = @topic.TopicFilter::new("a/#").unwrap()
+  let b = @topic.TopicFilter::new("b/#").unwrap()
+  ignore(
+    state.apply(
+      Subscribe({
+        client_id: client,
+        entries: [
+          { filter: a, qos: @session.QoS1 },
+          { filter: b, qos: @session.QoS1 },
+        ],
+      }),
+    ),
+  )
+  assert_true(state.policy_subscription_page(0, 4) is None)
+  state.enable_policy_index().unwrap()
+  let original = state.policy_subscription_identity(client, a).unwrap()
+  let page = state.policy_subscription_page(0, 1).unwrap()
+  assert_eq(page.scanned, 1)
+  assert_true(page.has_more)
+  ignore(state.apply(Unsubscribe({ client_id: client, filters: [a] })))
+  ignore(
+    state.apply(
+      Subscribe({
+        client_id: client,
+        entries: [{ filter: a, qos: @session.QoS1 }],
+      }),
+    ),
+  )
+  let replacement = state.policy_subscription_identity(client, a).unwrap()
+  assert_true(replacement != original)
+  let all = state.policy_subscription_page(0, 4).unwrap()
+  assert_eq(all.rows.length(), 2)
+  assert_true(all.rows.any(row => row.id == replacement))
+  assert_false(all.rows.any(row => row.id == original))
+  assert_eq(state.check_invariants(), Ok(()))
+}

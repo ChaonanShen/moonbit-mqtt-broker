@@ -118,9 +118,18 @@ pub fn BrokerState::enable_policy_index(
     return Ok(())
   }
   let capacity = self.config.max_sessions()
-  let cost = match @budget.checked_mul(capacity.to_int64(), 128L) {
-    Ok(value) => @budget.checked_add(value, 4096L).unwrap_or(-1L)
-    Err(_) => -1L
+  let session_cost = @budget.checked_mul(capacity.to_int64(), 128L)
+  let subscription_cost = @budget.checked_mul(
+    self.config.max_subscriptions_total().to_int64(),
+    160L,
+  )
+  let cost = match (session_cost, subscription_cost) {
+    (Ok(a), Ok(b)) =>
+      match @budget.checked_add(a, b) {
+        Ok(total) => @budget.checked_add(total, 4096L).unwrap_or(-1L)
+        Err(_) => -1L
+      }
+    _ => -1L
   }
   if cost < 0L {
     return Err(InvalidConfiguration("policy index capacity overflow"))
@@ -146,6 +155,12 @@ pub fn BrokerState::enable_policy_index(
         return Err(InvariantViolation("policy index startup identity"))
       }
     }
+  }
+  if !self.subscriptions.enable_policy_slots(
+      self.config.max_subscriptions_total(),
+    ) {
+    ticket.release().unwrap()
+    return Err(InvariantViolation("policy subscription index startup"))
   }
   ticket.commit().unwrap()
   self.policy_index_ticket = Some(ticket)
@@ -226,6 +241,24 @@ pub fn BrokerState::policy_session_page(
   self.policy_slots.map(slots => {
     slots.page(start, scan_limit, scan_limit, _ => true)
   })
+}
+
+///|
+pub fn BrokerState::policy_subscription_page(
+  self : BrokerState,
+  start : Int,
+  scan_limit : Int,
+) -> PolicySubscriptionPage? {
+  self.subscriptions.policy_page(start, scan_limit)
+}
+
+///|
+pub fn BrokerState::policy_subscription_identity(
+  self : BrokerState,
+  client_id : @session.ClientId,
+  filter : @topic.TopicFilter,
+) -> Int64? {
+  self.subscriptions.policy_identity(client_id, filter)
 }
 
 ///|
