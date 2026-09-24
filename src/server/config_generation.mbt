@@ -11,7 +11,7 @@ pub struct ConfigGeneration {
   effective : @bundle.ReloadEffectiveCandidate
   security : @security.SecurityPolicy
   fingerprint : Bytes
-  budget : @budget.Ticket?
+  mut budget : @budget.Ticket?
   mut released : Bool
 }
 
@@ -57,6 +57,20 @@ pub fn ConfigGeneration::activated_monotonic_ms(
   self : ConfigGeneration,
 ) -> Int64 {
   self.activated_monotonic_ms
+}
+
+///|
+
+///|
+fn ConfigGeneration::attach_initial_budget(
+  self : ConfigGeneration,
+  ticket : @budget.Ticket,
+) -> Bool {
+  if self.released || self.budget is Some(_) {
+    return false
+  }
+  self.budget = Some(ticket)
+  true
 }
 
 ///|

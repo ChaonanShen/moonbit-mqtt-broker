@@ -268,7 +268,7 @@ pub async fn serve_listeners(
   if management is Some(active) && active.command_mailbox is Some(mailbox) {
     bus.attach_management_commands(mailbox)
   }
-  let reload_service : ReloadService? = if reload is Some(_) {
+  let reload_service : ReloadService? = if reload is Some(startup) {
     Some(
       ReloadService::new(
         management,
@@ -280,6 +280,12 @@ pub async fn serve_listeners(
         } else {
           "off"
         },
+        max_generation_bytes=startup.max_generation_bytes,
+        infrastructure_limit=config
+          .broker_config()
+          .resources()
+          .get("max_managed_bytes_total"),
+        generation?,
       ),
     )
   } else {
@@ -384,7 +390,6 @@ pub async fn serve_listeners(
             startup,
             bus,
             handle,
-            initial_state,
             strict,
             logger,
             shutdown_requested,

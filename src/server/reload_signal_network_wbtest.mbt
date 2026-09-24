@@ -119,8 +119,34 @@ async test "signal coordinator prepares and publishes log generation without man
       }
       @async.sleep(10)
     }
-    stop = true
     assert_true(published)
+    @fs.remove(config_path)
+    @fs.write_file(
+      config_path,
+      b"[observability]\nlog_level = \"warn\"\n",
+      create_mode=CreateNew,
+      permission=0o600,
+    )
+    signal_test_manifest(config_path, manifest_path)
+    signal = true
+    let mut second = false
+    for _ in 0..<500 {
+      if handle.active().config_epoch() == 2L &&
+        logger.render(
+          @observability.LogRecord::new(
+            2L,
+            @observability.Debug,
+            "after_second_reload",
+          ),
+        )
+        is None {
+        second = true
+        break
+      }
+      @async.sleep(10)
+    }
+    stop = true
+    assert_true(second)
     @async.with_timeout(3000, () => task.wait())
   }
   handle.close()

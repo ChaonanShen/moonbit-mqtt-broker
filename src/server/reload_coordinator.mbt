@@ -37,18 +37,12 @@ async fn signal_reload_once(
   startup : ReloadStartup,
   bus : EventBus,
   generation : GenerationHandle,
-  broker : @router.BrokerState,
   strict : StrictPersistenceRuntime?,
   logger : @observability.Logger,
   request : ReloadRequest,
   service : ReloadService,
 ) -> Unit {
   let active = generation.active()
-  let limits = broker.config().resources()
-  let pool = broker
-    .resource_ledger()
-    .pool(Infrastructure, limits.get("max_managed_bytes_total"))
-    .unwrap()
   let result = prepare_reload_candidate(
     startup.manifest_path,
     startup.config_path,
@@ -56,7 +50,7 @@ async fn signal_reload_once(
     active.bundle,
     active.effective,
     active.security,
-    pool,
+    service.generation_pool,
     startup.runtime_root,
     startup.prepare_timeout_ms,
     startup.max_source_bytes,
@@ -183,7 +177,6 @@ async fn run_reload_signals(
   startup : ReloadStartup,
   bus : EventBus,
   generation : GenerationHandle,
-  broker : @router.BrokerState,
   strict : StrictPersistenceRuntime?,
   logger : @observability.Logger,
   shutdown_requested : () -> Bool,
@@ -214,7 +207,7 @@ async fn run_reload_signals(
     }
     let mut succeeded = true
     signal_reload_once(
-      startup, bus, generation, broker, strict, logger, request, service,
+      startup, bus, generation, strict, logger, request, service,
     ) catch {
       error => {
         succeeded = false

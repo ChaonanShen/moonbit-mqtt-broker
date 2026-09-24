@@ -14,6 +14,7 @@ pub struct ReloadService {
   activated_epochs : Map[Int64, Int64]
   boot_id : String
   mode : String
+  generation_pool : @budget.Pool
   mut budget : @budget.Ticket?
 }
 
@@ -22,7 +23,45 @@ fn ReloadService::new(
   management : ManagementRuntime?,
   ledger : @budget.Ledger,
   mode : String,
+  max_generation_bytes? : Int64 = 67108864L,
+  infrastructure_limit? : Int64 = 268435456L,
+  generation? : GenerationHandle,
 ) -> ReloadService raise ResourceStartupFailure {
+  if max_generation_bytes < 16384L || max_generation_bytes > 268435456L {
+    raise ResourceStartupFailure("invalid reload generation account cap")
+  }
+  let generation_account = match
+    ledger.account(
+      @budget.Category,
+      max_generation_bytes,
+      label="reload_generations",
+    ) {
+    Ok(value) => value
+    Err(_) =>
+      raise ResourceStartupFailure("reload generation account unavailable")
+  }
+  let root_pool = ledger.pool(Infrastructure, infrastructure_limit).unwrap()
+  let generation_pool = match root_pool.with_account(generation_account) {
+    Ok(value) => value
+    Err(_) => raise ResourceStartupFailure("reload generation pool unavailable")
+  }
+  if generation is Some(handle) {
+    let current = handle.active()
+    let source_bytes = current.bundle
+      .sources()
+      .fold(init=0L, (total, source) => total + source.bytes.length().to_int64())
+    let initial_cost = source_bytes * 3L + 4096L
+    let initial_ticket = match generation_pool.reserve(initial_cost) {
+      Ok(value) => value
+      Err(_) =>
+        raise ResourceStartupFailure("initial generation budget unavailable")
+    }
+    initial_ticket.commit().unwrap()
+    if !current.attach_initial_budget(initial_ticket) {
+      initial_ticket.release().unwrap()
+      raise ResourceStartupFailure("initial generation already accounted")
+    }
+  }
   let (boot_id, operations, audit, budget) = match management {
     Some(active) =>
       (
@@ -59,6 +98,7 @@ fn ReloadService::new(
     activated_epochs: Map([]),
     boot_id,
     mode,
+    generation_pool,
     budget,
   }
 }
