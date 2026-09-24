@@ -111,14 +111,14 @@ pub async fn prepare_reload_candidate(
     raise ResourceStartupFailure("reload source budget unavailable")
   }
   let reservation = capture_limit.to_int64() * 3L + 4096L
-  let ticket = match pool.reserve(reservation) {
+  let preflight = match pool.reserve(reservation) {
     Ok(value) => value
     Err(_) =>
       raise ResourceStartupFailure("reload generation budget unavailable")
   }
-  ticket.commit().unwrap()
-  let mut transferred = false
-  errdefer (if !transferred { ticket.release().unwrap() })
+  preflight.commit().unwrap()
+  let mut preflight_owned = true
+  errdefer (if preflight_owned { preflight.release().unwrap() })
   @async.with_timeout(timeout_ms, () => {
     let bundle = @bundle.capture_bundle(
       manifest_path,
@@ -148,8 +148,8 @@ pub async fn prepare_reload_candidate(
     if bundle.same_effective_generation(
         effective, previous_bundle, previous_effective,
       ) {
-      ticket.release().unwrap()
-      transferred = true
+      preflight.release().unwrap()
+      preflight_owned = false
       return ReloadNoChange
     }
     let source_bytes = bundle
@@ -159,6 +159,18 @@ pub async fn prepare_reload_candidate(
     if cost > max_generation_bytes {
       raise ResourceStartupFailure("reload generation exceeds byte limit")
     }
+    // The release and right-sized reservation cannot interleave another
+    // MoonBit task. Captured bytes remain owned by this prepare frame.
+    preflight.release().unwrap()
+    preflight_owned = false
+    let ticket = match pool.reserve(cost) {
+      Ok(value) => value
+      Err(_) =>
+        raise ResourceStartupFailure("reload generation budget unavailable")
+    }
+    ticket.commit().unwrap()
+    let mut ticket_transferred = false
+    errdefer (if !ticket_transferred { ticket.release().unwrap() })
     let fingerprint = bundle.policy_fingerprint(effective)
     let previous_fingerprint = previous_bundle.policy_fingerprint(
       previous_effective,
@@ -174,7 +186,7 @@ pub async fn prepare_reload_candidate(
     } else {
       Some(prepare_tls_generation(bundle, effective, pool, runtime_root))
     }
-    transferred = true
+    ticket_transferred = true
     ReloadPrepared({
       bundle,
       effective,
