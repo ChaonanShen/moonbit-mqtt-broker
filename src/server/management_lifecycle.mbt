@@ -35,7 +35,7 @@ pub struct ManagementRuntime {
   mut audit : @management.AuditRing?
   mut reload_budget : @budget.Ticket?
   mut pending_kick_reservations : Int
-  cursor_table : @management.CursorTable?
+  mut cursor_table : @management.CursorTable?
   mut mqtt_listener_address : String
   rejections : @management.ManagementRejections
   mut context : ObservationContext
@@ -223,6 +223,7 @@ fn ManagementRuntime::enable_reload(
     self.config.max_audit_records().to_int64() * 512L +
     self.config.operation_queue_limit().to_int64() * 1024L +
     self.config.query_queue_limit().to_int64() * 1024L +
+    self.config.max_cursor_records().to_int64() * 512L +
     8192L
   } else {
     65536L
@@ -262,6 +263,15 @@ fn ManagementRuntime::enable_reload(
   if self.command_mailbox is None {
     self.command_mailbox = Some(
       ManagementCommandMailbox::new(self.config.operation_queue_limit()),
+    )
+  }
+  if self.cursor_table is None {
+    self.cursor_table = Some(
+      @management.CursorTable::new(
+        self.config.max_cursor_records(),
+        self.config.cursor_ttl_ms().to_int64(),
+        self.context.boot_id,
+      ),
     )
   }
   self.http.query_mailbox = self.query_mailbox

@@ -324,9 +324,16 @@ fn RouterDriver::management_query_result(
     return { status: @http_transport.Ok, body: bytes }
   }
   if spec.kind == @management.Audit {
-    if !active.config.operations_enabled() ||
-      active.audit is None ||
-      active.cursor_table is None {
+    let config_admin = active.http.tokens.token_has_scope(
+      spec.actor_token_id,
+      @management.ConfigAdmin,
+    )
+    if active.audit is None ||
+      active.cursor_table is None ||
+      (
+        !active.config.operations_enabled() &&
+        !(self.reload_service is Some(_) && config_admin)
+      ) {
       return management_query_error(
         @http_transport.ServiceUnavailable,
         "operations_disabled",
@@ -372,6 +379,7 @@ fn RouterDriver::management_query_result(
         after,
         spec.limit,
         active.config.query_scan_limit(),
+        include_local_signal=config_admin && self.reload_service is Some(_),
       )
     let items : Array[Json] = []
     let mut used = 256
