@@ -92,6 +92,7 @@ fn RouterDriver::poll_strict_completion(self : RouterDriver) -> Unit {
         self.drain_strict_queues()
       }
     CommitFencedResult(reason) => self.strict_fence(reason)
+    CommitPolicyCapabilityReady => ()
     CommitCheckpointPublished(lsn, _) =>
       if !self.strict_checkpoint_inflight || lsn != self.strict_checkpoint_lsn {
         self.strict_fence("checkpoint-completion-mismatch")

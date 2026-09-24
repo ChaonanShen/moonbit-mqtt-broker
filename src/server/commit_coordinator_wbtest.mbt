@@ -140,3 +140,62 @@ async test "timed-out WAL commit fences without ACK while restart may replay it"
     @fs.rmdir(path, recursive=true)
   }
 }
+
+///|
+async test "policy capability upgrade blocks business until durable writer completion" {
+  let path = "_build/server-policy-capability"
+  if @fs.exists(path) {
+    @fs.rmdir(path, recursive=true)
+  }
+  let lock = @persistence.SnapshotStore::open(
+    @persistence.PersistenceConfig::new(path).unwrap(),
+  ).unwrap()
+  let checkpoint : @persistence.WalCheckpoint = {
+    generation: 1L,
+    lsn: 0L,
+    identities: [],
+    policy: None,
+    snapshot: { version: 3, sessions: [], retained: [] },
+  }
+  let store = @persistence.WalStore::bootstrap(lock, checkpoint).unwrap()
+  let writer = @persistence.WalWriter::new(store)
+  let broker = @router.BrokerState::new(
+    @router.BrokerConfig::new(4, 16, 4).unwrap(),
+  )
+  let coordinator = CommitCoordinator::new(
+    writer,
+    broker.resource_ledger(),
+    33554432L,
+    1048576,
+    1L,
+    0L,
+  ).unwrap()
+  assert_true(coordinator.request_policy_capability())
+  assert_true(coordinator.has_pending())
+  assert_eq(coordinator.submit(Noop, _ => []), Err(CommitBusy))
+  @async.with_task_group() <| group => {
+    let task = group.spawn(() => writer.run(() => ()))
+    let mut ready = false
+    for _ in 0..<1000 {
+      match coordinator.poll() {
+        CommitPolicyCapabilityReady => {
+          ready = true
+          break
+        }
+        CommitFencedResult(reason) =>
+          fail("unexpected policy upgrade fence: " + reason)
+        NoCommitCompletion => @async.sleep(1)
+        _ => fail("unexpected WAL completion")
+      }
+    }
+    assert_true(ready)
+    assert_false(coordinator.has_pending())
+    assert_true(coordinator.policy_required())
+    writer.close_requests()
+    task.wait()
+    writer.close_store()
+  }
+  if @fs.exists(path) {
+    @fs.rmdir(path, recursive=true)
+  }
+}
