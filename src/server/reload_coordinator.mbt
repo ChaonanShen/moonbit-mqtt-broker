@@ -194,6 +194,7 @@ async fn run_reload_signals(
     if shutdown_requested() || bus.closed {
       return
     }
+    ignore(service.operations.cleanup(@budget.monotonic_ms(), 16))
     if (startup.signal_pending)() {
       ignore(service.signal(generation.active().config_epoch()))
     }
