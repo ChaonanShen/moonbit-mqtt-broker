@@ -135,6 +135,7 @@ pub fn BrokerRuntime::prepare_strict_accepted_connect(
       self.will_tickets.set(connection_id, ticket)
     }
     self.active_by_client.set(client_id, connection_id)
+    self.retain_policy_epoch(self.policy_epoch)
     self.connections.set(connection_id, {
       id: connection_id,
       phase: Active(client_id),
@@ -143,6 +144,7 @@ pub fn BrokerRuntime::prepare_strict_accepted_connect(
       keep_alive_seconds,
       will: stored_will,
       principal: Some(principal),
+      policy_epoch: self.policy_epoch,
     })
     self.logger.log(
       @observability.LogRecord::new(

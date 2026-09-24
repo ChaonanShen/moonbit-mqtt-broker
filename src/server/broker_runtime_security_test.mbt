@@ -475,3 +475,30 @@ test "async authentication timeout cancels without activating or publishing Will
   assert_eq(rt.metrics.auth_deadline_rejections(), 1L)
   assert_eq(rt.metrics.auth_late_results(), 1L)
 }
+
+///|
+test "policy publication blocks a deleted user and retires old credential state" {
+  let rt = secure_runtime()
+  let id = cid(852L)
+  open(rt, id, 0L)
+  assert_eq(
+    receive(rt, id, authenticated_connect("deleted-user", b"correct horse"), 1L),
+    [SendPacket({ connection_id: id, packet: test_connack(Accepted) })],
+  )
+  assert_true(rt.connection_credential_current(id))
+  let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
+  let remaining = @security.PasswordDatabase::parse("sensor02:" + encoded).unwrap()
+  let new_policy = @security.SecurityPolicy::new(
+    allow_anonymous=false,
+    passwords=remaining,
+  )
+  assert_true(rt.publish_security_generation(new_policy, 1L))
+  assert_false(rt.connection_credential_current(id))
+  ignore(
+    rt.apply(
+      TransportClosed({ connection_id: id, reason: PeerEof, observed_at_ms: 2L }),
+    ),
+  )
+  assert_true(rt.publish_security_generation(security_fixture(), 2L))
+  rt.check_invariants().unwrap()
+}

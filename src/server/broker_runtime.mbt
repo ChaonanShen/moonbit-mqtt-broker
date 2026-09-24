@@ -21,8 +21,10 @@ pub struct BrokerRuntime {
   broker_state : @router.BrokerState
   connections : Map[ConnectionId, ConnectionMeta]
   active_by_client : Map[@session.ClientId, ConnectionId]
-  security : @security.SecurityPolicy
-  policy_epoch : Int64
+  mut security : @security.SecurityPolicy
+  mut policy_epoch : Int64
+  retired_security : Map[Int64, @security.SecurityPolicy]
+  policy_references : Map[Int64, Int]
   metrics : BrokerMetrics
   logger : @observability.Logger
 }
@@ -53,6 +55,8 @@ pub fn BrokerRuntime::new(
     active_by_client: Map([]),
     security,
     policy_epoch: 0L,
+    retired_security: Map([]),
+    policy_references: Map([]),
     metrics,
     logger,
   }
@@ -61,6 +65,96 @@ pub fn BrokerRuntime::new(
 ///|
 pub fn BrokerRuntime::connection_count(self : BrokerRuntime) -> Int {
   self.connections.length()
+}
+
+///|
+fn BrokerRuntime::retain_policy_epoch(
+  self : BrokerRuntime,
+  epoch : Int64,
+) -> Unit {
+  self.policy_references.set(
+    epoch,
+    self.policy_references.get(epoch).unwrap_or(0) + 1,
+  )
+}
+
+///|
+fn BrokerRuntime::release_policy_epoch(
+  self : BrokerRuntime,
+  epoch : Int64,
+) -> Unit {
+  let count = self.policy_references.get(epoch).unwrap_or(0)
+  if count < 1 {
+    abort("policy connection reference underflow")
+  }
+  if count == 1 {
+    self.policy_references.remove(epoch)
+    if epoch != self.policy_epoch {
+      self.retired_security.remove(epoch)
+    }
+  } else {
+    self.policy_references.set(epoch, count - 1)
+  }
+}
+
+///|
+/// The caller enters this non-awaiting method only at the serialized
+/// generation publication boundary after all required durable facts commit.
+pub fn BrokerRuntime::publish_security_generation(
+  self : BrokerRuntime,
+  next : @security.SecurityPolicy,
+  next_epoch : Int64,
+) -> Bool {
+  if self.policy_epoch == 9223372036854775807L ||
+    next_epoch != self.policy_epoch + 1L ||
+    next.same_security(self.security) ||
+    self.retired_security.length() >= 2 {
+    return false
+  }
+  if self.policy_references.get(self.policy_epoch).unwrap_or(0) > 0 {
+    self.retired_security.set(self.policy_epoch, self.security)
+  }
+  self.security = next
+  self.policy_epoch = next_epoch
+  true
+}
+
+///|
+/// A stale connection may continue only when its authenticated credential is
+/// unchanged. The check and epoch advancement take no await on the writer.
+pub fn BrokerRuntime::connection_credential_current(
+  self : BrokerRuntime,
+  connection_id : ConnectionId,
+) -> Bool {
+  let meta = match self.connections.get(connection_id) {
+    Some(value) => value
+    None => return false
+  }
+  match meta.phase {
+    Active(_) => ()
+    _ => return false
+  }
+  let principal = match meta.principal {
+    Some(value) => value
+    None => return false
+  }
+  if meta.policy_epoch == self.policy_epoch {
+    return self.security.allows_principal(principal)
+  }
+  let previous = match self.retired_security.get(meta.policy_epoch) {
+    Some(value) => value
+    None => return false
+  }
+  if !self.security.credential_unchanged(previous, principal) {
+    return false
+  }
+  self.release_policy_epoch(meta.policy_epoch)
+  self.retain_policy_epoch(self.policy_epoch)
+  self.connections.set(connection_id, {
+    ..meta,
+    policy_epoch: self.policy_epoch,
+  })
+  true
 }
 
 ///|
@@ -309,6 +403,9 @@ fn BrokerRuntime::terminate(
   self.will_tickets.remove(connection_id)
   defer release_optional(will_ticket)
   self.connections.remove(connection_id)
+  if meta.phase is Active(_) {
+    self.release_policy_epoch(meta.policy_epoch)
+  }
   let log_client_id = match meta.phase {
     Active(value) => value.value()
     AwaitConnect => ""
@@ -718,6 +815,7 @@ fn BrokerRuntime::finalize_connect(
   }
   will_installed = true
   self.active_by_client.set(client_id, connection_id)
+  self.retain_policy_epoch(self.policy_epoch)
   self.connections.set(connection_id, {
     id: connection_id,
     phase: Active(client_id),
@@ -726,6 +824,7 @@ fn BrokerRuntime::finalize_connect(
     keep_alive_seconds: packet.keep_alive,
     will: stored_will,
     principal: Some(principal),
+    policy_epoch: self.policy_epoch,
   })
   self.logger.log(
     @observability.LogRecord::new(
@@ -1404,6 +1503,7 @@ pub fn BrokerRuntime::apply(
         keep_alive_seconds: 0,
         will: None,
         principal: None,
+        policy_epoch: self.policy_epoch,
       })
       []
     }
@@ -1522,6 +1622,32 @@ pub fn BrokerRuntime::check_invariants(
           RuntimeInvariantViolation("live auth task connection phase mismatch"),
         )
       None => ()
+    }
+  }
+  let observed : Map[Int64, Int] = Map([])
+  for _, meta in self.connections {
+    if meta.phase is Active(_) {
+      if meta.policy_epoch > self.policy_epoch ||
+        (
+          meta.policy_epoch != self.policy_epoch &&
+          !self.retired_security.contains(meta.policy_epoch)
+        ) {
+        return Err(
+          RuntimeInvariantViolation("connection policy generation lost"),
+        )
+      }
+      observed.set(
+        meta.policy_epoch,
+        observed.get(meta.policy_epoch).unwrap_or(0) + 1,
+      )
+    }
+  }
+  if observed.length() != self.policy_references.length() {
+    return Err(RuntimeInvariantViolation("policy reference count mismatch"))
+  }
+  for epoch, count in observed {
+    if self.policy_references.get(epoch) != Some(count) {
+      return Err(RuntimeInvariantViolation("policy reference count mismatch"))
     }
   }
   Ok(())

@@ -43,8 +43,9 @@ test "stale policy epoch rejects ordinary authentication completion" {
     ),
     [StartAuthentication({ request_id: 1L })],
   )
-  let task = rt.auth_tasks.get(1L).unwrap()
-  rt.auth_tasks.set(1L, { ..task, policy_epoch: task.policy_epoch + 1L })
+  assert_true(
+    rt.publish_security_generation(@security.SecurityPolicy::permissive(), 1L),
+  )
   let actions = rt.apply(
     AuthenticationCompleted({
       request_id: 1L,
@@ -69,8 +70,9 @@ test "stale policy epoch rejects strict authentication completion" {
     1L,
   )
   assert_true(decision is StrictImmediate(_))
-  let task = rt.auth_tasks.get(1L).unwrap()
-  rt.auth_tasks.set(1L, { ..task, policy_epoch: task.policy_epoch + 1L })
+  assert_true(
+    rt.publish_security_generation(@security.SecurityPolicy::permissive(), 1L),
+  )
   let result = rt.prepare_strict_auth_completion(
     {
       request_id: 1L,
