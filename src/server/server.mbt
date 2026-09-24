@@ -186,6 +186,7 @@ pub async fn serve_listeners(
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
   logger? : @observability.Logger = @observability.Logger::silent(),
   management? : ManagementRuntime,
+  material_provider? : TlsMaterialProvider,
 ) -> Unit {
   if persistence is Some(_) && strict is Some(_) {
     raise ResourceStartupFailure("snapshot and strict cannot run together")
@@ -347,9 +348,24 @@ pub async fn serve_listeners(
                     return
                   }
                   defer bus.admission.release(connection_id)
+                  let material = match material_provider {
+                    Some(provider) => provider.acquire(entry.config.id)
+                    None => None
+                  }
+                  defer (if material is Some(lease) { lease.release() })
+                  if material_provider is Some(_) &&
+                    entry.config.tls is Some(_) &&
+                    material is None {
+                    connection.close()
+                    return
+                  }
                   let transport = match entry.config.tls {
                     None => ConnectionTransport::plain(connection)
-                    Some(tls_config) =>
+                    Some(original_config) => {
+                      let tls_config = match material {
+                        Some(lease) => lease.config
+                        None => original_config
+                      }
                       ConnectionTransport::secure(connection, tls_config) catch {
                         error => {
                           metrics.record_tls_handshake_failure()
@@ -369,6 +385,7 @@ pub async fn serve_listeners(
                           return
                         }
                       }
+                    }
                   }
                   let transport = match entry.config.websocket {
                     None => transport
@@ -677,14 +694,12 @@ pub async fn run_listeners(
       )
     }
   }
-  let materials : Array[TlsMaterialLease] = []
+  let materials = TlsMaterialProvider::new()
   let material_tickets : Array[@budget.Ticket] = []
   defer (for ticket in material_tickets {
     ticket.release().unwrap()
   })
-  defer (for material in materials {
-    material.release()
-  })
+  defer materials.close()
   let prepared : Array[ListenerConfig] = []
   for entry in listeners {
     match entry.tls {
@@ -705,7 +720,7 @@ pub async fn run_listeners(
         ticket.commit().unwrap()
         material_tickets.push(ticket)
         let lease = TlsMaterialLease::capture(tls)
-        materials.push(lease)
+        materials.add_initial(entry.id, lease)
         validate_tls_config(lease.config) catch {
           _ =>
             raise ResourceStartupFailure(
@@ -824,6 +839,7 @@ pub async fn run_listeners(
       security~,
       logger~,
       management?=management_runtime,
+      material_provider=materials,
     )
   }
 }
