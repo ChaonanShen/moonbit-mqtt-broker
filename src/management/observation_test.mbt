@@ -447,3 +447,21 @@ test "strict fenced readiness ignores snapshot health override" {
   assert_true(body.contains("\"committed_lsn\":\"10\""))
   assert_true(body.contains("\"applied_lsn\":\"9\""))
 }
+
+///|
+test "status advertises reload only when service owns a generation" {
+  let disabled = @utf8.decode(
+    encode_status(sample_observation(), 1500L, 5000L, 5000L),
+  )
+  assert_true(disabled.contains("\"reload\":false"))
+  let enabled = @utf8.decode(
+    encode_status(
+      sample_observation(),
+      1500L,
+      5000L,
+      5000L,
+      reload_enabled=true,
+    ),
+  )
+  assert_true(enabled.contains("\"reload\":true"))
+}
