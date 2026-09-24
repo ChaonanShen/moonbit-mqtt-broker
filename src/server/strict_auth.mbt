@@ -118,6 +118,12 @@ pub fn BrokerRuntime::prepare_strict_auth_completion(
       return StrictImmediate([])
     }
   }
+  if task.policy_epoch != self.policy_epoch {
+    self.metrics.record_auth_late_result()
+    return StrictImmediate(
+      self.reject_connect(task.connection_id, ServerUnavailable),
+    )
+  }
   if event.completed_at_ms >= task.deadline_ms {
     self.metrics.record_auth_deadline_rejection()
     return StrictClose(task.connection_id, ConnectTimeout)

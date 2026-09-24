@@ -48,6 +48,7 @@ options(
     "websocket_codec_test.mbt": [ "native" ],
     "websocket_network_test.mbt": [ "native" ],
     "tls_material_native_wbtest.mbt": [ "native" ],
+    "policy_epoch_wbtest.mbt": [ "native" ],
     "websocket_gate_wbtest.mbt": [ "native" ],
     "connection_server_test.mbt": [ "native" ],
     "multi_listener_test.mbt": [ "native" ],
