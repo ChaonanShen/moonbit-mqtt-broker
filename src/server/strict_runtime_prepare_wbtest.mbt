@@ -229,6 +229,22 @@ test "strict CONNECT activation and CONNACK stay pending until commit" {
     }),
   )
   assert_eq(rt.broker_state().session_count(), 1)
+  assert_eq(rt.policy_reference_count(0L), 1)
+  assert_eq(rt.check_invariants(), Ok(()))
+  let client_id = @session.ClientId::new("strict-connect").unwrap()
+  let disconnect = rt.prepare_strict_active_packet(
+    { connection_id, packet: Disconnect, received_at_ms: 3L },
+    Map([(client_id, 1L)]),
+  )
+  let (plan, after) = match disconnect {
+    StrictPrepared(plan, after) => (plan, after)
+    _ => fail("strict disconnect must prepare")
+  }
+  rt.broker_state().begin_action_scope()
+  ignore(after(plan.commit().unwrap()))
+  rt.broker_state().end_action_scope()
+  assert_eq(rt.policy_reference_count(0L), 0)
+  assert_false(rt.has_connection(connection_id))
   assert_eq(rt.check_invariants(), Ok(()))
 }
 

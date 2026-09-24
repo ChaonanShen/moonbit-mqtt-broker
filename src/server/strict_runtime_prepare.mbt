@@ -333,6 +333,10 @@ pub fn BrokerRuntime::prepare_strict_active_packet(
       }
       StrictPrepared(Lifecycle(plan), _ => {
         self.active_by_client.remove(client_id)
+        if self.connections.get(event.connection_id) is Some(active) &&
+          active.phase is Active(_) {
+          self.release_policy_epoch(active.policy_epoch)
+        }
         self.connections.remove(event.connection_id)
         let will_ticket = self.will_tickets.get(event.connection_id)
         self.will_tickets.remove(event.connection_id)
