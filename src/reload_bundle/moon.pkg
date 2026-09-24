@@ -15,6 +15,8 @@ options(
   targets: {
     "bundle.mbt": [ "native" ],
     "effective.mbt": [ "native" ],
+    "generation_identity.mbt": [ "native" ],
+    "generation_identity_wbtest.mbt": [ "native" ],
     "security.mbt": [ "native" ],
     "bundle_test.mbt": [ "native" ],
     "security_test.mbt": [ "native" ],
