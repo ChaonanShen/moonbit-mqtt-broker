@@ -315,3 +315,91 @@ async test "streaming WAL recovery applies multiple segments without retaining h
     recovered.close()
   })
 }
+
+///|
+async test "policy WAL transitions survive buffered and streaming recovery" {
+  with_wal_store_dir("policy-replay", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let first = SnapshotStore::open(config).unwrap()
+    let wal = WalStore::bootstrap(first, wal_store_empty_checkpoint()).unwrap()
+    let digest : Array[Byte] = []
+    for _ in 0..<32 {
+      digest.push(7)
+    }
+    let fingerprint = Bytes::from_array(digest)
+    let activated = encode_wal_policy_record({
+      transition: PolicyActivated,
+      sequence: 1L,
+      fingerprint,
+    }).unwrap()
+    let reconciled = encode_wal_policy_record({
+      transition: PolicyReconciled,
+      sequence: 1L,
+      fingerprint,
+    }).unwrap()
+    assert_eq(
+      wal.append_batch({
+        previous_lsn: 0L,
+        transactions: [
+          { lsn: 1L, delta: activated },
+          { lsn: 2L, delta: reconciled },
+        ],
+      }),
+      Ok(2L),
+    )
+    wal.close()
+    let limits = wal_store_limits()
+    let second = SnapshotStore::open(config).unwrap()
+    let (recovered, replay) = WalStore::recover(second, limits).unwrap()
+    let buffered = replay.restore_state(limits.broker_config(), limits).unwrap()
+    assert_eq(
+      buffered.policy(),
+      Some({ sequence: 1L, fingerprint, reconcile_pending: false }),
+    )
+    recovered.close()
+    let third = SnapshotStore::open(config).unwrap()
+    let (streamed_store, streamed) = WalStore::recover_state(
+      third,
+      limits.broker_config(),
+      limits,
+    ).unwrap()
+    assert_eq(streamed.policy(), buffered.policy())
+    streamed_store.close()
+  })
+}
+
+///|
+async test "policy WAL replay rejects reconciliation without activation" {
+  with_wal_store_dir("policy-order", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let first = SnapshotStore::open(config).unwrap()
+    let wal = WalStore::bootstrap(first, wal_store_empty_checkpoint()).unwrap()
+    let digest : Array[Byte] = []
+    for _ in 0..<32 {
+      digest.push(3)
+    }
+    let invalid = encode_wal_policy_record({
+      transition: PolicyReconciled,
+      sequence: 1L,
+      fingerprint: Bytes::from_array(digest),
+    }).unwrap()
+    assert_eq(
+      wal.append_batch({
+        previous_lsn: 0L,
+        transactions: [{ lsn: 1L, delta: invalid }],
+      }),
+      Ok(1L),
+    )
+    wal.close()
+    let limits = wal_store_limits()
+    let second = SnapshotStore::open(config).unwrap()
+    let (recovered, replay) = WalStore::recover(second, limits).unwrap()
+    assert_true(replay.restore_state(limits.broker_config(), limits) is Err(_))
+    recovered.close()
+    let third = SnapshotStore::open(config).unwrap()
+    assert_true(
+      WalStore::recover_state(third, limits.broker_config(), limits) is Err(_),
+    )
+    third.close()
+  })
+}
