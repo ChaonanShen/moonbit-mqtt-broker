@@ -54,13 +54,18 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 | 生命周期 | PING、Keep Alive、QoS 0/1/2 Will、SIGTERM/SIGINT 优雅退出 |
 | 持久化 | 可选校验快照或显式 strict WAL 提交后确认与恢复 |
 | 安全 | 可选 Argon2id 密码、仅允许式 ACL、Principal 所有权会话 |
-| 运维 | TOML 配置、字节预算与连接/认证/发布限流、`$SYS/broker/#` 指标、文本/JSON 日志 |
+| 运维 | TOML 配置、可选 SIGHUP/config_admin 热更新、字节预算与连接/认证/发布限流、`$SYS/broker/#` 指标、文本/JSON 日志 |
 
 MQTT 5、共享订阅、Bridge、插件、集群与外部数据库仍不在本版范围内。
 `--data-dir` 默认按最近成功快照恢复；显式 `--persistence-mode strict`
 对约定的持久状态增加本机 WAL 提交屏障，不等于复制或端到端投递保证。
 详细边界见[兼容性矩阵](docs/compatibility.zh_CN.md)和
 [持久化说明](docs/persistence.zh_CN.md)。
+
+可选热更新可在不重启 MQTT 监听器的情况下替换已核验的配置 bundle，
+轮换密码、ACL 和既有 TLS/WSS 材料。详见
+[热更新配置与部署约定](docs/configuration.zh_CN.md#在线配置热更新)。
+此功能默认关闭。
 
 ## 配置
 
