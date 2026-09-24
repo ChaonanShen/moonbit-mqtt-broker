@@ -465,3 +465,24 @@ test "status advertises reload only when service owns a generation" {
   )
   assert_true(enabled.contains("\"reload\":true"))
 }
+
+///|
+test "management snapshot age changes at reload publication" {
+  let config = ManagementConfig::new(
+    enabled=true,
+    token_file="/tmp/tokens",
+    snapshot_interval_ms=100,
+    snapshot_max_age_ms=500,
+  ).unwrap()
+  let ledger = @budget.Ledger::new(config.required_bytes() + 1024L, 0L).unwrap()
+  let budget = ManagementBudget::new(config, ledger).unwrap()
+  let cache = ObservationCache::new(budget).unwrap()
+  assert_true(cache.publish(sample_observation()))
+  assert_true(cache.status_body(1400L) is Ok(_))
+  assert_false(cache.update_reload_max_age(200, 300))
+  assert_true(cache.status_body(1400L) is Ok(_))
+  assert_true(cache.update_reload_max_age(100, 300))
+  assert_true(cache.status_body(1400L) is Err(Stale))
+  cache.close()
+  assert_true(budget.close())
+}

@@ -102,6 +102,15 @@ pub async fn prepare_reload_candidate(
   @async.with_timeout(timeout_ms, () => {
     let bundle = @bundle.capture_bundle(manifest_path, max_source_bytes~)
     let effective = bundle.evaluate(config_path, cli_args)
+    let hot = effective.hot()
+    if hot.management_snapshot_interval_ms < 100 ||
+      hot.management_snapshot_interval_ms > 10000 ||
+      hot.management_snapshot_max_age_ms < 300 ||
+      hot.management_snapshot_max_age_ms > 60000 ||
+      hot.management_snapshot_max_age_ms <
+      3 * hot.management_snapshot_interval_ms {
+      raise ResourceStartupFailure("invalid reload management snapshot timing")
+    }
     if !effective.restart_compatible(previous_effective) {
       raise ResourceStartupFailure("reload requires restart")
     }
