@@ -57,6 +57,7 @@ options(
     "tls_material_provider_wbtest.mbt": [ "native" ],
     "policy_epoch_wbtest.mbt": [ "native" ],
     "policy_runtime_reconcile_test.mbt": [ "native" ],
+    "policy_strict_reconcile_wbtest.mbt": [ "native" ],
     "reload_queue_test.mbt": [ "native" ],
     "websocket_gate_wbtest.mbt": [ "native" ],
     "connection_server_test.mbt": [ "native" ],
