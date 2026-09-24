@@ -143,6 +143,7 @@ fn RouterDriver::drain_strict_queues(self : RouterDriver) -> Unit {
   }
   while !coordinator.has_submitted() &&
         !self.strict_fenced &&
+        !self.reload_barrier &&
         (!self.strict_checkpoint_inflight || coordinator.checkpoint_active()) &&
         self.strict_checkpoint_cursor is None {
     let queued = match self.strict_held.pop_front() {
@@ -155,6 +156,7 @@ fn RouterDriver::drain_strict_queues(self : RouterDriver) -> Unit {
   }
   while !coordinator.has_submitted() &&
         !self.strict_fenced &&
+        !self.reload_barrier &&
         (!self.strict_checkpoint_inflight || coordinator.checkpoint_active()) &&
         self.strict_checkpoint_cursor is None {
     match self.strict_management_held.pop_front() {
@@ -265,6 +267,7 @@ fn RouterDriver::handle_strict_runtime_event(
     false
   }
   if coordinator.has_submitted() ||
+    self.reload_barrier ||
     collecting_blocks ||
     self.strict_checkpoint_cursor is Some(_) ||
     self.strict_checkpoint_inflight {
@@ -466,6 +469,7 @@ fn RouterDriver::poll_strict_checkpoint(self : RouterDriver) -> Unit {
   }
   if self.strict_fenced ||
     coordinator.is_fenced() ||
+    self.reload_barrier ||
     self.strict_checkpoint_inflight {
     return
   }
