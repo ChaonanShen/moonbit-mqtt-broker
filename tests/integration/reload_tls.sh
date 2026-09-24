@@ -95,7 +95,7 @@ done
 grep -q broker_listening "$work/broker.log"
 node tests/integration/reload_tls.mjs \
   "$tls_port" "$wss_port" "$work/config.toml" "$work/manifest.toml" \
-  "$work/cert.pem" "$work/key.pem" "$work/runtime" "$broker_pid"
+  "$work/cert.pem" "$work/key.pem" "$work/runtime" "$work/broker.log" "$broker_pid" "$BROKER"
 grep -q reload_completed "$work/broker.log"
 kill -TERM "$broker_pid"
 wait "$broker_pid"

@@ -1,12 +1,12 @@
 import fs from 'node:fs'
 import crypto from 'node:crypto'
 import tls from 'node:tls'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import mqtt from 'mqtt'
 
-const [tlsPort, wssPort, configPath, manifestPath, certPath, keyPath, root, pid] =
+const [tlsPort, wssPort, configPath, manifestPath, certPath, keyPath, root, logPath, pid, brokerPath] =
   process.argv.slice(2)
-if (!pid) throw new Error('usage: node reload_tls.mjs TLS_PORT WSS_PORT CONFIG MANIFEST CERT KEY ROOT PID')
+if (!pid || !logPath || !brokerPath) throw new Error('usage: node reload_tls.mjs TLS_PORT WSS_PORT CONFIG MANIFEST CERT KEY ROOT LOG PID BROKER')
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const connect = (url, ca, clientId) => new Promise((resolve, reject) => {
   const client = mqtt.connect(url, {
@@ -45,6 +45,9 @@ const manifest = () => {
     ['mqtt_cert', 'edge', certPath], ['mqtt_key', 'edge', keyPath],
     ['mqtt_cert', 'browser', certPath], ['mqtt_key', 'browser', keyPath]
   ]
+  if (fs.readFileSync(configPath, 'utf8').includes('password_file =')) {
+    entries.push(['passwords', null, passwordPath])
+  }
   for (const [role, id, path] of entries) {
     text += '[[materials]]\nrole = "' + role + '"\n'
     if (id) text += 'listener_id = "' + id + '"\n'
@@ -52,6 +55,8 @@ const manifest = () => {
   }
   fs.writeFileSync(manifestPath, text, { mode: 0o600 })
 }
+const passwordPath = certPath + '.passwords'
+const originalConfig = fs.readFileSync(configPath, 'utf8')
 const originalCA = fs.readFileSync(certPath)
 const originalFinger = await fingerprint(originalCA)
 const old = await connect('mqtts://localhost:' + tlsPort, originalCA, 'reload-old-tls')
@@ -68,6 +73,38 @@ execFileSync('openssl', [
   '-keyout', nextKey, '-out', nextCert
 ], { stdio: 'ignore' })
 fs.chmodSync(nextKey, 0o600)
+const hash = execFileSync('argon2', [
+  'reload-salt-0001', '-id', '-e', '-t', '2', '-m', '12', '-p', '1'
+], { input: 'secret' }).toString().trim()
+fs.writeFileSync(passwordPath, 'alice:' + hash + '\n', { mode: 0o600 })
+fs.writeFileSync(configPath, originalConfig +
+  '[security]\nallow_anonymous = false\npassword_file = "' +
+  passwordPath + '"\n[observability]\nlog_level = "debug"\n')
+fs.writeFileSync(keyPath, fs.readFileSync(nextKey), { mode: 0o600 })
+manifest()
+const invalid = spawnSync(brokerPath, ['--check-config', '--config', configPath], {
+  encoding: 'utf8'
+})
+if (invalid.status === 0 ||
+    !invalid.stdout.includes('reload TLS material validation failed')) {
+  throw new Error('bad TLS fixture failed for the wrong reason: ' +
+    invalid.status + ' ' + invalid.stdout.slice(-200))
+}
+process.kill(Number(pid), 'SIGHUP')
+for (let attempt = 0; attempt < 800; attempt++) {
+  if (fs.readFileSync(logPath, 'utf8').includes('event=reload_failed')) break
+  if (attempt === 799) throw new Error('bad TLS candidate did not fail')
+  await sleep(10)
+}
+if (await fingerprint(originalCA) !== originalFinger) {
+  throw new Error('failed candidate replaced TLS certificate')
+}
+const unchanged = await connect(
+  'mqtts://localhost:' + tlsPort, originalCA, 'reload-failed-unchanged-anon'
+)
+await end(unchanged)
+fs.rmSync(passwordPath)
+fs.writeFileSync(configPath, originalConfig)
 fs.renameSync(nextKey, keyPath)
 fs.renameSync(nextCert, certPath)
 manifest()
@@ -108,5 +145,4 @@ for (let attempt = 0; attempt < 500; attempt++) {
   if (attempt === 499) throw new Error('old TLS lease did not retire')
   await sleep(10)
 }
-console.log('TLS and WSS captured material rotation passed')
-
+console.log('atomic TLS failure and TLS/WSS captured material rotation passed')
