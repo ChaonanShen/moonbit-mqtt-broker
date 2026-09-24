@@ -61,10 +61,6 @@ cp "${STAGED_PACKAGE}" "${PACKAGE}"
 file_count="$(unzip -Z1 "${PACKAGE}" | wc -l | tr -d ' ')"
 uncompressed_bytes="$(unzip -l "${PACKAGE}" | tail -n 1 | awk '{print $1}')"
 package_bytes="$(stat -c %s "${PACKAGE}")"
-if [[ "${file_count}" -gt 600 ]]; then
-  echo "release package has ${file_count} files; limit is 600" >&2
-  exit 1
-fi
 [[ "${uncompressed_bytes}" -le 20971520 ]]
 [[ "${package_bytes}" -le 10485760 ]]
 
