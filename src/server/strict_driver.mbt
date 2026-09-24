@@ -470,6 +470,7 @@ fn RouterDriver::poll_strict_checkpoint(self : RouterDriver) -> Unit {
   if self.strict_fenced ||
     coordinator.is_fenced() ||
     self.reload_barrier ||
+    self.reload_reconciler is Some(_) ||
     self.strict_checkpoint_inflight {
     return
   }

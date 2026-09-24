@@ -53,6 +53,8 @@ options(
     "reload_activation.mbt": [ "native" ],
     "reload_prepare_wbtest.mbt": [ "native" ],
     "reload_auth_reservation_wbtest.mbt": [ "native" ],
+    "reload_reconcile_driver_wbtest.mbt": [ "native" ],
+    "reload_reconcile_strict_driver_wbtest.mbt": [ "native" ],
     "reload_tls_prepare_wbtest.mbt": [ "native" ],
     "websocket_native_test.mbt": [ "native" ],
     "websocket_handshake_test.mbt": [ "native" ],
