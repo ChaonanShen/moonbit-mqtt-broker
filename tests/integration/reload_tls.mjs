@@ -8,12 +8,12 @@ const [tlsPort, wssPort, configPath, manifestPath, certPath, keyPath, root, logP
   process.argv.slice(2)
 if (!pid || !logPath || !brokerPath) throw new Error('usage: node reload_tls.mjs TLS_PORT WSS_PORT CONFIG MANIFEST CERT KEY ROOT LOG PID BROKER')
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
-const connect = (url, ca, clientId) => new Promise((resolve, reject) => {
+const connect = (url, ca, clientId, username, password) => new Promise((resolve, reject) => {
   const client = mqtt.connect(url, {
-    clientId, clean: true, protocolVersion: 4,
+    clientId, username, password, clean: true, protocolVersion: 4,
     ca, rejectUnauthorized: true, reconnectPeriod: 0, connectTimeout: 3000
   })
-  client.once('error', reject)
+  client.once('error', error => reject(new Error(clientId + ': ' + error.message)))
   client.once('connect', () => {
     client.off('error', reject)
     resolve(client)
@@ -45,8 +45,12 @@ const manifest = () => {
     ['mqtt_cert', 'edge', certPath], ['mqtt_key', 'edge', keyPath],
     ['mqtt_cert', 'browser', certPath], ['mqtt_key', 'browser', keyPath]
   ]
-  if (fs.readFileSync(configPath, 'utf8').includes('password_file =')) {
+  const configText = fs.readFileSync(configPath, 'utf8')
+  if (configText.includes('password_file =')) {
     entries.push(['passwords', null, passwordPath])
+  }
+  if (configText.includes('acl_file =')) {
+    entries.push(['acl', null, aclPath])
   }
   for (const [role, id, path] of entries) {
     text += '[[materials]]\nrole = "' + role + '"\n'
@@ -56,6 +60,7 @@ const manifest = () => {
   fs.writeFileSync(manifestPath, text, { mode: 0o600 })
 }
 const passwordPath = certPath + '.passwords'
+const aclPath = certPath + '.acl'
 const originalConfig = fs.readFileSync(configPath, 'utf8')
 const originalCA = fs.readFileSync(certPath)
 const originalFinger = await fingerprint(originalCA)
@@ -103,8 +108,13 @@ const unchanged = await connect(
   'mqtts://localhost:' + tlsPort, originalCA, 'reload-failed-unchanged-anon'
 )
 await end(unchanged)
-fs.rmSync(passwordPath)
-fs.writeFileSync(configPath, originalConfig)
+fs.writeFileSync(aclPath,
+  'anonymous\ntopic read safe/#\ntopic write safe/#\n' +
+  'user alice\ntopic read safe/#\ntopic write safe/#\n')
+fs.writeFileSync(configPath, originalConfig +
+  '[security]\nallow_anonymous = true\npassword_file = "' +
+  passwordPath + '"\nacl_file = "' + aclPath +
+  '"\n[observability]\nlog_level = "debug"\n')
 fs.renameSync(nextKey, keyPath)
 fs.renameSync(nextCert, certPath)
 manifest()
@@ -126,6 +136,11 @@ const nextFinger = await fingerprint(nextCA)
 const nextTls = await connect(
   'mqtts://localhost:' + tlsPort, nextCA, 'reload-new-tls'
 )
+const alice = await connect(
+  'mqtts://localhost:' + tlsPort, nextCA, 'reload-new-password',
+  'alice', 'secret'
+)
+await end(alice)
 const nextWss = await connect(
   'wss://localhost:' + wssPort + '/mqtt', nextCA, 'reload-new-wss'
 )
@@ -187,4 +202,4 @@ for (let attempt = 0; attempt < 500; attempt++) {
   if (attempt === 499) throw new Error('old TLS lease did not retire')
   await sleep(10)
 }
-console.log('atomic TLS failure and two TLS/WSS rotations with old leases passed')
+console.log('atomic mixed hot reload and two TLS/WSS rotations with old leases passed')
