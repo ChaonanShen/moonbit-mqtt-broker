@@ -2044,18 +2044,20 @@ async fn run_main() -> Unit {
               )
             }
           }
-          let boot = @server.bootstrap_strict_policy(
-            wal_store,
-            initial_state,
-            identities,
-            security,
-            fingerprint,
-            reload_max_reconcile_items_per_turn,
-            reload_max_reconcile_bytes_per_turn.to_int64(),
-          ) catch {
-            error => {
+          let boot = match
+            @server.bootstrap_strict_policy_checked(
+              wal_store,
+              initial_state,
+              identities,
+              security,
+              fingerprint,
+              reload_max_reconcile_items_per_turn,
+              reload_max_reconcile_bytes_per_turn.to_int64(),
+            ) {
+            Ok(value) => value
+            Err(category) => {
               wal_store.close()
-              raise CliError("strict policy startup: " + error.to_string())
+              raise CliError("strict policy startup: " + category)
             }
           }
           (boot.identities, boot.committed_lsn)
