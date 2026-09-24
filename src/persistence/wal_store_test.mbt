@@ -19,6 +19,7 @@ fn wal_store_empty_checkpoint() -> WalCheckpoint {
     generation: 1L,
     lsn: 0L,
     identities: [],
+    policy: None,
     snapshot: { version: 3, sessions: [], retained: [] },
   }
 }

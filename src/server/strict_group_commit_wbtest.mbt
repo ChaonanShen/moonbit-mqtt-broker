@@ -49,6 +49,7 @@ async test "strict group commit fsyncs two disjoint persistent publications as o
           2L
         },
       }),
+      policy: None,
       snapshot,
     }).unwrap(),
   )

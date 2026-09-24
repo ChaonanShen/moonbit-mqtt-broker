@@ -16,6 +16,7 @@ async test "strict driver holds CONNECT state until its WAL completion" {
       generation: 1L,
       lsn: 0L,
       identities: [],
+      policy: None,
       snapshot: { version: 3, sessions: [], retained: [] },
     }).unwrap(),
   )

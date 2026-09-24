@@ -37,6 +37,7 @@ async test "strict offline delete succeeds only with committed LSN" {
     generation: 1L,
     lsn: 0L,
     identities: [{ client_id: "delete-me", generation: 1L }],
+    policy: None,
     snapshot: state.export_snapshot(),
   }
   let lock = @persistence.SnapshotStore::open(
@@ -179,6 +180,7 @@ async test "strict kick waits for socket close auth reap and durable detach" {
       generation: 1L,
       lsn: 0L,
       identities: [{ client_id: "kick-me", generation: 1L }],
+      policy: None,
       snapshot: state.export_snapshot(),
     }).unwrap(),
   )
