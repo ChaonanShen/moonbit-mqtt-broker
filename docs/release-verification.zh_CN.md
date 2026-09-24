@@ -233,7 +233,7 @@ Ubuntu 基础镜像可能自带 OpenSSL，而且基础工具需要同一软件�
 | `runtime/broker` | 从包中源码构建的 Release 程序，用于哈希核验 | 是 |
 | `runtime/server.key`、证书、测试密码文件 | 本次运行专用的临时测试材料 | 否 |
 
-CI 上传的 `distribution-evidence` artifact 保留 30 天，包含 `package.zip`、`artifacts.sha256` 和 `runtime/broker`。在 artifact 对应目录执行 `sha256sum --check artifacts.sha256` 核对两份文件。用户后续要求核验时，agent 须在保留期内把所需证据归档到远端 `.local/ci-evidence/<SHA>/<run-id>/`，并记录 run/job URL。
+CI 先将明确允许的结果文件整理到 runner 可读的 `test-results/distribution-upload/`；私有测试数据目录、WAL 文件和密钥不进入上传目录。随后上传的 `distribution-evidence` artifact 保留 30 天，包含 `package.zip`、`artifacts.sha256` 和 `runtime/broker`。在 artifact 对应目录执行 `sha256sum --check artifacts.sha256` 核对两份文件。用户后续要求核验时，agent 须在保留期内把所需证据归档到远端 `.local/ci-evidence/<SHA>/<run-id>/`，并记录 run/job URL。
 
 原始结果按项目约定留在远端，不把整个结果目录同步到 Windows。保存发布记录时引用结果目录、提交号、候选包哈希和 CI run；需要长期保留时，应在 CI 过期前留存允许保存的证据。测试私钥也不应混入源码、正式包或交付给评审的材料；测试数据不能替代生产凭据。
 

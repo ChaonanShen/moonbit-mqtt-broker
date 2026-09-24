@@ -29,20 +29,16 @@ jobs:
             export RELEASE_SOAK=1
           fi
           scripts/verify-distribution-docker.sh
+      - name: Stage safe distribution evidence
+        if: always()
+        run: |
+          sudo python3 -B tools/stage_distribution_evidence.py \
+            test-results/distribution test-results/distribution-upload
       - name: Upload distribution evidence and tested package
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: distribution-evidence
-          path: |
-            test-results/distribution/**/*.log
-            test-results/distribution/**/*.txt
-            test-results/distribution/**/*.exit-code
-            test-results/distribution/**/*.json
-            test-results/distribution/**/*.tsv
-            test-results/distribution/**/runtime-reference.json
-            test-results/distribution/**/artifacts.sha256
-            test-results/distribution/**/package.zip
-            test-results/distribution/**/runtime/broker
+          path: test-results/distribution-upload/**
           if-no-files-found: warn
           retention-days: 30
