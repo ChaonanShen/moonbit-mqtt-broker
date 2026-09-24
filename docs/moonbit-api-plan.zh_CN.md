@@ -202,4 +202,4 @@ M2–M4 是主要风险所在，宜分成连贯候选批次交付。不能只有
 - [插件契约](https://github.com/eclipse-mosquitto/mosquitto/blob/6aaba32614eb1160ddbfeafd616f9f67e7914a41/include/mosquitto/broker_plugin.h)
 - [客户端 API](https://github.com/eclipse-mosquitto/mosquitto/blob/6aaba32614eb1160ddbfeafd616f9f67e7914a41/include/mosquitto/libmosquitto.h)
 - [项目架构](architecture.zh_CN.md)、[兼容性](compatibility.zh_CN.md)、[管理](management.zh_CN.md)、[持久化](persistence.zh_CN.md)
-- [实施与 CI 交接](p1-ci-handoff.local.md)（远端本地文档）
+- 实施与 CI 交接：远端本地文档 `p1-ci-handoff.local.md`（不随发布包分发）。
