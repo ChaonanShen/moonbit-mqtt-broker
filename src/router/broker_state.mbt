@@ -7,6 +7,8 @@ pub struct BrokerState {
   config : BrokerConfig
   priv mut security_policy : @security.SecurityPolicy?
   priv sessions : Map[@session.ClientId, @session.ClientSession]
+  priv mut policy_slots : @slot_index.SlotIndex?
+  priv mut policy_index_ticket : @budget.Ticket?
   priv mut admin_sessions : AdminSessionIndex?
   priv subscriptions : SubscriptionIndex
   priv retained : RetainedStore
@@ -65,6 +67,8 @@ pub fn BrokerState::new(
     promotion_cursor: 0,
     resources: RouterResources::new(config.resources, ledger?),
     sessions: Map([]),
+    policy_slots: None,
+    policy_index_ticket: None,
     admin_sessions: None,
     subscriptions: SubscriptionIndex::new(),
     retained: RetainedStore::new(),
@@ -98,6 +102,81 @@ pub fn BrokerState::set_security_policy(
 ///|
 pub fn BrokerState::session_count(self : BrokerState) -> Int {
   self.sessions.length()
+}
+
+///|
+/// This source-of-truth index is allocated only for reload-enabled service.
+/// Startup restoration may scan the initial sessions before listeners bind.
+pub fn BrokerState::enable_policy_index(
+  self : BrokerState,
+) -> Result[Unit, RouterError] {
+  if self.policy_slots is Some(_) {
+    return Ok(())
+  }
+  let capacity = self.config.max_sessions()
+  let cost = match @budget.checked_mul(capacity.to_int64(), 96L) {
+    Ok(value) => @budget.checked_add(value, 4096L).unwrap_or(-1L)
+    Err(_) => -1L
+  }
+  if cost < 0L {
+    return Err(InvalidConfiguration("policy index capacity overflow"))
+  }
+  let pool = self.resources.ledger
+    .pool(Infrastructure, self.config.resources.get("max_managed_bytes_total"))
+    .unwrap()
+  let ticket = match pool.reserve(cost) {
+    Ok(value) => value
+    Err(error) => return Err(ByteResourceLimit(error))
+  }
+  let slots = @slot_index.SlotIndex::new(capacity)
+  for id, _ in self.sessions {
+    match slots.put(id.value()) {
+      @slot_index.Added(_) => ()
+      _ => {
+        ticket.release().unwrap()
+        return Err(InvariantViolation("policy index startup identity"))
+      }
+    }
+  }
+  ticket.commit().unwrap()
+  self.policy_index_ticket = Some(ticket)
+  self.policy_slots = Some(slots)
+  Ok(())
+}
+
+///|
+fn BrokerState::track_policy_session(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Unit {
+  if self.policy_slots is Some(slots) {
+    match slots.put(client_id.value()) {
+      @slot_index.Added(_) | @slot_index.Existing(_) => ()
+      @slot_index.Full => abort("core session slot capacity exceeded")
+    }
+  }
+}
+
+///|
+fn BrokerState::untrack_policy_session(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Unit {
+  if self.policy_slots is Some(slots) && !slots.remove(client_id.value()) {
+    abort("core session slot identity missing")
+  }
+}
+
+///|
+/// A page scans at most scan_limit physical slots, including empty slots.
+pub fn BrokerState::policy_session_page(
+  self : BrokerState,
+  start : Int,
+  scan_limit : Int,
+) -> @slot_index.SlotPage? {
+  self.policy_slots.map(slots => {
+    slots.page(start, scan_limit, scan_limit, _ => true)
+  })
 }
 
 ///|
@@ -255,6 +334,10 @@ fn BrokerState::create_session(
   if self.sessions.length() >= self.config.max_sessions() {
     return Err(SessionLimitReached(self.config.max_sessions()))
   }
+  if self.security_policy is Some(policy) &&
+    !policy.allows_principal(request.owner) {
+    return Err(InvalidSessionState(request.client_id))
+  }
   match
     self.resources.add_owner(request.client_id, {
       inflight: 0L,
@@ -269,6 +352,7 @@ fn BrokerState::create_session(
     Err(e) => return Err(e)
     Ok(_) => ()
   }
+  self.track_policy_session(request.client_id)
   self.sessions.set(
     request.client_id,
     @session.ClientSession::new(
@@ -304,6 +388,7 @@ fn BrokerState::remove_session(
   }
   ignore(self.subscriptions.remove_all(client_id))
   self.sessions.remove(client_id)
+  self.untrack_policy_session(client_id)
   if self.admin_sessions is Some(index) {
     index.remove(client_id)
   }
@@ -1088,6 +1173,19 @@ pub fn BrokerState::check_invariants(
   for id, owner in self.resources.owners {
     if owner.usage != self.resource_usage(id) {
       return Err(InvariantViolation("session byte ledger mismatch"))
+    }
+  }
+  if (self.policy_slots is Some(_)) != (self.policy_index_ticket is Some(_)) {
+    return Err(InvariantViolation("core policy index ticket mismatch"))
+  }
+  if self.policy_slots is Some(slots) {
+    if slots.live_count() != self.sessions.length() || !slots.check_invariants() {
+      return Err(InvariantViolation("core policy session index mismatch"))
+    }
+    for id, _ in self.sessions {
+      if slots.get(id.value()) is None {
+        return Err(InvariantViolation("core policy session identity missing"))
+      }
     }
   }
   Ok(())
