@@ -93,3 +93,56 @@ test "durable session generation prevents stale delete after replacement" {
   assert_true(state.apply(stale) is Err(InvalidState(_)))
   assert_eq(state.export_snapshot().1, [6L])
 }
+
+///|
+test "local policy delta drops one subscription and pending head" {
+  let initial : BrokerSnapshotV3 = {
+    version: 3,
+    sessions: [
+      {
+        ..durable_test_session(),
+        subscriptions: [
+          { filter: "safe/#", qos: 1 },
+          { filter: "private/#", qos: 1 },
+        ],
+        pending: [
+          { topic: "private/one", payload: b"a", qos: 1, retain: false },
+          { topic: "safe/two", payload: b"b", qos: 1, retain: false },
+        ],
+      },
+    ],
+    retained: [],
+  }
+  let state = DurableAccumulator::new(durable_test_config(), initial, [5L]).unwrap()
+  assert_eq(
+    state.apply_reconcile({
+      client_id: "client-a",
+      expected_generation: 5L,
+      change: DropSubscription("private/#"),
+    }),
+    Ok(()),
+  )
+  assert_eq(
+    state.apply_reconcile({
+      client_id: "client-a",
+      expected_generation: 5L,
+      change: DropPendingHead("private/one", 1, 1),
+    }),
+    Ok(()),
+  )
+  let (snapshot, generations) = state.export_snapshot()
+  assert_eq(generations, [5L])
+  assert_eq(snapshot.sessions[0].subscriptions, [{ filter: "safe/#", qos: 1 }])
+  assert_eq(snapshot.sessions[0].pending.length(), 1)
+  assert_eq(snapshot.sessions[0].pending[0].topic, "safe/two")
+  let before = state.export_snapshot()
+  assert_true(
+    state.apply_reconcile({
+      client_id: "client-a",
+      expected_generation: 4L,
+      change: DropPendingHead("safe/two", 1, 1),
+    })
+    is Err(_),
+  )
+  assert_eq(state.export_snapshot(), before)
+}
