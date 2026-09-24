@@ -112,6 +112,9 @@ max_accounts = 4096
 max_acl_rules = 4096
 ```
 
+Reload requires `max_pending_per_session <= 4096` so revocation can
+copy and discard one queued pointer array within its fixed per-turn budget.
+
 The material runtime directory must be a private, writable absolute path
 outside the source and persistence directories. The Broker captures a checked
 bundle before preparing a candidate; an invalid or changed source leaves the

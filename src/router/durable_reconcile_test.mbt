@@ -122,3 +122,62 @@ test "runtime cleanup can discard a clean Session pending item" {
   assert_eq(state.snapshot_revision(), before)
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "policy discard near reload queue cap copies only bounded message references" {
+  let pending : Array[SnapshotMessageV3] = []
+  for index in 0..<4096 {
+    pending.push({
+      topic: if index == 2048 {
+        "private/one"
+      } else {
+        "safe/one"
+      },
+      payload: b"x",
+      qos: 1,
+      retain: false,
+    })
+  }
+  let config = BrokerConfig::new(
+    4,
+    16,
+    4,
+    max_sessions=1,
+    max_pending_per_session=4096,
+    max_pending_total=4096,
+  ).unwrap()
+  let snapshot : BrokerSnapshotV3 = {
+    version: 3,
+    sessions: [
+      {
+        client_id: "large",
+        owner_principal: "anonymous",
+        detached_at_ms: 0L,
+        next_packet_id: 1,
+        subscriptions: [],
+        inbound_qos2: [],
+        inflight: [],
+        pending,
+      },
+    ],
+    retained: [],
+  }
+  let state = BrokerState::from_snapshot(config, snapshot).unwrap()
+  state.enable_policy_index().unwrap()
+  let acl = @security.AclPolicy::parse("anonymous\ntopic read safe/#\n").unwrap()
+  assert_true(state.set_security_policy(@security.SecurityPolicy::new(acl~)))
+  let client = @session.ClientId::new("large").unwrap()
+  let plan = state
+    .prepare_durable_reconcile(
+      client,
+      DropPendingAt(2048, "private/one", 1, 1),
+      1L,
+    )
+    .unwrap()
+  assert_eq(state.pending_qos1_count(), 4096)
+  state.begin_action_scope()
+  assert_eq(plan.commit(), Ok([]))
+  state.end_action_scope()
+  assert_eq(state.pending_qos1_count(), 4095)
+  assert_eq(state.check_invariants(), Ok(()))
+}

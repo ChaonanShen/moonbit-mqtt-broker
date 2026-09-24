@@ -1853,6 +1853,9 @@ async fn run_main() -> Unit {
       !reload_material_runtime_dir.has_prefix("/") {
       raise CliError("reload TLS requires an absolute private material root")
     }
+    if max_pending_qos1_per_session > 4096 {
+      raise CliError("reload requires max_pending_per_session at most 4096")
+    }
     if reload_prepare_timeout_ms > 300000 ||
       reload_max_source_bytes > 67108864 ||
       reload_max_generation_bytes > 268435456L ||
