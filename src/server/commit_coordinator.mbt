@@ -87,6 +87,7 @@ pub enum CommitPollResult {
   CommitFencedResult(String)
   CommitCheckpointPublished(Int64, Int64)
   CommitCheckpointFailed(String, Bool)
+  CommitPolicyCapabilityReady
 }
 
 ///|
@@ -125,6 +126,7 @@ pub struct CommitCoordinator {
   mut collecting_started_ms : Int64
   mut collecting_bytes : Int64
   mut submitted : PendingBatch?
+  mut policy_upgrade_pending : Bool
   mut fenced : Bool
 }
 
@@ -166,6 +168,7 @@ pub fn CommitCoordinator::new(
     collecting_started_ms: 0L,
     collecting_bytes: 0L,
     submitted: None,
+    policy_upgrade_pending: false,
     fenced: false,
   })
 }
@@ -211,7 +214,33 @@ pub fn CommitCoordinator::is_fenced(self : CommitCoordinator) -> Bool {
 
 ///|
 pub fn CommitCoordinator::has_pending(self : CommitCoordinator) -> Bool {
-  self.submitted is Some(_) || !self.collecting.is_empty()
+  self.submitted is Some(_) ||
+  !self.collecting.is_empty() ||
+  self.policy_upgrade_pending
+}
+
+///|
+pub fn CommitCoordinator::policy_required(self : CommitCoordinator) -> Bool {
+  self.writer.policy_required()
+}
+
+///|
+/// The writer serializes the durable capability switch with all WAL writes.
+pub fn CommitCoordinator::request_policy_capability(
+  self : CommitCoordinator,
+) -> Bool {
+  if self.is_fenced() || self.has_pending() {
+    return false
+  }
+  if self.writer.policy_required() {
+    return true
+  }
+  if self.writer.submit_policy_capability() {
+    self.policy_upgrade_pending = true
+    true
+  } else {
+    false
+  }
 }
 
 ///|
@@ -452,7 +481,7 @@ pub fn CommitCoordinator::submit(
     plan.cancel()
     return Err(CommitFenced)
   }
-  if self.submitted is Some(_) {
+  if self.submitted is Some(_) || self.policy_upgrade_pending {
     plan.cancel()
     return Err(CommitBusy)
   }
@@ -516,7 +545,9 @@ pub fn CommitCoordinator::submit(
 
 ///|
 pub fn CommitCoordinator::flush(self : CommitCoordinator) -> Bool {
-  if self.is_fenced() || self.submitted is Some(_) {
+  if self.is_fenced() ||
+    self.submitted is Some(_) ||
+    self.policy_upgrade_pending {
     return false
   }
   if self.collecting.is_empty() {
@@ -586,6 +617,19 @@ pub fn CommitCoordinator::poll(self : CommitCoordinator) -> CommitPollResult {
     return CommitFencedResult("late-completion-after-fence")
   }
   match completion {
+    @persistence.PolicyCapabilityReady => {
+      if !self.policy_upgrade_pending || !self.writer.policy_required() {
+        self.fenced = true
+        return CommitFencedResult("policy-capability-completion")
+      }
+      self.policy_upgrade_pending = false
+      return CommitPolicyCapabilityReady
+    }
+    @persistence.PolicyCapabilityFailed(reason) => {
+      self.policy_upgrade_pending = false
+      self.fenced = true
+      return CommitFencedResult("policy-capability-" + reason)
+    }
     @persistence.CheckpointPublished(lsn, generation) => {
       if lsn > self.last_released_lsn || generation < 1L {
         self.fenced = true
