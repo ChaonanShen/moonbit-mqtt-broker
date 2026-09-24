@@ -51,3 +51,20 @@ fn TlsMaterialProvider::close(self : TlsMaterialProvider) -> Unit {
   }
   self.active.clear()
 }
+
+///|
+/// Publishes a fully prepared lease for an existing listener. The caller owns
+/// a rejected candidate; on success the provider takes its root reference.
+pub fn TlsMaterialProvider::publish_prepared(
+  self : TlsMaterialProvider,
+  listener_id : String,
+  candidate : TlsMaterialLease,
+) -> Bool {
+  if self.closed || !self.active.contains(listener_id) {
+    return false
+  }
+  let old = self.active.get(listener_id).unwrap()
+  self.active.set(listener_id, candidate)
+  old.release()
+  true
+}
