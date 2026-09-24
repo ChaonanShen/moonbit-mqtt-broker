@@ -430,7 +430,8 @@ GitHub 托管 runner，须按该提交的远端用户测试命令执行；普通
 开发验证均不能提前算作正式 soak 或硬件性能验收。
 
 远端固定硬件测量入口为 `scripts/run-p1-01-performance.sh`，通过
-`PERF_EXPECTED_SHA` 固定完整提交号。正式运行在同一固定开发镜像、
+`PERF_EXPECTED_SHA` 固定完整提交号；临时候选检出可用
+`PERF_RESULT_ROOT` 将证据保存在检出目录之外。正式运行在同一固定开发镜像、
 2 CPU、512 MiB 和各自独立 Docker 数据卷上交错执行三轮配对测试。三种模式
 均关闭内置全局与每 IP 发布限流，并保存实际 Broker 参数。每轮含低频、
 八发布者、256 KiB 消息、八接收者扇出、QoS 2、离线积压；strict 再加按节奏

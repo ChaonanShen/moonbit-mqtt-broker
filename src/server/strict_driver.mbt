@@ -152,7 +152,7 @@ fn RouterDriver::drain_strict_queues(self : RouterDriver) -> Unit {
     self.strict_released_connection(event)
     self.handle_strict_runtime_event(event, ticket)
   }
-  while !coordinator.has_submitted() &&
+  while !coordinator.has_pending() &&
         !self.strict_fenced &&
         (!self.strict_checkpoint_inflight || coordinator.checkpoint_active()) &&
         self.strict_checkpoint_cursor is None {
@@ -266,7 +266,7 @@ fn RouterDriver::handle_strict_runtime_event(
   if coordinator.has_submitted() ||
     collecting_blocks ||
     self.strict_checkpoint_cursor is Some(_) ||
-    self.strict_checkpoint_inflight {
+    (self.strict_checkpoint_inflight && !coordinator.checkpoint_active()) {
     if coordinator.is_collecting() && !coordinator.flush() {
       self.strict_fence("group-commit-submit")
       return

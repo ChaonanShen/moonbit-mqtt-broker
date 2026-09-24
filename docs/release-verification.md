@@ -379,6 +379,7 @@ development smoke establishes formal soak or hardware performance acceptance.
 
 The remote `scripts/run-p1-01-performance.sh` is the fixed-hardware
 measurement entry point. Set `PERF_EXPECTED_SHA` to the complete pushed SHA.
+`PERF_RESULT_ROOT` may place evidence outside a temporary candidate checkout.
 It runs three rotated paired rounds on the same pinned development image,
 two CPUs, 512 MiB and independent Docker named data volumes. The built-in
 global and per-IP rate policies are disabled equally in all three modes;

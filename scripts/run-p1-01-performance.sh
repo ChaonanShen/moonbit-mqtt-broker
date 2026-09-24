@@ -8,8 +8,9 @@ cd "$ROOT"
 if [[ "${PERF_QUICK:-0}" != 1 ]]; then
   [[ -z "$(git status --porcelain --untracked-files=no)" ]]
 fi
-mkdir -p "$ROOT/.local/manual-verification/p1-01/${PERF_EXPECTED_SHA}"
-readonly RUN_DIR="$(mktemp -d "$ROOT/.local/manual-verification/p1-01/${PERF_EXPECTED_SHA}/performance-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
+result_root="${PERF_RESULT_ROOT:-$ROOT/.local/manual-verification/p1-01/${PERF_EXPECTED_SHA}}"
+mkdir -p "$result_root"
+readonly RUN_DIR="$(mktemp -d "$result_root/performance-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
 printf 'PERF_RUN_DIR=%s\n' "$RUN_DIR"
 printf 'sha=%s\nstarted_at=%s\nquick=%s\n' "$PERF_EXPECTED_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PERF_QUICK:-0}" >"$RUN_DIR/metadata.txt"
 docker image inspect moonbit-mqtt-broker-dev --format 'image={{.Id}}' >>"$RUN_DIR/metadata.txt"

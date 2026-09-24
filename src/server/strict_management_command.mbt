@@ -207,9 +207,10 @@ fn RouterDriver::handle_strict_management_command(
     SubmitCommand(ticket, spec, actor) =>
       self.accept_management_command(ticket, spec, actor)
     RunCommand(operation_id, spec) => {
-      if self.strict.unwrap().has_pending() ||
+      let coordinator = self.strict.unwrap()
+      if coordinator.has_pending() ||
         self.strict_checkpoint_cursor is Some(_) ||
-        self.strict_checkpoint_inflight {
+        (self.strict_checkpoint_inflight && !coordinator.checkpoint_active()) {
         if self.strict_management_held.length() >=
           self.runtime.config.max_runtime_events() {
           self.strict_delete_failed(operation_id, "capacity_exhausted")
