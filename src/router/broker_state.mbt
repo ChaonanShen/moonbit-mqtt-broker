@@ -400,6 +400,26 @@ fn BrokerState::session_is_persistent(
 }
 
 ///|
+fn BrokerState::pending_head_authorized(
+  self : BrokerState,
+  session : @session.ClientSession,
+) -> Bool {
+  match self.security_policy {
+    None => true
+    Some(policy) => {
+      let principal = session.owner()
+      if !policy.allows_principal(principal) {
+        return false
+      }
+      match session.pending_head_topic() {
+        Some(topic) => policy.can_read_topic(principal, topic)
+        None => true
+      }
+    }
+  }
+}
+
+///|
 fn BrokerState::delivery_candidates(
   self : BrokerState,
   input : PublishInput,

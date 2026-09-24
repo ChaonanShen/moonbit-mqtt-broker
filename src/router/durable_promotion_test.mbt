@@ -90,3 +90,65 @@ test "durable promotion waits for freed global slot then records new Packet ID" 
   assert_eq(state.pending_qos1_count(), 0)
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "tightened ACL blocks pending promotion before Packet ID allocation" {
+  let state = BrokerState::new(
+    BrokerConfig::new(
+      2,
+      4,
+      0,
+      max_inflight_per_session=1,
+      max_inflight_total=1,
+      max_pending_qos1_per_session=2,
+      max_pending_qos1_total=2,
+    ).unwrap(),
+  )
+  let client = @session.ClientId::new("client").unwrap()
+  ignore(
+    state.apply(
+      CreateSessionWith({
+        client_id: client,
+        mode: @session.Persistent,
+        attached: true,
+      }),
+    ),
+  )
+  ignore(
+    state.apply(
+      Subscribe({
+        client_id: client,
+        entries: [
+          {
+            filter: @topic.TopicFilter::new("topic").unwrap(),
+            qos: @session.QoS1,
+          },
+        ],
+      }),
+    ),
+  )
+  let input : PublishInput = {
+    origin: Internal,
+    topic: @topic.TopicName::new("topic").unwrap(),
+    payload: b"value",
+    qos: @session.QoS1,
+    retain: false,
+  }
+  let first = state.apply(Publish(input)).unwrap()
+  let packet_id = match first[0] {
+    Deliver(value) => value.packet_id.unwrap()
+    _ => fail("first publish must be inflight")
+  }
+  ignore(state.apply(Publish(input)))
+  assert_eq(state.inflight_count(), 1)
+  assert_eq(state.pending_qos1_count(), 1)
+  let acl = @security.AclPolicy::parse("").unwrap()
+  assert_true(state.set_security_policy(@security.SecurityPolicy::new(acl~)))
+  let ack = state.apply(Puback({ client_id: client, packet_id })).unwrap()
+  assert_false(ack.any(action => action is Deliver(_)))
+  assert_eq(state.inflight_count(), 0)
+  assert_eq(state.pending_qos1_count(), 1)
+  assert_eq(state.next_durable_promotion(), None)
+  assert_eq(state.resume_pending(), [])
+  assert_eq(state.check_invariants(), Ok(()))
+}

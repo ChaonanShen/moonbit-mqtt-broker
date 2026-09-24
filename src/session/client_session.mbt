@@ -521,6 +521,19 @@ pub fn ClientSession::pending_head_cost(self : ClientSession) -> Int64? {
     Some(self.pending[0].cost())
   }
 }
+
+///|
+/// A read-only head lookup avoids cloning the payload for an authorization
+/// decision before pending-to-inflight promotion.
+pub fn ClientSession::pending_head_topic(
+  self : ClientSession,
+) -> @topic.TopicName? {
+  if self.pending.is_empty() {
+    None
+  } else {
+    Some(self.pending[0].topic)
+  }
+}
 // @session.ClientSession exposes a bounded promotion step for the broker's
 // durable prepare path; the caller invokes it on an isolated session copy.
 
