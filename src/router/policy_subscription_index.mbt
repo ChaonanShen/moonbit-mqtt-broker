@@ -8,6 +8,7 @@ pub(all) struct PolicySubscriptionRow {
 ///|
 pub(all) struct PolicySubscriptionPage {
   rows : Array[PolicySubscriptionRow]
+  positions : Array[Int]
   next_slot : Int
   scanned : Int
   has_more : Bool
@@ -100,6 +101,7 @@ fn PolicySubscriptionSlots::page(
   }
   {
     rows,
+    positions: physical.positions,
     next_slot: physical.next_slot,
     scanned: physical.scanned,
     has_more: physical.has_more,

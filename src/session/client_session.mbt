@@ -652,6 +652,19 @@ pub fn ClientSession::inflight_item(
 }
 
 ///|
+/// Read-only reference for one bounded policy scan step.
+pub fn ClientSession::inflight_item_reference(
+  self : ClientSession,
+  index : Int,
+) -> OutboundInflight? {
+  if index < 0 || index >= self.inflight.length() {
+    None
+  } else {
+    Some(self.inflight[index])
+  }
+}
+
+///|
 pub fn ClientSession::pending_item(
   self : ClientSession,
   index : Int,
