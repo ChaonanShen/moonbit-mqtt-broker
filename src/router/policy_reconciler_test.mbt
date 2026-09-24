@@ -152,3 +152,27 @@ test "forbidden payload inflight requests eviction while PUBREL-only does not" {
   }
   assert_true(found)
 }
+
+///|
+test "empty policy indexes advance by bounded slots without a long no-op reload" {
+  let config = BrokerConfig::new(32, 1024, 4, max_sessions=1024).unwrap()
+  let state = BrokerState::new(config)
+  state.enable_policy_index().unwrap()
+  let policy = @security.SecurityPolicy::permissive()
+  let scan = PolicyReconciler::new(policy, 1L, 64, 1048576L).unwrap()
+  let mut turns = 0
+  let mut done = false
+  for _ in 0..<100 {
+    turns += 1
+    match scan.next(state) {
+      PolicyScanProgress => ()
+      PolicyScanDone => {
+        done = true
+        break
+      }
+      _ => fail("empty policy index produced issue")
+    }
+  }
+  assert_true(done)
+  assert_true(turns < 100)
+}

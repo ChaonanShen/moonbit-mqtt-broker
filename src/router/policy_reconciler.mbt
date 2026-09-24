@@ -30,6 +30,7 @@ pub struct PolicyReconciler {
   mut observed_revision : Int64
   mut pending_frontier : Int
   mut waiting : PolicyIssue?
+  mut step_bytes : Int64
 }
 
 ///|
@@ -59,6 +60,7 @@ pub fn PolicyReconciler::new(
     observed_revision: 0L,
     pending_frontier: 0,
     waiting: None,
+    step_bytes: 128L,
   })
 }
 
@@ -96,6 +98,7 @@ fn PolicyReconciler::inspect_session(
   state : BrokerState,
   pending : Bool,
 ) -> PolicyScanResult {
+  self.step_bytes = 128L
   let page = match state.policy_session_page(self.slot, 1) {
     Some(value) => value
     None => return PolicyScanUnavailable
@@ -126,6 +129,7 @@ fn PolicyReconciler::inspect_session(
       return PolicyScanProgress
     }
   }
+  self.step_bytes = 65536L
   if self.current_id != Some(id) || self.current_incarnation != incarnation {
     self.current_id = Some(id)
     self.current_incarnation = incarnation
@@ -202,6 +206,7 @@ fn PolicyReconciler::inspect_subscription(
   self : PolicyReconciler,
   state : BrokerState,
 ) -> PolicyScanResult {
+  self.step_bytes = 128L
   let page = match state.policy_subscription_page(self.slot, 1) {
     Some(value) => value
     None => return PolicyScanUnavailable
@@ -229,6 +234,7 @@ fn PolicyReconciler::inspect_subscription(
       return PolicyScanProgress
     }
   }
+  self.step_bytes = 65536L
   if !self.policy.allows_principal(principal) ||
     !self.policy.can_read_filter(principal, row.filter) {
     let issue = DropFilter(row.client_id, incarnation, row.id, row.filter)
@@ -267,7 +273,7 @@ pub fn PolicyReconciler::next(
       PolicyScanDone | PolicyScanWaiting => return result
       PolicyScanProgress => {
         inspected += 1
-        bytes += 131328L
+        bytes += self.step_bytes
       }
     }
   }
