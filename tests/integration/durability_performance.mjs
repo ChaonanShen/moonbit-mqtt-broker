@@ -35,14 +35,25 @@ function subscribe(c, topic, qos = 1) {
 }
 function publish(c, topic, payload, qos = 1) {
   const started = process.hrtime.bigint()
-  return new Promise((resolve, reject) =>
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const closed = () => {
+      if (settled) return
+      settled = true
+      reject(new Error("publisher connection closed before QoS " + qos + " acknowledgement"))
+    }
+    c.once("close", closed)
     c.publish(topic, payload, { qos }, error => {
+      if (settled) return
+      settled = true
+      c.off("close", closed)
       if (error) reject(error)
       else {
         samples.push(Number(process.hrtime.bigint() - started) / 1e6)
         resolve()
       }
-    }))
+    })
+  })
 }
 function end(c) {
   return new Promise(resolve =>
@@ -85,23 +96,6 @@ try {
     }
     if (scenario === 'offline') await Promise.all(subscribers.map(end))
     const publisher = await client('perf-' + scenario + '-publisher')
-    if (scenario === 'qos2') {
-      const sent = new Map()
-      publisher.on('packetsend', packet => {
-        if (packet.cmd === 'publish' && packet.qos === 2)
-          sent.set(packet.messageId, process.hrtime.bigint())
-      })
-      publisher.on('packetreceive', packet => {
-        const began = sent.get(packet.messageId)
-        if (began === undefined) return
-        const elapsed = Number(process.hrtime.bigint() - began) / 1e6
-        if (packet.cmd === 'pubrec') pubrecSamples.push(elapsed)
-        if (packet.cmd === 'pubcomp') {
-          pubcompSamples.push(elapsed)
-          sent.delete(packet.messageId)
-        }
-      })
-    }
     const payloads = Array.from({ length: n },
       (_, i) => Buffer.from(String(i).padStart(8, '0') + 'x'.repeat(120)))
     for (const payload of payloads) await publish(publisher, topic, payload)

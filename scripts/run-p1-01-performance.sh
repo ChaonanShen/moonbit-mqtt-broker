@@ -59,10 +59,12 @@ for ((round=0; round<rounds; round++)); do
     docker run --rm --platform linux/amd64 --user 0 --volume "$current_volume:/data" \
       --entrypoint sh moonbit-mqtt-broker-dev -c 'chown 65532:65532 /data && chmod 0700 /data'
     port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
-    args=(--listen "127.0.0.1:$port" --max-connections 128 --max-pending-per-session 256 --max-pending-total 2048)
+    args=(--listen "127.0.0.1:$port" --max-connections 128 --max-pending-per-session 256 --max-pending-total 2048 --rate-limits-enabled false --per-ip-limits-enabled false)
     if [[ "$mode" != off ]]; then
       args+=(--data-dir /data --persistence-mode "$mode")
     fi
+    printf "%q " "${args[@]}" >"$prefix/broker-args.txt"
+    printf "\n" >>"$prefix/broker-args.txt"
     container="mqtt-perf-${PERF_EXPECTED_SHA:0:8}-$((round+1))-$mode-$$"
     touch "$prefix/fsync.tsv"
     chmod 0666 "$prefix/fsync.tsv"
