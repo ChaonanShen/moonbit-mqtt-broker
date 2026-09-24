@@ -11,6 +11,7 @@ pub struct ClientSession {
   mut inbound_qos2 : Array[SessionPacketId]
   owner : @security.Principal
   mut detached_at_ms : Int64?
+  priv mut policy_revision : Int64
 } derive(Eq, Debug)
 
 ///|
@@ -31,6 +32,7 @@ pub fn ClientSession::new(
     pending: [],
     inbound_qos2: [],
     owner,
+    policy_revision: 1L,
     detached_at_ms: if attached {
       None
     } else {
@@ -105,6 +107,7 @@ pub fn ClientSession::restore(
     pending: stored_pending,
     inbound_qos2: inbound_qos2.copy(),
     owner,
+    policy_revision: 1L,
     detached_at_ms: Some(detached_at_ms),
   })
 }
@@ -112,6 +115,19 @@ pub fn ClientSession::restore(
 ///|
 pub fn ClientSession::client_id(self : ClientSession) -> ClientId {
   self.client_id
+}
+
+///|
+pub fn ClientSession::policy_revision(self : ClientSession) -> Int64 {
+  self.policy_revision
+}
+
+///|
+fn ClientSession::bump_policy_revision(self : ClientSession) -> Unit {
+  if self.policy_revision == 9223372036854775807L {
+    abort("Session policy revision exhausted")
+  }
+  self.policy_revision += 1L
 }
 
 ///|
@@ -180,6 +196,7 @@ fn ClientSession::stage_inflight(
   let phase = if message.qos == QoS2 { AwaitPubrec } else { AwaitPuback }
   self.inflight.push({ packet_id, message: Some(message.copy()), phase })
   self.inflight_cost += message.cost()
+  self.bump_policy_revision()
   Ok({ packet_id, message: Some(message.copy()), dup: false })
 }
 
@@ -206,6 +223,7 @@ pub fn ClientSession::stage(
     cost <= limits.max_pending_bytes - self.pending_bytes() {
     self.pending.push(message.copy())
     self.pending_cost += cost
+    self.bump_policy_revision()
     Ok(Queued)
   } else {
     Err(PendingLimitReached(limits.max_pending))
@@ -268,6 +286,7 @@ pub fn ClientSession::ack(
   }
   self.inflight = remaining
   self.inflight_cost -= released_cost
+  self.bump_policy_revision()
   self.promote_pending(limits).map(promoted => Acknowledged(promoted))
 }
 
@@ -278,6 +297,7 @@ pub fn ClientSession::detach(
 ) -> Unit {
   self.attached = false
   self.detached_at_ms = Some(detached_at_ms)
+  self.bump_policy_revision()
 }
 
 ///|
@@ -290,6 +310,7 @@ pub fn ClientSession::attach(
   }
   self.attached = true
   self.detached_at_ms = None
+  self.bump_policy_revision()
   let deliveries : Array[SessionDelivery] = []
   for item in self.inflight {
     deliveries.push({
@@ -409,6 +430,7 @@ pub fn ClientSession::begin_inbound_qos2(
     return Err(ByteLimitReached)
   }
   self.inbound_qos2.push(id)
+  self.bump_policy_revision()
   Ok(true)
 }
 
@@ -421,6 +443,7 @@ pub fn ClientSession::complete_inbound_qos2(
     return false
   }
   self.inbound_qos2 = self.inbound_qos2.filter(value => value != id)
+  self.bump_policy_revision()
   true
 }
 
@@ -442,6 +465,7 @@ pub fn ClientSession::pubrec(
         self.inflight = self.inflight.filter(value => value.packet_id != id)
         self.inflight.push({ packet_id: id, phase: AwaitPubcomp, message: None })
         self.inflight_cost -= item.cost() - 64L
+        self.bump_policy_revision()
         return Ok(true)
       }
     }
@@ -601,6 +625,7 @@ pub fn ClientSession::discard_pending_item_prepared(
   }
   self.pending = remaining
   self.pending_cost -= expected.cost()
+  self.bump_policy_revision()
   true
 }
 // @session.ClientSession exposes a bounded promotion step for the broker's

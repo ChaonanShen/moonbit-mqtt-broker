@@ -3,7 +3,8 @@ pub struct DurableReconcilePlan {
   broker : BrokerState
   client_id : @session.ClientId
   incarnation : Int64
-  before_revision : Int64
+  session_revision : Int64
+  subscription_identity : Int64?
   filter : @topic.TopicFilter?
   head : @session.SessionMessage?
   pending_index : Int
@@ -55,6 +56,7 @@ pub fn BrokerState::prepare_durable_reconcile(
   let principal = session.owner()
   let owner = self.resources.owners.get(client_id).unwrap()
   let mut filter : @topic.TopicFilter? = None
+  let mut subscription_identity : Int64? = None
   let mut head : @session.SessionMessage? = None
   let mut pending_index = 0
   let mut remaining : Array[@session.SessionMessage] = []
@@ -83,6 +85,12 @@ pub fn BrokerState::prepare_durable_reconcile(
       }
       scratch_cost += @budget.utf8_bytes(text)
       filter = Some(parsed)
+      subscription_identity = self.policy_subscription_identity(
+        client_id, parsed,
+      )
+      if subscription_identity is None {
+        return Err(InvariantViolation("policy subscription index unavailable"))
+      }
     }
     DropPendingAt(index, topic, qos, payload_bytes) => {
       let current = match session.pending_item_reference(index) {
@@ -133,7 +141,8 @@ pub fn BrokerState::prepare_durable_reconcile(
     broker: self,
     client_id,
     incarnation,
-    before_revision: self.snapshot_revision(),
+    session_revision: session.policy_revision(),
+    subscription_identity,
     filter,
     head,
     pending_index,
@@ -156,7 +165,6 @@ pub fn DurableReconcilePlan::commit(
   self : DurableReconcilePlan,
 ) -> Result[Array[BrokerAction], RouterError] {
   if self.finished ||
-    self.broker.snapshot_revision() != self.before_revision ||
     self.broker.policy_session_incarnation(self.client_id) !=
     Some(self.incarnation) {
     return Err(InvariantViolation("policy reconcile candidate changed"))
@@ -165,9 +173,17 @@ pub fn DurableReconcilePlan::commit(
     Some(value) => value
     None => return Err(SessionNotFound(self.client_id))
   }
+  if session.policy_revision() != self.session_revision {
+    return Err(InvariantViolation("policy reconcile Session changed"))
+  }
   match self.delta.change {
     DropSubscription(_) =>
       if self.filter is None ||
+        self.broker.policy_subscription_identity(
+          self.client_id,
+          self.filter.unwrap(),
+        ) !=
+        self.subscription_identity ||
         self.broker.subscriptions.qos(self.client_id, self.filter.unwrap())
         is None {
         return Err(InvariantViolation("policy subscription changed"))
