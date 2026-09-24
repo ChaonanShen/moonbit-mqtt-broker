@@ -11,6 +11,7 @@ pub struct RouterDriver {
   priv strict_held_connections : Map[ConnectionId, Int]
   priv strict_management_held : @deque.Deque[ManagementCommandEvent]
   priv mut strict_fenced : Bool
+  priv mut reload_barrier : Bool
   priv mut strict_checkpoint_cursor : @router.SnapshotExportCursor?
   priv mut strict_checkpoint_lsn : Int64
   priv mut strict_checkpoint_inflight : Bool
@@ -88,6 +89,7 @@ pub fn RouterDriver::new(
     strict_held_connections: Map([]),
     strict_management_held: @deque.Deque([]),
     strict_fenced: false,
+    reload_barrier: false,
     strict_checkpoint_cursor: None,
     strict_checkpoint_lsn: 0L,
     strict_checkpoint_inflight: false,
@@ -103,6 +105,51 @@ pub fn RouterDriver::new(
     last_progress_monotonic_ms: @budget.monotonic_ms(),
     management,
   }
+}
+
+///|
+/// The single writer stops admitting new business while older transactions
+/// drain and the policy record is committed. A failed entry leaves the driver
+/// untouched; the barrier is released only after activation or final failure.
+pub fn RouterDriver::begin_reload_barrier(self : RouterDriver) -> Bool {
+  let coordinator = match self.strict {
+    Some(value) if !self.strict_fenced && !value.is_fenced() => value
+    _ => return false
+  }
+  if self.reload_barrier ||
+    self.strict_checkpoint_cursor is Some(_) ||
+    self.strict_checkpoint_inflight {
+    return false
+  }
+  if coordinator.is_collecting() && !coordinator.flush() {
+    self.strict_fence("reload-barrier-flush")
+    return false
+  }
+  self.reload_barrier = true
+  true
+}
+
+///|
+pub fn RouterDriver::reload_barrier_ready(self : RouterDriver) -> Bool {
+  let coordinator = match self.strict {
+    Some(value) => value
+    None => return false
+  }
+  self.reload_barrier &&
+  !self.strict_fenced &&
+  !coordinator.is_fenced() &&
+  !coordinator.has_pending() &&
+  self.strict_checkpoint_cursor is None &&
+  !self.strict_checkpoint_inflight
+}
+
+///|
+pub fn RouterDriver::end_reload_barrier(self : RouterDriver) -> Unit {
+  if !self.reload_barrier {
+    return
+  }
+  self.reload_barrier = false
+  self.drain_strict_queues()
 }
 
 ///|
