@@ -144,10 +144,13 @@ pub struct PasswordDatabaseCandidate {
 ///|
 pub fn PasswordDatabaseCandidate::parse(
   contents : String,
+  max_accounts? : Int = 4096,
 ) -> Result[PasswordDatabaseCandidate, PasswordFileError] {
   match parse_password_database(contents, false) {
     Ok(database) =>
-      if database.user_count() > 4096 {
+      if max_accounts < 1 ||
+        max_accounts > 4096 ||
+        database.user_count() > max_accounts {
         Err(AccountLimitExceeded)
       } else {
         Ok({ database, })

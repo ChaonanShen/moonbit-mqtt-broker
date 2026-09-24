@@ -73,3 +73,16 @@ async test "maintenance Argon2 validation leaves the async loop responsive" {
   assert_true(ticks > 0)
   stop_candidate_executor(executor)
 }
+
+///|
+test "reload account cap is enforced before Argon2 work" {
+  let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
+  let contents = "first:" + encoded + "\nsecond:" + encoded + "\n"
+  assert_true(
+    PasswordDatabaseCandidate::parse(contents, max_accounts=1)
+    is Err(AccountLimitExceeded),
+  )
+  assert_true(
+    PasswordDatabaseCandidate::parse(contents, max_accounts=2) is Ok(_),
+  )
+}

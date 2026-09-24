@@ -7,6 +7,8 @@ pub(all) struct ReloadStartup {
   prepare_timeout_ms : Int
   max_source_bytes : Int
   max_generation_bytes : Int64
+  max_accounts : Int
+  max_acl_rules : Int
   signal_pending : () -> Bool
 }
 
@@ -59,6 +61,8 @@ async fn signal_reload_once(
     startup.prepare_timeout_ms,
     startup.max_source_bytes,
     startup.max_generation_bytes,
+    max_accounts=startup.max_accounts,
+    max_acl_rules=startup.max_acl_rules,
   )
   match result {
     ReloadNoChange => {

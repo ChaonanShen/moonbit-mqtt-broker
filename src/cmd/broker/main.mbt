@@ -1900,6 +1900,8 @@ async fn run_main() -> Unit {
       prepare_timeout_ms: reload_prepare_timeout_ms,
       max_source_bytes: reload_max_source_bytes,
       max_generation_bytes: reload_max_generation_bytes,
+      max_accounts: reload_max_accounts,
+      max_acl_rules: reload_max_acl_rules,
       signal_pending: take_reload_signal,
     })
   } else {

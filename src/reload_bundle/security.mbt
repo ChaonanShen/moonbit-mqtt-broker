@@ -5,6 +5,8 @@ pub async fn CapturedBundle::prepare_security(
   self : CapturedBundle,
   candidate : ReloadEffectiveCandidate,
   maintenance : @security.AuthExecutor,
+  max_accounts? : Int = 4096,
+  max_acl_rules? : Int = 4096,
 ) -> @security.SecurityPolicy {
   let hot = candidate.hot()
   let passwords : @security.PasswordDatabase? = match hot.password_file {
@@ -17,7 +19,8 @@ pub async fn CapturedBundle::prepare_security(
       let contents = @utf8.decode(bytes) catch {
         _ => raise BundleError("password material must be UTF-8")
       }
-      let parsed = match @security.PasswordDatabaseCandidate::parse(contents) {
+      let parsed = match
+        @security.PasswordDatabaseCandidate::parse(contents, max_accounts~) {
         Ok(value) => value
         Err(_) => raise BundleError("invalid password material")
       }
@@ -42,7 +45,9 @@ pub async fn CapturedBundle::prepare_security(
         Ok(value) => value
         Err(_) => raise BundleError("invalid ACL material")
       }
-      if parsed.rule_count() > 4096 {
+      if max_acl_rules < 1 ||
+        max_acl_rules > 4096 ||
+        parsed.rule_count() > max_acl_rules {
         raise BundleError("ACL rule count exceeds limit")
       }
       Some(parsed)
@@ -85,13 +90,20 @@ async fn stop_security_maintenance(worker : @security.AuthExecutor) -> Unit {
 pub async fn CapturedBundle::prepare_security_isolated(
   self : CapturedBundle,
   candidate : ReloadEffectiveCandidate,
+  max_accounts? : Int = 4096,
+  max_acl_rules? : Int = 4096,
 ) -> @security.SecurityPolicy {
   let worker = match @security.AuthExecutor::new(1, 1) {
     Ok(value) => value
     Err(_) => raise BundleError("security maintenance backend unavailable")
   }
   errdefer stop_security_maintenance(worker)
-  let policy = self.prepare_security(candidate, worker)
+  let policy = self.prepare_security(
+    candidate,
+    worker,
+    max_accounts~,
+    max_acl_rules~,
+  )
   stop_security_maintenance(worker)
   policy
 }

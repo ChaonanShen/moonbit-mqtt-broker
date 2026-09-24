@@ -69,6 +69,8 @@ async test "signal coordinator prepares and publishes log generation without man
     prepare_timeout_ms: 30000,
     max_source_bytes: 16777216,
     max_generation_bytes: 67108864L,
+    max_accounts: 4096,
+    max_acl_rules: 4096,
     signal_pending: () => {
       if signal {
         signal = false

@@ -68,6 +68,8 @@ async test "reload-only management accepts JSON precondition and exposes operati
     prepare_timeout_ms: 30000,
     max_source_bytes: 16777216,
     max_generation_bytes: 67108864L,
+    max_accounts: 4096,
+    max_acl_rules: 4096,
     signal_pending: () => false,
   }
   let mut stop = false

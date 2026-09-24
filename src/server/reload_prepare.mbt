@@ -92,6 +92,8 @@ pub async fn prepare_reload_candidate(
   timeout_ms : Int,
   max_source_bytes : Int,
   max_generation_bytes : Int64,
+  max_accounts? : Int = 4096,
+  max_acl_rules? : Int = 4096,
 ) -> ReloadPrepareResult {
   if timeout_ms < 1 ||
     timeout_ms > 300000 ||
@@ -147,7 +149,7 @@ pub async fn prepare_reload_candidate(
     )
     let security_changed = fingerprint != previous_fingerprint
     let security = if security_changed {
-      bundle.prepare_security_isolated(effective)
+      bundle.prepare_security_isolated(effective, max_accounts~, max_acl_rules~)
     } else {
       previous_security
     }
