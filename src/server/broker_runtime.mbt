@@ -5,6 +5,7 @@ priv struct PendingAuthentication {
   candidate : @security.AuthenticationCandidate
   ticket : @budget.Ticket
   deadline_ms : Int64
+  policy_epoch : Int64
 }
 
 ///|
@@ -21,6 +22,7 @@ pub struct BrokerRuntime {
   connections : Map[ConnectionId, ConnectionMeta]
   active_by_client : Map[@session.ClientId, ConnectionId]
   security : @security.SecurityPolicy
+  policy_epoch : Int64
   metrics : BrokerMetrics
   logger : @observability.Logger
 }
@@ -50,6 +52,7 @@ pub fn BrokerRuntime::new(
     connections: Map([]),
     active_by_client: Map([]),
     security,
+    policy_epoch: 0L,
     metrics,
     logger,
   }
@@ -516,6 +519,7 @@ fn BrokerRuntime::begin_async_authentication(
     candidate: request.candidate(),
     ticket,
     deadline_ms,
+    policy_epoch: self.policy_epoch,
   })
   self.auth_submissions.set(request_id, request)
   self.connections.set(connection_id, {
@@ -1331,6 +1335,10 @@ fn BrokerRuntime::authentication_completed(
       self.metrics.record_auth_late_result()
       return []
     }
+  }
+  if task.policy_epoch != self.policy_epoch {
+    self.metrics.record_auth_late_result()
+    return self.reject_connect(task.connection_id, ServerUnavailable)
   }
   if event.completed_at_ms >= task.deadline_ms {
     self.metrics.record_auth_deadline_rejection()
