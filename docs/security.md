@@ -2,8 +2,9 @@
 
 [中文](security.zh_CN.md) | **English**
 
-Authentication and authorization are optional static, single-node startup
-configuration. There is no online user or ACL mutation API.
+Authentication and authorization are optional single-node configuration. There is
+no per-user mutation API; when reload is enabled, a verified bundle can replace
+the password database and ACL as one generation.
 
 ## Password authentication
 
@@ -16,8 +17,27 @@ encoded hashes, and CONNECT secrets are never logged.
 
 MQTT 3.1.1 has no protected credential exchange. Credentials sent over
 plaintext MQTT can be observed on the network. Use TLS and verify the Broker
-certificate. mTLS, certificate reload, and online secret rotation are not
-claimed.
+certificate. mTLS and management-token rotation are not supported by reload.
+Existing MQTT TLS/WSS server certificate material can rotate with a verified
+bundle.
+
+## Live security revocation
+
+A successful security reload publishes the new authorization gate before
+bounded cleanup runs. A deleted user or disabled anonymous principal cannot
+resume a Session; owned Sessions are removed. A changed password closes idle
+connections with the old credential, while the same user's persistent Session
+can be resumed with the new password if still authorized. An ACL-only edit
+does not force unchanged credentials to reconnect, but every new publish,
+subscription, Will, pending promotion and outbound MQTT message is checked
+against the current ACL. Invalid subscriptions and queued messages are
+cleaned in bounded steps. If an in-flight outbound QoS 1/2 payload loses read
+permission, the whole Session is evicted and a reconnect reports
+`SessionPresent=false`; its other queued messages are lost too. Bytes already
+written to a socket cannot be recalled. A rollback is another new generation
+and does not restore evicted Sessions. See
+[reload configuration](configuration.md#live-configuration-reload) and
+[durability](persistence.md#reload-and-recovery).
 
 ## Native runtime and reproducible tests
 
