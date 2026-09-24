@@ -414,7 +414,7 @@ Upgrade、WebSocket 帧边界、验证证书的 WSS，以及私有 TLS 材料捕
 
 ## P1-04 热更新门禁
 
-累计入口依次运行 reload 生命周期、TLS/WSS 材料轮换、strict 恢复和安全撤权进程测试。安全撤权脚本分别以 off、snapshot、strict 模式验证匿名关闭、密码变更时空闲连接断开，以及 ACL 收紧后的投递阻断。分发证据只放行各模式的摘要和脱敏事件日志；密码库、manifest 和私钥不得上传。导出的二进制还在 base、argon2、tls、full 四种运行镜像中分别执行启用 reload 的 check-config：普通 reload 仅在具备 Argon2 的环境成功，TLS reload 仅在 full 成功；每种 profile 的预期结果写入 `evidence.txt`。
+累计入口依次运行 reload 生命周期、TLS/WSS 材料轮换、strict 恢复和安全撤权进程测试。安全撤权脚本分别以 off、snapshot、strict 模式验证匿名关闭、密码变更时空闲连接断开，以及 ACL 收紧后的投递阻断。reload 限额脚本检查单会话待发队列最大支持边界（4096 接受、4097 拒绝）。分发证据只放行各模式的摘要和脱敏事件日志；密码库、manifest 和私钥不得上传。导出的二进制还在 base、argon2、tls、full 四种运行镜像中分别执行启用 reload 的 check-config：普通 reload 仅在具备 Argon2 的环境成功，TLS reload 仅在 full 成功；每种 profile 的预期结果写入 `evidence.txt`。
 
 ## P1-01 强持久性门禁
 
