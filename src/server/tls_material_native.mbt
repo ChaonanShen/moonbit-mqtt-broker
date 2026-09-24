@@ -34,6 +34,7 @@ pub struct TlsMaterialLease {
   directory : String
   config : TlsServerConfig
   mut references : Int
+  budget_ticket : @budget.Ticket?
 }
 
 ///|
@@ -69,7 +70,7 @@ fn TlsMaterialLease::capture(
     path + "/key.pem",
     handshake_timeout_ms=config.handshake_timeout_ms(),
   ).unwrap()
-  { directory: path, config: copy, references: 1 }
+  { directory: path, config: copy, references: 1, budget_ticket: None }
 }
 
 ///|
@@ -89,5 +90,26 @@ fn TlsMaterialLease::release(self : TlsMaterialLease) -> Unit {
   if self.references == 0 {
     let path = @utf8.encode(self.directory)
     ignore(tls_material_release_ffi(path, path.length()))
+    release_optional(self.budget_ticket)
   }
+}
+
+///|
+/// Takes ownership only of a directory already prepared and validated by the
+/// isolated native worker. No original source path is consulted here.
+fn TlsMaterialLease::from_prepared_directory(
+  original : TlsServerConfig,
+  directory : String,
+  ticket? : @budget.Ticket,
+) -> TlsMaterialLease {
+  if !directory.has_prefix("/tmp/moonbit-mqtt-tls-") ||
+    directory[21:].contains("/") {
+    abort("invalid prepared TLS material directory")
+  }
+  let config = TlsServerConfig::new(
+    directory + "/cert.pem",
+    directory + "/key.pem",
+    handshake_timeout_ms=original.handshake_timeout_ms(),
+  ).unwrap()
+  { directory, config, references: 1, budget_ticket: ticket }
 }
