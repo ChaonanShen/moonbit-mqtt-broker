@@ -3,6 +3,7 @@ set -euo pipefail
 ulimit -c 0
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
+RELOAD_EVIDENCE_DIR="${RELOAD_EVIDENCE_DIR:-$REPO_ROOT/.local/reload-integration/reload-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 moon build --target native >/dev/null
 readonly BROKER="$REPO_ROOT/_build/native/debug/build/cmd/broker/broker.exe"
 work="$(mktemp -d)"
@@ -13,11 +14,11 @@ cleanup() {
     kill -TERM "$broker_pid" 2>/dev/null || true
     wait "$broker_pid" 2>/dev/null || true
   fi
-  mkdir -p "${RELOAD_EVIDENCE_DIR:-.local/reload-integration}"
+  mkdir -p "$RELOAD_EVIDENCE_DIR"
   grep -Eh 'event=(broker_listening|wal_restored|reload_completed|reload_failed|shutdown_requested)|PolicySourceMismatch' \
-    "$work"/*.log >"${RELOAD_EVIDENCE_DIR:-.local/reload-integration}/durability-events.log" 2>/dev/null || true
+    "$work"/*.log >"$RELOAD_EVIDENCE_DIR/durability-events.log" 2>/dev/null || true
   printf 'case=reload_durability\nexit_code=%s\n' "$rc" \
-    >"${RELOAD_EVIDENCE_DIR:-.local/reload-integration}/durability-summary.txt"
+    >"$RELOAD_EVIDENCE_DIR/durability-summary.txt"
   rm -rf -- "$work"
   exit "$rc"
 }
