@@ -149,3 +149,57 @@ pub fn SecurityPolicy::authentication_cost(
     _ => None
   }
 }
+
+///|
+pub fn SecurityPolicy::allows_principal(
+  self : SecurityPolicy,
+  principal : Principal,
+) -> Bool {
+  match principal {
+    Anonymous | LegacyAnonymous => self.allow_anonymous
+    User(username) =>
+      self.passwords is Some(database) && database.contains_user(username)
+  }
+}
+
+///|
+/// A connection keeps its credential only if the same username still has the
+/// same PHC in the new generation. ACL-only changes do not force reauth.
+pub fn SecurityPolicy::credential_unchanged(
+  self : SecurityPolicy,
+  previous : SecurityPolicy,
+  principal : Principal,
+) -> Bool {
+  match principal {
+    Anonymous | LegacyAnonymous =>
+      self.allow_anonymous && previous.allow_anonymous
+    User(username) =>
+      match (self.passwords, previous.passwords) {
+        (Some(current), Some(old)) => current.same_credential(old, username)
+        _ => false
+      }
+  }
+}
+
+///|
+pub fn SecurityPolicy::same_security(
+  self : SecurityPolicy,
+  other : SecurityPolicy,
+) -> Bool {
+  if self.allow_anonymous != other.allow_anonymous {
+    return false
+  }
+  let same_passwords = match (self.passwords, other.passwords) {
+    (None, None) => true
+    (Some(left), Some(right)) => left.same_contents(right)
+    _ => false
+  }
+  if !same_passwords {
+    return false
+  }
+  match (self.acl, other.acl) {
+    (None, None) => true
+    (Some(left), Some(right)) => left.same_rules(right)
+    _ => false
+  }
+}

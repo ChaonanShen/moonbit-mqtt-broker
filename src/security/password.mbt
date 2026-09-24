@@ -129,6 +129,43 @@ pub fn PasswordDatabase::user_count(self : PasswordDatabase) -> Int {
 }
 
 ///|
+pub fn PasswordDatabase::contains_user(
+  self : PasswordDatabase,
+  username : String,
+) -> Bool {
+  self.hashes.contains(username)
+}
+
+///|
+pub fn PasswordDatabase::same_credential(
+  self : PasswordDatabase,
+  other : PasswordDatabase,
+  username : String,
+) -> Bool {
+  match (self.hashes.get(username), other.hashes.get(username)) {
+    (Some(left), Some(right)) => left.encoded == right.encoded
+    _ => false
+  }
+}
+
+///|
+pub fn PasswordDatabase::same_contents(
+  self : PasswordDatabase,
+  other : PasswordDatabase,
+) -> Bool {
+  if self.hashes.length() != other.hashes.length() {
+    return false
+  }
+  for username, entry in self.hashes {
+    match other.hashes.get(username) {
+      Some(value) if value.encoded == entry.encoded => ()
+      _ => return false
+    }
+  }
+  true
+}
+
+///|
 pub fn PasswordDatabase::authenticate(
   self : PasswordDatabase,
   username : String,
