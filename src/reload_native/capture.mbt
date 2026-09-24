@@ -10,6 +10,7 @@ pub(all) enum CaptureError {
   IoFailure
   Cancelled
   CryptoFailure
+  TlsInvalid
   InvalidState
 } derive(Eq, Debug)
 
@@ -204,6 +205,7 @@ pub fn CaptureWorker::result_info(
         -14 => IoFailure
         -15 => Cancelled
         -16 => CryptoFailure
+        -17 => TlsInvalid
         _ => InvalidState
       },
     )

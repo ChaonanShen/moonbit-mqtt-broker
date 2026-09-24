@@ -28,6 +28,73 @@ static digest_init_fn digest_init;
 static digest_update_fn digest_update;
 static digest_final_fn digest_final;
 
+typedef const void *(*tls_server_method_fn)(void);
+typedef void *(*ssl_ctx_new_fn)(const void *);
+typedef void (*ssl_ctx_free_fn)(void *);
+typedef int (*ssl_ctx_use_chain_fn)(void *, const char *);
+typedef int (*ssl_ctx_use_key_fn)(void *, const char *, int);
+typedef int (*ssl_ctx_check_key_fn)(const void *);
+typedef const void *(*ssl_ctx_certificate_fn)(const void *);
+typedef const void *(*x509_time_fn)(const void *);
+typedef int (*x509_cmp_time_fn)(const void *);
+typedef void (*ssl_ctx_password_cb_fn)(void *, int (*)(char *, int, int, void *));
+
+static pthread_once_t tls_once = PTHREAD_ONCE_INIT;
+static void *tls_library;
+static tls_server_method_fn tls_server_method;
+static ssl_ctx_new_fn ssl_ctx_new;
+static ssl_ctx_free_fn ssl_ctx_free;
+static ssl_ctx_use_chain_fn ssl_ctx_use_chain;
+static ssl_ctx_use_key_fn ssl_ctx_use_key;
+static ssl_ctx_check_key_fn ssl_ctx_check_key;
+static ssl_ctx_certificate_fn ssl_ctx_certificate;
+static x509_time_fn x509_not_before;
+static x509_time_fn x509_not_after;
+static x509_cmp_time_fn x509_cmp_time;
+static ssl_ctx_password_cb_fn ssl_ctx_password_cb;
+
+static int deny_key_password(char *buffer, int size, int rwflag, void *data) {
+  (void)buffer; (void)size; (void)rwflag; (void)data;
+  return 0;
+}
+
+static void load_tls(void) {
+  void *library = dlopen("libssl.so.3", RTLD_NOW | RTLD_LOCAL);
+  if (library == NULL || crypto_library == NULL) return;
+  tls_server_method =
+    (tls_server_method_fn)dlsym(library, "TLS_server_method");
+  ssl_ctx_new = (ssl_ctx_new_fn)dlsym(library, "SSL_CTX_new");
+  ssl_ctx_free = (ssl_ctx_free_fn)dlsym(library, "SSL_CTX_free");
+  ssl_ctx_use_chain = (ssl_ctx_use_chain_fn)dlsym(
+    library, "SSL_CTX_use_certificate_chain_file"
+  );
+  ssl_ctx_use_key =
+    (ssl_ctx_use_key_fn)dlsym(library, "SSL_CTX_use_PrivateKey_file");
+  ssl_ctx_check_key =
+    (ssl_ctx_check_key_fn)dlsym(library, "SSL_CTX_check_private_key");
+  ssl_ctx_certificate =
+    (ssl_ctx_certificate_fn)dlsym(library, "SSL_CTX_get0_certificate");
+  ssl_ctx_password_cb = (ssl_ctx_password_cb_fn)dlsym(
+    library, "SSL_CTX_set_default_passwd_cb"
+  );
+  x509_not_before =
+    (x509_time_fn)dlsym(crypto_library, "X509_get0_notBefore");
+  x509_not_after =
+    (x509_time_fn)dlsym(crypto_library, "X509_get0_notAfter");
+  x509_cmp_time =
+    (x509_cmp_time_fn)dlsym(crypto_library, "X509_cmp_current_time");
+  if (tls_server_method == NULL || ssl_ctx_new == NULL ||
+      ssl_ctx_free == NULL || ssl_ctx_use_chain == NULL ||
+      ssl_ctx_use_key == NULL || ssl_ctx_check_key == NULL ||
+      ssl_ctx_certificate == NULL || ssl_ctx_password_cb == NULL ||
+      x509_not_before == NULL || x509_not_after == NULL ||
+      x509_cmp_time == NULL) {
+    dlclose(library);
+    return;
+  }
+  tls_library = library;
+}
+
 static void load_crypto(void) {
   void *library = dlopen("libcrypto.so.3", RTLD_NOW | RTLD_LOCAL);
   if (library == NULL) return;
@@ -56,7 +123,7 @@ enum { JOB_FILE = 1, JOB_TLS = 2 };
 enum {
   CAPTURE_OK = 0, CAPTURE_UNSAFE = 1, CAPTURE_CHANGED = 2,
   CAPTURE_TOO_LARGE = 3, CAPTURE_IO = 4, CAPTURE_CANCELLED = 5,
-  CAPTURE_CRYPTO = 6
+  CAPTURE_CRYPTO = 6, CAPTURE_TLS_INVALID = 7
 };
 
 typedef struct {
@@ -226,6 +293,29 @@ static int write_private_bytes(
   return status;
 }
 
+static int validate_tls_pair(const char *cert_path, const char *key_path) {
+  pthread_once(&tls_once, load_tls);
+  if (tls_library == NULL) return CAPTURE_CRYPTO;
+  void *ctx = ssl_ctx_new(tls_server_method());
+  if (ctx == NULL) return CAPTURE_TLS_INVALID;
+  ssl_ctx_password_cb(ctx, deny_key_password);
+  int valid = ssl_ctx_use_chain(ctx, cert_path) == 1 &&
+    ssl_ctx_use_key(ctx, key_path, 1) == 1 &&
+    ssl_ctx_check_key(ctx) == 1;
+  if (valid) {
+    const void *certificate = ssl_ctx_certificate(ctx);
+    const void *not_before = certificate == NULL ? NULL :
+      x509_not_before(certificate);
+    const void *not_after = certificate == NULL ? NULL :
+      x509_not_after(certificate);
+    valid = not_before != NULL && not_after != NULL &&
+      x509_cmp_time(not_before) < 0 &&
+      x509_cmp_time(not_after) > 0;
+  }
+  ssl_ctx_free(ctx);
+  return valid ? CAPTURE_OK : CAPTURE_TLS_INVALID;
+}
+
 static int materialize_tls(capture_worker *worker) {
   char directory[] = "/tmp/moonbit-mqtt-tls-XXXXXX";
   if (mkdtemp(directory) == NULL) return CAPTURE_IO;
@@ -237,6 +327,10 @@ static int materialize_tls(capture_worker *worker) {
   );
   if (status == CAPTURE_OK) {
     status = write_private_bytes(worker, key_path, worker->key, worker->key_length);
+  }
+  if (status == CAPTURE_OK && cancelled(worker)) status = CAPTURE_CANCELLED;
+  if (status == CAPTURE_OK) {
+    status = validate_tls_pair(cert_path, key_path);
   }
   if (status == CAPTURE_OK && cancelled(worker)) status = CAPTURE_CANCELLED;
   if (status != CAPTURE_OK) {
