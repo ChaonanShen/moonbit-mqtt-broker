@@ -7,27 +7,45 @@ async fn run_ticker(
   bus? : EventBus,
   observation_interval_ms? : Int,
   management_maintenance? : Bool = false,
+  generation? : GenerationHandle,
 ) -> Unit {
   let keep_alive_interval = config.keep_alive_check_interval_ms()
   let auth_interval = config.auth_poll_interval_ms()
-  let interval = if keep_alive_interval < auth_interval {
+  let mut metrics_delay = config.system_metrics_interval_ms()
+  let mut observation_delay = observation_interval_ms
+  let mut observed_epoch = -1L
+  if generation is Some(handle) {
+    let current = handle.active()
+    let hot = current.effective.hot()
+    metrics_delay = hot.system_metrics_interval_ms
+    observation_delay = observation_interval_ms.map(_ => {
+      hot.management_snapshot_interval_ms
+    })
+    observed_epoch = current.config_epoch()
+  }
+  let mut interval = if keep_alive_interval < auth_interval {
     keep_alive_interval
   } else {
     auth_interval
   }
-  let interval = match observation_interval_ms {
-    Some(value) if value > 0 && value < interval => value
-    _ => interval
+  if observation_delay is Some(value) && value > 0 && value < interval {
+    interval = value
   }
-  let interval = if management_maintenance && interval > 20 {
-    20
-  } else {
-    interval
+  if generation is Some(_) && interval > 20 {
+    interval = 20
   }
-  let interval = if strict is Some(_) && interval > 2 { 2 } else { interval }
+  if generation is Some(_) && metrics_delay < interval {
+    interval = metrics_delay
+  }
+  if management_maintenance && interval > 20 {
+    interval = 20
+  }
+  if strict is Some(_) && interval > 2 {
+    interval = 2
+  }
   let first_mono = @budget.monotonic_ms()
   let mut next_maintenance_at = first_mono + 20L
-  let mut next_observation_at : Int64? = match observation_interval_ms {
+  let mut next_observation_at : Int64? = match observation_delay {
     Some(value) if value > 0 &&
       first_mono >= 0L &&
       first_mono <= 9223372036854775807L - value.to_int64() =>
@@ -37,11 +55,42 @@ async fn run_ticker(
   let started_at = @async.now()
   let mut next_deadlines_at = started_at + keep_alive_interval.to_int64()
   let mut next_auth_poll_at = started_at + auth_interval.to_int64()
-  let mut next_metrics_at = started_at +
-    config.system_metrics_interval_ms().to_int64()
+  let mut next_metrics_at = started_at + metrics_delay.to_int64()
   for ;; {
     @async.sleep(interval)
     let now_ms = @async.now()
+    if generation is Some(handle) {
+      let current = handle.active()
+      if current.config_epoch() != observed_epoch {
+        observed_epoch = current.config_epoch()
+        let hot = current.effective.hot()
+        metrics_delay = hot.system_metrics_interval_ms
+        observation_delay = observation_interval_ms.map(_ => {
+          hot.management_snapshot_interval_ms
+        })
+        next_metrics_at = current.activated_wall_ms() + metrics_delay.to_int64()
+        next_observation_at = observation_delay.map(value => {
+          current.activated_monotonic_ms() + value.to_int64()
+        })
+        interval = if keep_alive_interval < auth_interval {
+          keep_alive_interval
+        } else {
+          auth_interval
+        }
+        if interval > 20 {
+          interval = 20
+        }
+        if metrics_delay < interval {
+          interval = metrics_delay
+        }
+        if observation_delay is Some(value) && value < interval {
+          interval = value
+        }
+        if strict is Some(_) && interval > 2 {
+          interval = 2
+        }
+      }
+    }
     if strict is Some(runtime) && runtime.coordinator().collecting_due() {
       match bus {
         Some(active) => active.post_wal_flush()
@@ -85,7 +134,7 @@ async fn run_ticker(
             _ => return
           }
       }
-      next_metrics_at = now_ms + config.system_metrics_interval_ms().to_int64()
+      next_metrics_at = now_ms + metrics_delay.to_int64()
     }
     if management_maintenance {
       let current_mono = @budget.monotonic_ms()
@@ -102,12 +151,12 @@ async fn run_ticker(
         if bus is Some(active) {
           active.post_observation()
         }
-        let observation_delay = observation_interval_ms.unwrap().to_int64()
+        let next_delay = observation_delay.unwrap().to_int64()
         next_observation_at = if current_mono < 0L ||
-          current_mono > 9223372036854775807L - observation_delay {
+          current_mono > 9223372036854775807L - next_delay {
           None
         } else {
-          Some(current_mono + observation_delay)
+          Some(current_mono + next_delay)
         }
       }
     }
@@ -357,6 +406,7 @@ pub async fn serve_listeners(
           bus~,
           observation_interval_ms?,
           management_maintenance=maintenance,
+          generation?,
         )
       }
       let management_task = match management {

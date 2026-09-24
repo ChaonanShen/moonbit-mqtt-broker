@@ -126,6 +126,13 @@ pub fn RouterDriver::activate_prepared_reload(
     reload_log_level(hot.log_level),
     reload_log_format(hot.log_format),
   )
+  if self.management is Some(active) &&
+    !active.cache.update_reload_max_age(
+      hot.management_snapshot_interval_ms,
+      hot.management_snapshot_max_age_ms,
+    ) {
+    abort("validated management timing failed to publish")
+  }
   let retired = match handle.publish(prepared, expected_epoch) {
     Some(value) => value
     None => abort("validated config generation failed to publish")

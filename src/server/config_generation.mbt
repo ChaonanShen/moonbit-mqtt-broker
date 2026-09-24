@@ -5,6 +5,8 @@
 pub struct ConfigGeneration {
   config_epoch : Int64
   policy_epoch : Int64
+  activated_wall_ms : Int64
+  activated_monotonic_ms : Int64
   bundle : @bundle.CapturedBundle
   effective : @bundle.ReloadEffectiveCandidate
   security : @security.SecurityPolicy
@@ -24,6 +26,8 @@ pub fn ConfigGeneration::initial(
   {
     config_epoch: 0L,
     policy_epoch,
+    activated_wall_ms: @async.now(),
+    activated_monotonic_ms: @budget.monotonic_ms(),
     bundle,
     effective,
     security,
@@ -41,6 +45,18 @@ pub fn ConfigGeneration::config_epoch(self : ConfigGeneration) -> Int64 {
 ///|
 pub fn ConfigGeneration::policy_epoch(self : ConfigGeneration) -> Int64 {
   self.policy_epoch
+}
+
+///|
+pub fn ConfigGeneration::activated_wall_ms(self : ConfigGeneration) -> Int64 {
+  self.activated_wall_ms
+}
+
+///|
+pub fn ConfigGeneration::activated_monotonic_ms(
+  self : ConfigGeneration,
+) -> Int64 {
+  self.activated_monotonic_ms
 }
 
 ///|
@@ -94,6 +110,8 @@ pub fn GenerationHandle::publish(
   let next : ConfigGeneration = {
     config_epoch: self.active.config_epoch + 1L,
     policy_epoch,
+    activated_wall_ms: @async.now(),
+    activated_monotonic_ms: @budget.monotonic_ms(),
     bundle: prepared.bundle,
     effective: prepared.effective,
     security: prepared.security,
