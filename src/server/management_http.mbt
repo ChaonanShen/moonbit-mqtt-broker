@@ -356,6 +356,7 @@ pub fn ManagementHttp::respond(
       operations_enabled=self.config.operations_enabled(),
       details_available=self.availability is Some(value) &&
         value.details_available,
+      reload_enabled=self.reload_generation is Some(_),
     )
   }
   match body {

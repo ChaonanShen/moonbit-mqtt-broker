@@ -165,6 +165,7 @@ pub fn ObservationCache::status_body(
   details_enabled? : Bool = false,
   operations_enabled? : Bool = false,
   details_available? : Bool = false,
+  reload_enabled? : Bool = false,
 ) -> Result[Bytes, CacheError] {
   let entry = match self.readable(now_monotonic_ms) {
     Ok(value) => value
@@ -179,6 +180,7 @@ pub fn ObservationCache::status_body(
     details_enabled~,
     operations_enabled~,
     details_available~,
+    reload_enabled~,
   )
   if body.length() > self.config.max_response_bytes() {
     return Err(ResponseTooLarge)
