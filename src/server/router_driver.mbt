@@ -24,6 +24,7 @@ pub struct RouterDriver {
   priv material_provider : TlsMaterialProvider?
   priv mut retired_generations : Array[ConfigGeneration]
   priv mut reload_reconciler : @router.PolicyReconciler?
+  priv mut reload_connection_slot : Int?
   priv mut reload_issue : @router.PolicyIssue?
   priv mut strict_reload_pending : StrictReloadPending?
   priv reload_service : ReloadService?
@@ -116,6 +117,7 @@ pub fn RouterDriver::new(
     material_provider,
     retired_generations: [],
     reload_reconciler: None,
+    reload_connection_slot: None,
     reload_issue: None,
     strict_reload_pending: None,
     reload_service,

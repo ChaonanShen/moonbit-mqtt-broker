@@ -61,7 +61,8 @@ pub fn RouterDriver::activate_prepared_reload(
     return ReloadActivationStale
   }
   if self.runtime.broker_state().policy_action_scope_active() ||
-    self.reload_reconciler is Some(_) {
+    self.reload_reconciler is Some(_) ||
+    self.reload_connection_slot is Some(_) {
     return ReloadActivationBusy
   }
   let scan = if prepared.security_changed {
@@ -144,6 +145,11 @@ pub fn RouterDriver::activate_prepared_reload(
     retired.release()
   }
   self.reload_reconciler = scan
+  self.reload_connection_slot = if prepared.security_changed {
+    Some(0)
+  } else {
+    None
+  }
   if self.strict is Some(_) {
     self.end_reload_barrier()
   }
@@ -152,7 +158,60 @@ pub fn RouterDriver::activate_prepared_reload(
 }
 
 ///|
+/// Visit one core session slot per driver turn. Every active MQTT connection
+/// has a Session, including clean Sessions; this index is available without
+/// management details. A changed credential is closed even while idle.
+fn RouterDriver::advance_reload_connections(self : RouterDriver) -> Unit {
+  let slot = match self.reload_connection_slot {
+    Some(value) => value
+    None => return
+  }
+  let page = match self.runtime.broker_state().policy_session_page(slot, 1) {
+    Some(value) => value
+    None => abort("reload policy session index unavailable")
+  }
+  if page.scanned == 0 {
+    self.reload_connection_slot = None
+    return
+  }
+  self.reload_connection_slot = Some(page.next_slot)
+  if page.keys.is_empty() {
+    return
+  }
+  let client_id = match @session.ClientId::new(page.keys[0]) {
+    Ok(value) => value
+    Err(_) => abort("invalid core session client id")
+  }
+  let connection_id = match self.runtime.active_connection(client_id) {
+    Some(value) => value
+    None => return
+  }
+  if self.runtime.connection_credential_current(connection_id) {
+    return
+  }
+  if self.strict is Some(_) {
+    if self.sinks.get(connection_id) is Some(sink) {
+      sink.try_close(PolicyRevoked)
+    }
+  } else {
+    self.dispatch(
+      self.runtime.apply(
+        TransportClosed({
+          connection_id,
+          reason: PolicyRevoked,
+          observed_at_ms: @async.now(),
+        }),
+      ),
+    )
+  }
+}
+
+///|
 fn RouterDriver::advance_reload_reconciliation(self : RouterDriver) -> Unit {
+  self.advance_reload_connections()
+  if self.reload_connection_slot is Some(_) {
+    return
+  }
   let scan = match self.reload_reconciler {
     Some(value) => value
     None => return
@@ -283,7 +342,9 @@ fn RouterDriver::handle_reload_control(
         Some(handle) if handle.active().config_epoch() == expected_epoch =>
           if self.strict_fenced {
             ReloadDriverRejected("durability_fenced")
-          } else if self.reload_reconciler is Some(_) ||
+          } else if self.reload_connection_slot is Some(_) ||
+            !self.retired_generations.is_empty() ||
+            self.reload_reconciler is Some(_) ||
             self.strict_reload_pending is Some(_) ||
             (
               self.strict is Some(coordinator) &&
@@ -331,7 +392,8 @@ fn RouterDriver::stage_strict_reload(
   if !candidate.security_changed ||
     active.config_epoch() != expected_epoch ||
     self.strict_reload_pending is Some(_) ||
-    self.reload_reconciler is Some(_) {
+    self.reload_reconciler is Some(_) ||
+    self.reload_connection_slot is Some(_) {
     ignore(reply.try_put(ReloadDriverRejected("stale_generation"))) catch {
       _ => ()
     }
