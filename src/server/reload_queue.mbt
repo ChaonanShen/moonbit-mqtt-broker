@@ -157,3 +157,26 @@ pub fn ReloadRequests::finish_active(
   })
   self.active
 }
+
+///|
+/// Roll back an admission before it starts when its operation record could not
+/// be reserved. No active worker or native token may exist at this point.
+pub fn ReloadRequests::cancel_unstarted(
+  self : ReloadRequests,
+  id : Int64,
+) -> Bool {
+  match self.waiting {
+    Some(value) if value.id == id => {
+      self.waiting = None
+      return true
+    }
+    _ => ()
+  }
+  match self.active {
+    Some(value) if value.id == id => {
+      self.active = None
+      return true
+    }
+    _ => false
+  }
+}

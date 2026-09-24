@@ -219,6 +219,24 @@ pub async fn serve_listeners(
   if management is Some(active) && active.command_mailbox is Some(mailbox) {
     bus.attach_management_commands(mailbox)
   }
+  let reload_service : ReloadService? = if reload is Some(_) {
+    Some(
+      ReloadService::new(
+        management,
+        initial_state.resource_ledger(),
+        if strict is Some(_) {
+          "strict"
+        } else if persistence is Some(_) {
+          "snapshot"
+        } else {
+          "off"
+        },
+      ),
+    )
+  } else {
+    None
+  }
+  defer (if reload_service is Some(value) { value.close() })
   let auth_runtime = create_auth_executor(
     config,
     security,
@@ -264,6 +282,7 @@ pub async fn serve_listeners(
         material_provider?,
         reload_reconcile_items~,
         reload_reconcile_bytes~,
+        reload_service?,
       )
     None =>
       RouterDriver::new(
@@ -277,6 +296,7 @@ pub async fn serve_listeners(
         material_provider?,
         reload_reconcile_items~,
         reload_reconcile_bytes~,
+        reload_service?,
       )
   }
   if management is Some(active) && active.config.details_enabled() {
@@ -312,7 +332,14 @@ pub async fn serve_listeners(
       if reload is Some(startup) && generation is Some(handle) {
         group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
           run_reload_signals(
-            startup, bus, handle, initial_state, strict, logger, shutdown_requested,
+            startup,
+            bus,
+            handle,
+            initial_state,
+            strict,
+            logger,
+            shutdown_requested,
+            reload_service.unwrap(),
           )
         }
       }
