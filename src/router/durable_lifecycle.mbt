@@ -42,7 +42,13 @@ pub fn BrokerState::prepare_durable_lifecycle(
   if generation < 1L {
     return Err(InvariantViolation("invalid durable lifecycle generation"))
   }
-  let scratch = match self.reserve_scratch(old.state_bytes() * 2L + 128L) {
+  let scratch_bytes = match kind {
+    Delete =>
+      self.subscriptions.subscription_count_for(client_id).to_int64() * 64L +
+      128L
+    _ => old.state_bytes() * 2L + 128L
+  }
+  let scratch = match self.reserve_scratch(scratch_bytes) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
