@@ -83,6 +83,27 @@ pub fn session_etag(
 }
 
 ///|
+/// A config ETag is boot-scoped and changes only on an effective generation
+/// publication. Epoch zero is the validated startup generation.
+pub fn config_etag(boot_id : String, config_epoch : Int64) -> String {
+  "\"" + boot_id + ":g:" + config_epoch.to_string() + "\""
+}
+
+///|
+fn canonical_generation(value : String) -> Bool {
+  if value == "" || value.length() > 19 {
+    return false
+  }
+  for byte in value {
+    if byte.to_int() < 48 || byte.to_int() > 57 {
+      return false
+    }
+  }
+  let parsed = @string.parse_int64(value) catch { _ => return false }
+  parsed >= 0L && parsed.to_string() == value
+}
+
+///|
 fn canonical_positive_id(value : String) -> Bool {
   if value == "" || value == "0" || value.length() > 19 {
     return false

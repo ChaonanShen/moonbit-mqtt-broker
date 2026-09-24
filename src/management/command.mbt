@@ -59,7 +59,7 @@ pub fn parse_strong_etag(
   value : String,
   expected_kind : String,
 ) -> Result[StrongEtag, CommandParseError] {
-  if value.length() < (if expected_kind == "c" { 37 } else { 39 }) ||
+  if value.length() < (if expected_kind == "s" { 39 } else { 37 }) ||
     value.length() > 100 ||
     value[0].to_int() != 34 ||
     value[value.length() - 1].to_int() != 34 {
@@ -67,11 +67,16 @@ pub fn parse_strong_etag(
   }
   let inner = value[1:value.length() - 1].to_owned()
   let parts = inner.split(":").to_array()
-  let expected_parts = if expected_kind == "c" { 3 } else { 4 }
+  let expected_parts = if expected_kind == "s" { 4 } else { 3 }
   if parts.length() != expected_parts ||
     !valid_boot_hex(parts[0].to_owned()) ||
     parts[1] != expected_kind ||
-    !canonical_positive_id(parts[2].to_owned()) {
+    !(if expected_kind == "g" {
+      canonical_generation(parts[2].to_owned())
+    } else {
+      canonical_positive_id(parts[2].to_owned())
+    }) ||
+    !(expected_kind == "c" || expected_kind == "s" || expected_kind == "g") {
     return Err(InvalidIfMatch)
   }
   let version = if expected_kind == "s" {
@@ -126,6 +131,8 @@ pub fn parse_command(
     parts[2] == "sessions" &&
     canonical_positive_id(parts[3].to_owned()) {
     (DeleteSession, parts[3].to_owned(), "s")
+  } else if method_name == "POST" && path == "/v1/config/reload" {
+    (Reload, "", "g")
   } else {
     return Err(InvalidCommandPath)
   }
@@ -133,6 +140,7 @@ pub fn parse_command(
     Ok(value) => value
     Err(error) => return Err(error)
   }
+  let target = if kind == Reload { etag.target.to_string() } else { target }
   if etag.target.to_string() != target {
     return Err(InvalidIfMatch)
   }

@@ -53,3 +53,25 @@ test "single-digit connection etag is valid and canonical" {
     is Ok(_),
   )
 }
+
+///|
+test "config reload uses boot-scoped canonical generation zero" {
+  let boot = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  let tag = config_etag(boot, 0L)
+  assert_eq(tag, "\"" + boot + ":g:0\"")
+  assert_eq(parse_strong_etag(tag, "g").unwrap().target, 0L)
+  let spec = parse_command(
+    "POST", "/v1/config/reload", tag, "Key_0123456789abc", "admin",
+  ).unwrap()
+  assert_eq(spec.kind, Reload)
+  assert_eq(spec.target, "0")
+  for invalid in ["\"" + boot + ":g:00\"", "\"" + boot + ":g:-1\"", "W/" + tag] {
+    assert_true(parse_strong_etag(invalid, "g") is Err(_))
+  }
+  assert_true(
+    parse_command(
+      "POST", "/v1/config/reload/extra", tag, "Key_0123456789abc", "admin",
+    )
+    is Err(InvalidCommandPath),
+  )
+}
