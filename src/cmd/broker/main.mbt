@@ -259,6 +259,7 @@ async fn run_main() -> Unit {
     return
   }
   let mut config_path : String? = None
+  let mut loaded_config_text : String? = None
   let mut check_config = false
   let mut print_effective_config = false
   let cli_args : Array[String] = []
@@ -312,6 +313,7 @@ async fn run_main() -> Unit {
       let contents = bytes.text() catch {
         _ => raise CliError("--config must be UTF-8")
       }
+      loaded_config_text = Some(contents)
       @config.parse_config_file(contents) catch {
         @config.ConfigFileError(message) =>
           raise CliError("configuration file: " + message)
@@ -1422,67 +1424,118 @@ async fn run_main() -> Unit {
   if !allow_anonymous && password_file is None {
     raise CliError("--allow-anonymous false requires --password-file")
   }
-  let passwords = match password_file {
-    None => None
-    Some(path) => {
-      let kind = @fs.kind(path, follow_symlink=false) catch {
-        _ => raise CliError("--password-file must name a readable regular file")
+  let startup_sources : (
+    @bundle.CapturedBundle,
+    @bundle.ReloadEffectiveCandidate,
+    Bytes,
+  )? = if reload_enabled || reload_manifest_file != "" {
+    let selected_config = match config_path {
+      Some(path) if path.has_prefix("/") => path
+      _ => raise CliError("reload manifest requires an absolute --config path")
+    }
+    if !reload_manifest_file.has_prefix("/") {
+      raise CliError("reload manifest path must be absolute")
+    }
+    let bundle = @bundle.capture_bundle(
+      reload_manifest_file,
+      max_source_bytes=reload_max_source_bytes,
+    ) catch {
+      _ => raise CliError("reload bundle capture failed")
+    }
+    let captured = match bundle.material_bytes("config") {
+      Some(value) => value
+      None => raise CliError("reload bundle lacks config")
+    }
+    let captured_text = @utf8.decode(captured) catch {
+      _ => raise CliError("reload config must be UTF-8")
+    }
+    if Some(captured_text) != loaded_config_text {
+      raise CliError("reload config changed during startup")
+    }
+    let candidate = bundle.evaluate(selected_config, cli_args) catch {
+      _ => raise CliError("reload bundle does not match effective config")
+    }
+    let hot = candidate.hot()
+    if hot.allow_anonymous != allow_anonymous ||
+      hot.password_file != password_file ||
+      hot.acl_file != acl_file {
+      raise CliError("reload security sources differ from startup config")
+    }
+    let fingerprint = bundle.policy_fingerprint(candidate) catch {
+      _ => raise CliError("reload policy fingerprint unavailable")
+    }
+    Some((bundle, candidate, fingerprint))
+  } else {
+    None
+  }
+  let security = match startup_sources {
+    Some((bundle, candidate, _)) =>
+      bundle.prepare_security_isolated(candidate) catch {
+        _ => raise CliError("reload security validation failed")
       }
-      if kind != @fs.Regular {
-        raise CliError("--password-file must name a readable regular file")
+    None => {
+      let passwords = match password_file {
+        None => None
+        Some(path) => {
+          let kind = @fs.kind(path, follow_symlink=false) catch {
+            _ =>
+              raise CliError(
+                "--password-file must name a readable regular file",
+              )
+          }
+          if kind != @fs.Regular {
+            raise CliError("--password-file must name a readable regular file")
+          }
+          let bytes = @fs.read_file(path) catch {
+            _ => raise CliError("failed to read --password-file")
+          }
+          if bytes.binary().length() > 1048576 {
+            raise CliError("--password-file exceeds 1048576 bytes")
+          }
+          let contents = bytes.text() catch {
+            _ => raise CliError("--password-file must be UTF-8")
+          }
+          Some(
+            match @security.PasswordDatabase::parse(contents) {
+              Ok(value) => value
+              Err(@security.PasswordFileError::Argon2Unavailable) =>
+                raise CliError(
+                  "Argon2id authentication requires libargon2.so.1: install libargon2-1 on Ubuntu/Debian or use the project Docker image",
+                )
+              Err(_) => raise CliError("invalid --password-file")
+            },
+          )
+        }
       }
-      let bytes = @fs.read_file(path) catch {
-        _ => raise CliError("failed to read --password-file")
+      let acl = match acl_file {
+        None => None
+        Some(path) => {
+          let kind = @fs.kind(path, follow_symlink=false) catch {
+            _ => raise CliError("--acl-file must name a readable regular file")
+          }
+          if kind != @fs.Regular {
+            raise CliError("--acl-file must name a readable regular file")
+          }
+          let bytes = @fs.read_file(path) catch {
+            _ => raise CliError("failed to read --acl-file")
+          }
+          if bytes.binary().length() > 1048576 {
+            raise CliError("--acl-file exceeds 1048576 bytes")
+          }
+          let contents = bytes.text() catch {
+            _ => raise CliError("--acl-file must be UTF-8")
+          }
+          Some(
+            match @security.AclPolicy::parse(contents) {
+              Ok(value) => value
+              Err(_) => raise CliError("invalid --acl-file")
+            },
+          )
+        }
       }
-      if bytes.binary().length() > 1048576 {
-        raise CliError("--password-file exceeds 1048576 bytes")
-      }
-      let contents = bytes.text() catch {
-        _ => raise CliError("--password-file must be UTF-8")
-      }
-      Some(
-        match @security.PasswordDatabase::parse(contents) {
-          Ok(value) => value
-          Err(@security.PasswordFileError::Argon2Unavailable) =>
-            raise CliError(
-              "Argon2id authentication requires libargon2.so.1: install libargon2-1 on Ubuntu/Debian or use the project Docker image",
-            )
-          Err(_) => raise CliError("invalid --password-file")
-        },
-      )
+      @security.SecurityPolicy::new(allow_anonymous~, passwords?, acl?)
     }
   }
-  let acl = match acl_file {
-    None => None
-    Some(path) => {
-      let kind = @fs.kind(path, follow_symlink=false) catch {
-        _ => raise CliError("--acl-file must name a readable regular file")
-      }
-      if kind != @fs.Regular {
-        raise CliError("--acl-file must name a readable regular file")
-      }
-      let bytes = @fs.read_file(path) catch {
-        _ => raise CliError("failed to read --acl-file")
-      }
-      if bytes.binary().length() > 1048576 {
-        raise CliError("--acl-file exceeds 1048576 bytes")
-      }
-      let contents = bytes.text() catch {
-        _ => raise CliError("--acl-file must be UTF-8")
-      }
-      Some(
-        match @security.AclPolicy::parse(contents) {
-          Ok(value) => value
-          Err(_) => raise CliError("invalid --acl-file")
-        },
-      )
-    }
-  }
-  let security = @security.SecurityPolicy::new(
-    allow_anonymous~,
-    passwords?,
-    acl?,
-  )
   let logger = @observability.Logger::new(
     minimum_level=log_level,
     format=log_format,
