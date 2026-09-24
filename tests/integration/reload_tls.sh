@@ -3,6 +3,7 @@ set -euo pipefail
 ulimit -c 0
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
+RELOAD_EVIDENCE_DIR="${RELOAD_EVIDENCE_DIR:-$REPO_ROOT/.local/reload-integration/reload-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 moon build --target native >/dev/null
 if [[ ! -d tests/integration/node_modules/mqtt ]]; then
   npm ci --prefix tests/integration --ignore-scripts >/dev/null
@@ -16,11 +17,11 @@ cleanup() {
     kill -TERM "$broker_pid" 2>/dev/null || true
     wait "$broker_pid" 2>/dev/null || true
   fi
-  mkdir -p "${RELOAD_EVIDENCE_DIR:-.local/reload-integration}"
+  mkdir -p "$RELOAD_EVIDENCE_DIR"
   grep -E 'event=(broker_listening|reload_completed|reload_failed|shutdown_requested)' \
-    "$work/broker.log" >"${RELOAD_EVIDENCE_DIR:-.local/reload-integration}/tls-events.log" 2>/dev/null || true
+    "$work/broker.log" >"$RELOAD_EVIDENCE_DIR/tls-events.log" 2>/dev/null || true
   printf 'case=reload_tls\nexit_code=%s\n' "$rc" \
-    >"${RELOAD_EVIDENCE_DIR:-.local/reload-integration}/tls-summary.txt"
+    >"$RELOAD_EVIDENCE_DIR/tls-summary.txt"
   rm -rf -- "$work"
   exit "$rc"
 }
