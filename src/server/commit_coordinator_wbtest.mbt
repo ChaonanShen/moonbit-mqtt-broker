@@ -300,3 +300,125 @@ async test "policy transition is a standalone durable commit before publication"
     @fs.rmdir(path, recursive=true)
   }
 }
+
+///|
+async test "strict local cleanup commits before changing retained Session state" {
+  let path = "_build/server-policy-local-cleanup"
+  if @fs.exists(path) {
+    @fs.rmdir(path, recursive=true)
+  }
+  let broker_config = @router.BrokerConfig::new(4, 16, 4, max_sessions=4).unwrap()
+  let snapshot : @router.BrokerSnapshotV3 = {
+    version: 3,
+    sessions: [
+      {
+        client_id: "client-a",
+        owner_principal: "anonymous",
+        detached_at_ms: 0L,
+        next_packet_id: 1,
+        subscriptions: [{ filter: "private/#", qos: 1 }],
+        inbound_qos2: [],
+        inflight: [],
+        pending: [
+          { topic: "private/value", payload: b"x", qos: 1, retain: false },
+        ],
+      },
+    ],
+    retained: [],
+  }
+  let broker = @router.BrokerState::from_snapshot(broker_config, snapshot).unwrap()
+  broker.enable_policy_index().unwrap()
+  let acl = @security.AclPolicy::parse("").unwrap()
+  assert_true(broker.set_security_policy(@security.SecurityPolicy::new(acl~)))
+  let digest : Array[Byte] = []
+  for _ in 0..<32 {
+    digest.push(4)
+  }
+  let fingerprint = Bytes::from_array(digest)
+  let lock = @persistence.SnapshotStore::open(
+    @persistence.PersistenceConfig::new(path).unwrap(),
+  ).unwrap()
+  let store = @persistence.WalStore::bootstrap(lock, {
+    generation: 1L,
+    lsn: 0L,
+    identities: [{ client_id: "client-a", generation: 1L }],
+    policy: Some({ sequence: 1L, fingerprint, reconcile_pending: true }),
+    snapshot,
+  }).unwrap()
+  let writer = @persistence.WalWriter::new(store)
+  let coordinator = CommitCoordinator::new(
+    writer,
+    broker.resource_ledger(),
+    33554432L,
+    1048576,
+    1L,
+    0L,
+    broker~,
+  ).unwrap()
+  let client = @session.ClientId::new("client-a").unwrap()
+  let subscription = broker
+    .prepare_durable_reconcile(
+      client,
+      @router.DropSubscription("private/#"),
+      1L,
+    )
+    .unwrap()
+  assert_eq(coordinator.submit(PolicyReconcile(subscription), _ => []), Ok(1L))
+  assert_eq(broker.subscription_count(), 1)
+  @async.with_task_group() <| group => {
+    let task = group.spawn(() => writer.run(() => ()))
+    let mut first = false
+    for _ in 0..<1000 {
+      match coordinator.poll() {
+        CommitReleased(_, _, _) => {
+          first = true
+          break
+        }
+        CommitFencedResult(reason) => fail("policy cleanup fenced: " + reason)
+        NoCommitCompletion => @async.sleep(1)
+        _ => fail("unexpected cleanup completion")
+      }
+    }
+    assert_true(first)
+    assert_eq(broker.subscription_count(), 0)
+    let pending = broker
+      .prepare_durable_reconcile(
+        client,
+        @router.DropPendingHead("private/value", 1, 1),
+        1L,
+      )
+      .unwrap()
+    assert_eq(coordinator.submit(PolicyReconcile(pending), _ => []), Ok(2L))
+    assert_eq(broker.pending_qos1_count(), 1)
+    let mut second = false
+    for _ in 0..<1000 {
+      match coordinator.poll() {
+        CommitReleased(_, _, _) => {
+          second = true
+          break
+        }
+        CommitFencedResult(reason) => fail("pending cleanup fenced: " + reason)
+        NoCommitCompletion => @async.sleep(1)
+        _ => fail("unexpected cleanup completion")
+      }
+    }
+    assert_true(second)
+    assert_eq(broker.pending_qos1_count(), 0)
+    assert_eq(broker.check_invariants(), Ok(()))
+    writer.close_requests()
+    task.wait()
+    writer.close_store()
+  }
+  let next = @persistence.SnapshotStore::open(
+    @persistence.PersistenceConfig::new(path).unwrap(),
+  ).unwrap()
+  let limits = @persistence.SnapshotDecodeLimits::new(broker_config, 1024).unwrap()
+  let (recovered, state) = @persistence.WalStore::recover_state(
+    next, broker_config, limits,
+  ).unwrap()
+  assert_eq(state.state().export_snapshot(), broker.export_snapshot())
+  recovered.close()
+  if @fs.exists(path) {
+    @fs.rmdir(path, recursive=true)
+  }
+}
