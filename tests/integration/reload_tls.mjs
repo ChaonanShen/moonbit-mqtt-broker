@@ -122,6 +122,7 @@ for (let attempt = 0; attempt < 500; attempt++) {
   await sleep(10)
 }
 if (!rotated) throw new Error('new TLS certificate was not published')
+const nextFinger = await fingerprint(nextCA)
 const nextTls = await connect(
   'mqtts://localhost:' + tlsPort, nextCA, 'reload-new-tls'
 )
@@ -129,12 +130,53 @@ const nextWss = await connect(
   'wss://localhost:' + wssPort + '/mqtt', nextCA, 'reload-new-wss'
 )
 await publish(old, 'safe/old-connection')
+const thirdCert = certPath + '.third'
+const thirdKey = keyPath + '.third'
+execFileSync('openssl', [
+  'req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-nodes', '-days', '1',
+  '-subj', '/CN=localhost',
+  '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1',
+  '-keyout', thirdKey, '-out', thirdCert
+], { stdio: 'ignore' })
+fs.chmodSync(thirdKey, 0o600)
+fs.renameSync(thirdKey, keyPath)
+fs.renameSync(thirdCert, certPath)
+manifest()
+const thirdCA = fs.readFileSync(certPath)
+process.kill(Number(pid), 'SIGHUP')
+let thirdReady = false
+for (let attempt = 0; attempt < 500; attempt++) {
+  try {
+    const current = await fingerprint(thirdCA)
+    if (current !== originalFinger && current !== nextFinger) {
+      thirdReady = true
+      break
+    }
+  } catch {}
+  await sleep(10)
+}
+if (!thirdReady) throw new Error('second TLS rotation was not published')
+const thirdTls = await connect(
+  'mqtts://localhost:' + tlsPort, thirdCA, 'reload-third-tls'
+)
+const thirdWss = await connect(
+  'wss://localhost:' + wssPort + '/mqtt', thirdCA, 'reload-third-wss'
+)
+const heldDirectories = fs.readdirSync(root).filter(name =>
+  name.startsWith('moonbit-mqtt-tls-'))
+if (heldDirectories.length < 5) {
+  throw new Error('retired TLS material was reclaimed while leased')
+}
+await publish(old, 'safe/old-after-second-rotation')
+await publish(nextTls, 'safe/first-after-second-rotation')
 await end(nextTls)
 await end(nextWss)
+await end(thirdTls)
+await end(thirdWss)
 fs.rmSync(certPath)
 fs.rmSync(keyPath)
 const captured = await connect(
-  'mqtts://localhost:' + tlsPort, nextCA, 'reload-captured-tls'
+  'mqtts://localhost:' + tlsPort, thirdCA, 'reload-captured-tls'
 )
 await end(captured)
 await end(old)
@@ -145,4 +187,4 @@ for (let attempt = 0; attempt < 500; attempt++) {
   if (attempt === 499) throw new Error('old TLS lease did not retire')
   await sleep(10)
 }
-console.log('atomic TLS failure and TLS/WSS captured material rotation passed')
+console.log('atomic TLS failure and two TLS/WSS rotations with old leases passed')
