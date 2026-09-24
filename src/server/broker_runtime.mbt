@@ -39,6 +39,9 @@ pub fn BrokerRuntime::new(
   admission? : AdmissionState,
   async_auth? : Bool = false,
 ) -> BrokerRuntime {
+  if !initial_state.set_security_policy(security) {
+    abort("initial security policy cannot enter active action scope")
+  }
   {
     config,
     will_tickets: Map([]),
@@ -109,6 +112,9 @@ pub fn BrokerRuntime::publish_security_generation(
     next_epoch != self.policy_epoch + 1L ||
     next.same_security(self.security) ||
     self.retired_security.length() >= 2 {
+    return false
+  }
+  if !self.broker_state.set_security_policy(next) {
     return false
   }
   if self.policy_references.get(self.policy_epoch).unwrap_or(0) > 0 {

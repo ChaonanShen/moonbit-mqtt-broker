@@ -5,6 +5,7 @@ pub struct BrokerState {
   priv mut promotion_cursor : Int
   priv resources : RouterResources
   config : BrokerConfig
+  priv mut security_policy : @security.SecurityPolicy?
   priv sessions : Map[@session.ClientId, @session.ClientSession]
   priv mut admin_sessions : AdminSessionIndex?
   priv subscriptions : SubscriptionIndex
@@ -58,6 +59,7 @@ pub fn BrokerState::new(
 ) -> BrokerState {
   {
     config,
+    security_policy: None,
     action_scope: false,
     action_leases: [],
     promotion_cursor: 0,
@@ -78,6 +80,19 @@ pub fn BrokerState::new(
 ///|
 pub fn BrokerState::config(self : BrokerState) -> BrokerConfig {
   self.config
+}
+
+///|
+/// A prepared generation is installed only outside a router action scope.
+pub fn BrokerState::set_security_policy(
+  self : BrokerState,
+  policy : @security.SecurityPolicy,
+) -> Bool {
+  if self.action_scope {
+    return false
+  }
+  self.security_policy = Some(policy)
+  true
 }
 
 ///|
@@ -392,6 +407,14 @@ fn BrokerState::delivery_candidates(
 ) -> Array[DeliveryCandidate] {
   let candidates : Array[DeliveryCandidate] = []
   for subscription in self.subscriptions.matches(input.topic) {
+    if self.security_policy is Some(policy) &&
+      self.session_owner(subscription.client_id) is Some(owner) &&
+      (
+        !policy.allows_principal(owner) ||
+        !policy.can_read_topic(owner, input.topic)
+      ) {
+      continue
+    }
     candidates.push({
       recipient: subscription.client_id,
       topic: input.topic,

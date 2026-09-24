@@ -189,3 +189,64 @@ test "missing persistent generation rejects publish without leaking reservations
   assert_eq(state.export_snapshot(), before)
   assert_eq(state.resource_ledger().occupied(), occupied)
 }
+
+///|
+test "current ACL excludes revoked destination before durable fanout" {
+  let config = BrokerConfig::new(4, 16, 4).unwrap()
+  let state = BrokerState::new(config)
+  let allowed = @session.ClientId::new("allowed").unwrap()
+  let denied = @session.ClientId::new("denied").unwrap()
+  for pair in [(allowed, "allowed"), (denied, "denied")] {
+    let (id, username) = pair
+    ignore(
+      state.apply(
+        CreateOwnedSessionWith({
+          client_id: id,
+          mode: @session.Persistent,
+          attached: true,
+          owner: @security.Principal::User(username),
+        }),
+      ),
+    )
+    ignore(
+      state.apply(
+        Subscribe({
+          client_id: id,
+          entries: [
+            {
+              filter: @topic.TopicFilter::new("data/#").unwrap(),
+              qos: @session.DeliveryQoS::QoS1,
+            },
+          ],
+        }),
+      ),
+    )
+  }
+  let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
+  let passwords = @security.PasswordDatabase::parse(
+    "allowed:" + encoded + "\ndenied:" + encoded,
+  ).unwrap()
+  let acl = @security.AclPolicy::parse("user allowed\ntopic read data/#\n").unwrap()
+  assert_true(
+    state.set_security_policy(
+      @security.SecurityPolicy::new(allow_anonymous=false, passwords~, acl~),
+    ),
+  )
+  let input : PublishInput = {
+    origin: Client(allowed),
+    topic: @topic.TopicName::new("data/value").unwrap(),
+    payload: b"data",
+    qos: @session.DeliveryQoS::QoS1,
+    retain: false,
+  }
+  let plan = state
+    .prepare_durable_publish(input, Map([(allowed, 1L), (denied, 2L)]))
+    .unwrap()
+  assert_eq(plan.delta().session_puts.length(), 1)
+  assert_eq(plan.delta().session_puts[0].session.client_id, "allowed")
+  plan.cancel()
+  ignore(state.apply(Publish(input)))
+  assert_eq(state.session_inflight_count(allowed), Some(1))
+  assert_eq(state.session_inflight_count(denied), Some(0))
+  assert_eq(state.check_invariants(), Ok(()))
+}
