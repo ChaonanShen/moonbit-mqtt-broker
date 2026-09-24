@@ -1847,6 +1847,9 @@ async fn run_main() -> Unit {
     return
   }
   if reload_enabled {
+    if once {
+      raise CliError("--once cannot be combined with reload.enabled")
+    }
     if config_path is None ||
       reload_manifest_file == "" ||
       !reload_manifest_file.has_prefix("/") {
@@ -1872,9 +1875,6 @@ async fn run_main() -> Unit {
   if check_config {
     println("configuration valid")
     return
-  }
-  if reload_enabled {
-    raise CliError("reload coordinator is not yet available")
   }
   let reload_tls : (
     @bundle.CapturedBundle,
