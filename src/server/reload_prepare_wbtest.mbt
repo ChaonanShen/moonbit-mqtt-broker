@@ -54,6 +54,32 @@ async test "reload prepare distinguishes cosmetic change, hot change, and restar
     .pool(Infrastructure, limits.get("max_managed_bytes_total"))
     .unwrap()
   let baseline = ledger.occupied()
+  let small_ledger = @budget.Ledger::new(1048576L, 0L).unwrap()
+  let small_pool = small_ledger.pool(Infrastructure, 1048576L).unwrap()
+  let denied_before_capture = try {
+    ignore(
+      prepare_reload_candidate(
+        root + "/missing-manifest.toml",
+        config_path,
+        [],
+        initial,
+        effective,
+        @security.SecurityPolicy::permissive(),
+        small_pool,
+        root,
+        30000,
+        16777216,
+        67108864L,
+      ),
+    )
+    false
+  } catch {
+    ResourceStartupFailure(message) =>
+      message == "reload generation budget unavailable"
+    _ => false
+  }
+  assert_true(denied_before_capture)
+  assert_eq(small_ledger.occupied(), 0L)
   write_reload_prepare_fixture(
     config_path,
     manifest_path,
