@@ -199,3 +199,104 @@ async test "policy capability upgrade blocks business until durable writer compl
     @fs.rmdir(path, recursive=true)
   }
 }
+
+///|
+async test "policy transition is a standalone durable commit before publication" {
+  let path = "_build/server-policy-transition"
+  if @fs.exists(path) {
+    @fs.rmdir(path, recursive=true)
+  }
+  let broker_config = @router.BrokerConfig::new(4, 16, 4).unwrap()
+  let broker = @router.BrokerState::new(broker_config)
+  let lock = @persistence.SnapshotStore::open(
+    @persistence.PersistenceConfig::new(path).unwrap(),
+  ).unwrap()
+  let store = @persistence.WalStore::bootstrap(lock, {
+    generation: 1L,
+    lsn: 0L,
+    identities: [],
+    policy: None,
+    snapshot: { version: 3, sessions: [], retained: [] },
+  }).unwrap()
+  assert_eq(store.require_policy_capability(), Ok(()))
+  let writer = @persistence.WalWriter::new(store)
+  let coordinator = CommitCoordinator::new(
+    writer,
+    broker.resource_ledger(),
+    33554432L,
+    1048576,
+    1L,
+    0L,
+    broker~,
+  ).unwrap()
+  let digest : Array[Byte] = []
+  for _ in 0..<32 {
+    digest.push(6)
+  }
+  let fingerprint = Bytes::from_array(digest)
+  let mut published = false
+  assert_eq(
+    coordinator.submit(
+      PolicyRecord({
+        transition: @persistence.PolicyActivated,
+        sequence: 1L,
+        fingerprint,
+      }),
+      _ => {
+        published = true
+        []
+      },
+    ),
+    Ok(1L),
+  )
+  assert_false(published)
+  @async.with_task_group() <| group => {
+    let task = group.spawn(() => writer.run(() => ()))
+    let mut released = false
+    for _ in 0..<1000 {
+      match coordinator.poll() {
+        CommitReleased(_, _, _) => {
+          released = true
+          break
+        }
+        CommitFencedResult(reason) => fail("policy commit fenced: " + reason)
+        NoCommitCompletion => @async.sleep(1)
+        _ => fail("unexpected policy commit result")
+      }
+    }
+    assert_true(released)
+    assert_true(published)
+    assert_eq(
+      coordinator.policy_state(),
+      Some({ sequence: 1L, fingerprint, reconcile_pending: true }),
+    )
+    let checkpoint : @persistence.WalCheckpoint = {
+      generation: 2L,
+      lsn: 1L,
+      identities: [],
+      policy: coordinator.policy_state(),
+      snapshot: { version: 3, sessions: [], retained: [] },
+    }
+    assert_true(coordinator.submit_checkpoint(checkpoint))
+    let mut checkpointed = false
+    for _ in 0..<1000 {
+      match coordinator.poll() {
+        CommitCheckpointPublished(1L, 2L) => {
+          checkpointed = true
+          break
+        }
+        CommitFencedResult(reason) =>
+          fail("policy checkpoint fenced: " + reason)
+        NoCommitCompletion => @async.sleep(1)
+        _ => fail("unexpected policy checkpoint result")
+      }
+    }
+    assert_true(checkpointed)
+    writer.close_requests()
+    task.wait()
+    writer.close_store()
+  }
+  if @fs.exists(path) {
+    @fs.rmdir(path, recursive=true)
+  }
+}
