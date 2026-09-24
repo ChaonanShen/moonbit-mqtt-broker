@@ -38,6 +38,7 @@ pub fn BrokerRuntime::new(
   logger? : @observability.Logger = @observability.Logger::silent(),
   admission? : AdmissionState,
   async_auth? : Bool = false,
+  initial_policy_epoch? : Int64 = 0L,
 ) -> BrokerRuntime {
   if !initial_state.set_security_policy(security) {
     abort("initial security policy cannot enter active action scope")
@@ -57,7 +58,7 @@ pub fn BrokerRuntime::new(
     connections: Map([]),
     active_by_client: Map([]),
     security,
-    policy_epoch: 0L,
+    policy_epoch: initial_policy_epoch,
     retired_security: Map([]),
     policy_references: Map([]),
     metrics,
