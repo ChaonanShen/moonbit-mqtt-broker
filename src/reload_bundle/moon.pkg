@@ -10,5 +10,9 @@ import {
 } for "test"
 
 options(
-  targets: { "bundle.mbt": [ "native" ], "bundle_test.mbt": [ "native" ] },
+  targets: {
+    "bundle.mbt": [ "native" ],
+    "effective.mbt": [ "native" ],
+    "bundle_test.mbt": [ "native" ],
+  },
 )
