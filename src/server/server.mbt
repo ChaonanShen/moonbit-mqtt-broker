@@ -397,7 +397,7 @@ pub async fn serve_listeners(
           active.config.snapshot_interval_ms()
         })
         let maintenance = management is Some(active) &&
-          active.config.details_enabled()
+          (active.config.details_enabled() || reload is Some(_))
         run_ticker(
           config,
           events,
