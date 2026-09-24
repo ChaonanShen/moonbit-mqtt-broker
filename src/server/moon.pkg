@@ -48,6 +48,8 @@ options(
     "websocket_native.mbt": [ "native" ],
     "tls_material_native.mbt": [ "native" ],
     "reload_tls_prepare.mbt": [ "native" ],
+    "reload_prepare.mbt": [ "native" ],
+    "reload_prepare_wbtest.mbt": [ "native" ],
     "reload_tls_prepare_wbtest.mbt": [ "native" ],
     "websocket_native_test.mbt": [ "native" ],
     "websocket_handshake_test.mbt": [ "native" ],
