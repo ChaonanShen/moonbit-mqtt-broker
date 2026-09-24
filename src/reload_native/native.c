@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #include <moonbit.h>
 
@@ -10,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 typedef void *(*ctx_new_fn)(void);
@@ -119,7 +121,7 @@ static void clear_bytes(void *pointer, size_t length) {
 }
 
 enum { IDLE = 0, ASSIGNED = 1, RUNNING = 2, COMPLETE = 3 };
-enum { JOB_FILE = 1, JOB_TLS = 2 };
+enum { JOB_FILE = 1, JOB_TLS = 2, JOB_TLS_VALIDATE = 3 };
 enum {
   CAPTURE_OK = 0, CAPTURE_UNSAFE = 1, CAPTURE_CHANGED = 2,
   CAPTURE_TOO_LARGE = 3, CAPTURE_IO = 4, CAPTURE_CANCELLED = 5,
@@ -344,6 +346,49 @@ static int validate_tls_pair(const char *cert_path, const char *key_path) {
   return valid ? CAPTURE_OK : CAPTURE_TLS_INVALID;
 }
 
+static int write_tls_memfd(capture_worker *worker, int fd,
+                           const unsigned char *data, int length) {
+  int offset = 0;
+  while (offset < length) {
+    if (cancelled(worker)) return CAPTURE_CANCELLED;
+    int count = length - offset;
+    if (count > 4096) count = 4096;
+    ssize_t wrote = write(fd, data + offset, (size_t)count);
+    if (wrote < 0 && errno == EINTR) continue;
+    if (wrote <= 0) return CAPTURE_IO;
+    offset += (int)wrote;
+  }
+  return lseek(fd, 0, SEEK_SET) == 0 ? CAPTURE_OK : CAPTURE_IO;
+}
+
+static int validate_tls_bytes(capture_worker *worker) {
+  int cert_fd = memfd_create("mqtt-reload-cert", MFD_CLOEXEC);
+  int key_fd = memfd_create("mqtt-reload-key", MFD_CLOEXEC);
+  if (cert_fd < 0 || key_fd < 0) {
+    if (cert_fd >= 0) close(cert_fd);
+    if (key_fd >= 0) close(key_fd);
+    return CAPTURE_IO;
+  }
+  int status = write_tls_memfd(worker, cert_fd, worker->cert,
+                               worker->cert_length);
+  if (status == CAPTURE_OK)
+    status = write_tls_memfd(worker, key_fd, worker->key,
+                             worker->key_length);
+  if (status == CAPTURE_OK && cancelled(worker)) status = CAPTURE_CANCELLED;
+  if (status == CAPTURE_OK) {
+    char cert_path[64], key_path[64];
+    snprintf(cert_path, sizeof(cert_path), "/proc/self/fd/%d", cert_fd);
+    snprintf(key_path, sizeof(key_path), "/proc/self/fd/%d", key_fd);
+    status = validate_tls_pair(cert_path, key_path);
+  }
+  close(cert_fd);
+  close(key_fd);
+  if (status == CAPTURE_OK && cancelled(worker)) status = CAPTURE_CANCELLED;
+  worker->length = 0;
+  memset(worker->digest, 0, 32);
+  return status;
+}
+
 static int materialize_tls(capture_worker *worker) {
   struct stat root_status;
   int root_fd = open_tls_root(worker->root, &root_status);
@@ -409,12 +454,16 @@ static void *worker_main(void *argument) {
     int cancelled = worker->cancel;
     pthread_mutex_unlock(&worker->lock);
     int result = cancelled ? CAPTURE_CANCELLED :
-      (worker->job_kind == JOB_TLS ? materialize_tls(worker) : capture(worker));
+      (worker->job_kind == JOB_TLS ? materialize_tls(worker) :
+       worker->job_kind == JOB_TLS_VALIDATE ? validate_tls_bytes(worker) :
+       capture(worker));
     pthread_mutex_lock(&worker->lock);
     if (worker->cancel && result == CAPTURE_OK) {
       if (worker->job_kind == JOB_TLS) release_tls_directory(worker->directory, worker->root);
-      clear_bytes(worker->data, (size_t)worker->max_bytes + 1);
-      free(worker->data);
+      if (worker->data != NULL) {
+        clear_bytes(worker->data, (size_t)worker->max_bytes + 1);
+        free(worker->data);
+      }
       worker->data = NULL;
       worker->length = 0;
       result = CAPTURE_CANCELLED;
@@ -509,7 +558,7 @@ int32_t moonbit_mqtt_capture_worker_submit_tls(
   int64_t handle, int64_t id,
   moonbit_bytes_t cert, int32_t cert_length,
   moonbit_bytes_t key, int32_t key_length,
-  moonbit_bytes_t root, int32_t root_length
+  moonbit_bytes_t root, int32_t root_length, int32_t validate_only
 ) {
   capture_worker *worker = from_handle(handle);
   if (worker == NULL || id <= 0 || cert_length < 1 || key_length < 1 ||
@@ -533,7 +582,7 @@ int32_t moonbit_mqtt_capture_worker_submit_tls(
     return 1;
   }
   worker->id = id;
-  worker->job_kind = JOB_TLS;
+  worker->job_kind = validate_only ? JOB_TLS_VALIDATE : JOB_TLS;
   worker->cert = cert_copy;
   worker->key = key_copy;
   worker->cert_length = cert_length;
