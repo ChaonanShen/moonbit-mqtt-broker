@@ -268,6 +268,9 @@ pub fn DurableActivationPlan::commit(
     ignore(self.broker.subscriptions.remove_all(self.client_id))
   }
   self.broker.track_policy_session(self.client_id)
+  if old is Some(_) && self.reset {
+    self.broker.replace_policy_session(self.client_id)
+  }
   self.broker.sessions.set(self.client_id, self.candidate)
   if self.broker.admin_sessions is Some(index) {
     if old is None {

@@ -8,6 +8,8 @@ pub struct BrokerState {
   priv mut security_policy : @security.SecurityPolicy?
   priv sessions : Map[@session.ClientId, @session.ClientSession]
   priv mut policy_slots : @slot_index.SlotIndex?
+  priv mut policy_incarnations : Map[@session.ClientId, Int64]?
+  priv mut next_policy_incarnation : Int64
   priv mut policy_index_ticket : @budget.Ticket?
   priv mut admin_sessions : AdminSessionIndex?
   priv subscriptions : SubscriptionIndex
@@ -68,6 +70,8 @@ pub fn BrokerState::new(
     resources: RouterResources::new(config.resources, ledger?),
     sessions: Map([]),
     policy_slots: None,
+    policy_incarnations: None,
+    next_policy_incarnation: 1L,
     policy_index_ticket: None,
     admin_sessions: None,
     subscriptions: SubscriptionIndex::new(),
@@ -114,7 +118,7 @@ pub fn BrokerState::enable_policy_index(
     return Ok(())
   }
   let capacity = self.config.max_sessions()
-  let cost = match @budget.checked_mul(capacity.to_int64(), 96L) {
+  let cost = match @budget.checked_mul(capacity.to_int64(), 128L) {
     Ok(value) => @budget.checked_add(value, 4096L).unwrap_or(-1L)
     Err(_) => -1L
   }
@@ -129,9 +133,14 @@ pub fn BrokerState::enable_policy_index(
     Err(error) => return Err(ByteResourceLimit(error))
   }
   let slots = @slot_index.SlotIndex::new(capacity)
+  let incarnations : Map[@session.ClientId, Int64] = Map([])
+  let mut next_incarnation = 1L
   for id, _ in self.sessions {
     match slots.put(id.value()) {
-      @slot_index.Added(_) => ()
+      @slot_index.Added(_) => {
+        incarnations.set(id, next_incarnation)
+        next_incarnation += 1L
+      }
       _ => {
         ticket.release().unwrap()
         return Err(InvariantViolation("policy index startup identity"))
@@ -140,6 +149,8 @@ pub fn BrokerState::enable_policy_index(
   }
   ticket.commit().unwrap()
   self.policy_index_ticket = Some(ticket)
+  self.policy_incarnations = Some(incarnations)
+  self.next_policy_incarnation = next_incarnation
   self.policy_slots = Some(slots)
   Ok(())
 }
@@ -151,7 +162,16 @@ fn BrokerState::track_policy_session(
 ) -> Unit {
   if self.policy_slots is Some(slots) {
     match slots.put(client_id.value()) {
-      @slot_index.Added(_) | @slot_index.Existing(_) => ()
+      @slot_index.Added(_) => {
+        if self.next_policy_incarnation == 9223372036854775807L {
+          abort("core session incarnation exhausted")
+        }
+        self.policy_incarnations
+        .unwrap()
+        .set(client_id, self.next_policy_incarnation)
+        self.next_policy_incarnation += 1L
+      }
+      @slot_index.Existing(_) => ()
       @slot_index.Full => abort("core session slot capacity exceeded")
     }
   }
@@ -162,8 +182,37 @@ fn BrokerState::untrack_policy_session(
   self : BrokerState,
   client_id : @session.ClientId,
 ) -> Unit {
-  if self.policy_slots is Some(slots) && !slots.remove(client_id.value()) {
-    abort("core session slot identity missing")
+  if self.policy_slots is Some(slots) {
+    if !slots.remove(client_id.value()) {
+      abort("core session slot identity missing")
+    }
+    self.policy_incarnations.unwrap().remove(client_id)
+  }
+}
+
+///|
+fn BrokerState::replace_policy_session(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Unit {
+  if self.policy_incarnations is Some(incarnations) {
+    if self.next_policy_incarnation == 9223372036854775807L ||
+      !incarnations.contains(client_id) {
+      abort("core session replacement identity invalid")
+    }
+    incarnations.set(client_id, self.next_policy_incarnation)
+    self.next_policy_incarnation += 1L
+  }
+}
+
+///|
+pub fn BrokerState::policy_session_incarnation(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Int64? {
+  match self.policy_incarnations {
+    Some(value) => value.get(client_id)
+    None => None
   }
 }
 
@@ -1175,15 +1224,20 @@ pub fn BrokerState::check_invariants(
       return Err(InvariantViolation("session byte ledger mismatch"))
     }
   }
-  if (self.policy_slots is Some(_)) != (self.policy_index_ticket is Some(_)) {
+  if (self.policy_slots is Some(_)) != (self.policy_index_ticket is Some(_)) ||
+    (self.policy_slots is Some(_)) != (self.policy_incarnations is Some(_)) {
     return Err(InvariantViolation("core policy index ticket mismatch"))
   }
   if self.policy_slots is Some(slots) {
     if slots.live_count() != self.sessions.length() || !slots.check_invariants() {
       return Err(InvariantViolation("core policy session index mismatch"))
     }
+    let incarnations = self.policy_incarnations.unwrap()
+    if incarnations.length() != self.sessions.length() {
+      return Err(InvariantViolation("core policy incarnation count mismatch"))
+    }
     for id, _ in self.sessions {
-      if slots.get(id.value()) is None {
+      if slots.get(id.value()) is None || incarnations.get(id) is None {
         return Err(InvariantViolation("core policy session identity missing"))
       }
     }
