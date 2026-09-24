@@ -17,6 +17,7 @@ SAFE_RELOAD_FILES = {
     "security-snapshot-summary.txt", "security-snapshot-events.log",
     "security-strict-summary.txt", "security-strict-events.log",
     "limits-summary.txt",
+    "shutdown-summary.txt", "shutdown-events.log",
 }
 
 
