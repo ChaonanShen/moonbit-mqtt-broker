@@ -100,7 +100,15 @@ pub async fn prepare_reload_candidate(
     raise ResourceStartupFailure("invalid reload prepare limits")
   }
   @async.with_timeout(timeout_ms, () => {
-    let bundle = @bundle.capture_bundle(manifest_path, max_source_bytes~)
+    let bundle = @bundle.capture_bundle(manifest_path, max_source_bytes~) catch {
+      @bundle.BundleError(message) =>
+        if message == "source_changed" {
+          @bundle.capture_bundle(manifest_path, max_source_bytes~)
+        } else {
+          raise @bundle.BundleError(message)
+        }
+      error => raise error
+    }
     let effective = bundle.evaluate(config_path, cli_args)
     let hot = effective.hot()
     if hot.management_snapshot_interval_ms < 100 ||

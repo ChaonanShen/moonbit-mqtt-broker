@@ -72,6 +72,7 @@ async fn capture_one(
   }
   let (length, digest) = match worker.result_info(task_id) {
     Ok(value) => value
+    Err(@native.SourceChanged) => raise BundleError("source_changed")
     Err(_) => raise BundleError("source capture rejected")
   }
   let output : Array[Byte] = []
@@ -151,7 +152,7 @@ pub async fn capture_bundle(
     )
     next_id += 1L
     if digest != material.sha256 {
-      raise BundleError("bundle material digest mismatch")
+      raise BundleError("source_changed")
     }
     if bytes.length() > max_source_bytes - total {
       raise BundleError("bundle source budget exceeded")
@@ -163,7 +164,7 @@ pub async fn capture_bundle(
     worker, next_id, manifest_path, 16384, true,
   )
   if final_digest != manifest_digest || final_manifest != manifest_bytes {
-    raise BundleError("bundle manifest changed during capture")
+    raise BundleError("source_changed")
   }
   stop_worker(worker)
   { manifest, sources }
