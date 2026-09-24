@@ -90,3 +90,27 @@ async test "capture worker rejects unsafe and oversized sources" {
   @fs.remove(path)
   @fs.rmdir(root)
 }
+
+///|
+async test "TLS native worker owns private material until explicit transfer" {
+  let worker = CaptureWorker::new().unwrap()
+  assert_eq(worker.submit_tls(1L, b"certificate-v1", b"key-v1"), Ok(()))
+  assert_eq(wait_capture(worker), 1L)
+  let directory = worker.take_tls_directory(1L).unwrap()
+  assert_eq(@fs.read_file(directory + "/cert.pem").text(), "certificate-v1")
+  assert_eq(@fs.read_file(directory + "/key.pem").text(), "key-v1")
+  assert_eq(worker.reap(1L), Ok(()))
+  assert_true(@fs.exists(directory))
+  @fs.remove(directory + "/cert.pem")
+  @fs.remove(directory + "/key.pem")
+  @fs.rmdir(directory)
+  assert_eq(worker.submit_tls(2L, b"certificate-v2", b"key-v2"), Ok(()))
+  assert_eq(wait_capture(worker), 2L)
+  let (length, _) = worker.result_info(2L).unwrap()
+  let unpublished = @utf8.decode(worker.copy_chunk(2L, 0).unwrap())
+  assert_eq(unpublished.length(), length)
+  assert_true(@fs.exists(unpublished))
+  assert_eq(worker.reap(2L), Ok(()))
+  assert_false(@fs.exists(unpublished))
+  stop_capture(worker)
+}

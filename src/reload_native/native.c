@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -51,6 +52,7 @@ static void clear_bytes(void *pointer, size_t length) {
 }
 
 enum { IDLE = 0, ASSIGNED = 1, RUNNING = 2, COMPLETE = 3 };
+enum { JOB_FILE = 1, JOB_TLS = 2 };
 enum {
   CAPTURE_OK = 0, CAPTURE_UNSAFE = 1, CAPTURE_CHANGED = 2,
   CAPTURE_TOO_LARGE = 3, CAPTURE_IO = 4, CAPTURE_CANCELLED = 5,
@@ -66,7 +68,14 @@ typedef struct {
   int state;
   int cancel;
   int64_t id;
+  int job_kind;
   char *path;
+  unsigned char *cert;
+  unsigned char *key;
+  int cert_length;
+  int key_length;
+  char directory[128];
+  int directory_taken;
   int max_bytes;
   int private_file;
   unsigned char *data;
@@ -171,6 +180,83 @@ static int capture(capture_worker *worker) {
   return status;
 }
 
+static int cancelled(capture_worker *worker) {
+  pthread_mutex_lock(&worker->lock);
+  int value = worker->cancel;
+  pthread_mutex_unlock(&worker->lock);
+  return value;
+}
+
+static void release_tls_directory(const char *directory) {
+  if (strncmp(directory, "/tmp/moonbit-mqtt-tls-", 21) != 0 ||
+      strchr(directory + 21, '/') != NULL) return;
+  char cert_path[160], key_path[160];
+  snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory);
+  snprintf(key_path, sizeof(key_path), "%s/key.pem", directory);
+  unlink(cert_path);
+  unlink(key_path);
+  rmdir(directory);
+}
+
+static int write_private_bytes(
+  capture_worker *worker, const char *path,
+  const unsigned char *data, int length
+) {
+  int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+  if (fd < 0) return CAPTURE_IO;
+  int status = CAPTURE_OK;
+  int offset = 0;
+  while (offset < length) {
+    if (cancelled(worker)) {
+      status = CAPTURE_CANCELLED;
+      break;
+    }
+    int count = length - offset;
+    if (count > 4096) count = 4096;
+    ssize_t wrote = write(fd, data + offset, (size_t)count);
+    if (wrote < 0 && errno == EINTR) continue;
+    if (wrote <= 0) {
+      status = CAPTURE_IO;
+      break;
+    }
+    offset += (int)wrote;
+  }
+  if (close(fd) != 0) status = CAPTURE_IO;
+  if (status != CAPTURE_OK) unlink(path);
+  return status;
+}
+
+static int materialize_tls(capture_worker *worker) {
+  char directory[] = "/tmp/moonbit-mqtt-tls-XXXXXX";
+  if (mkdtemp(directory) == NULL) return CAPTURE_IO;
+  char cert_path[160], key_path[160];
+  snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory);
+  snprintf(key_path, sizeof(key_path), "%s/key.pem", directory);
+  int status = write_private_bytes(
+    worker, cert_path, worker->cert, worker->cert_length
+  );
+  if (status == CAPTURE_OK) {
+    status = write_private_bytes(worker, key_path, worker->key, worker->key_length);
+  }
+  if (status == CAPTURE_OK && cancelled(worker)) status = CAPTURE_CANCELLED;
+  if (status != CAPTURE_OK) {
+    release_tls_directory(directory);
+    return status;
+  }
+  size_t length = strlen(directory);
+  worker->data = malloc(length + 1);
+  if (worker->data == NULL) {
+    release_tls_directory(directory);
+    return CAPTURE_IO;
+  }
+  memcpy(worker->data, directory, length + 1);
+  worker->length = (int)length;
+  worker->max_bytes = (int)length;
+  memcpy(worker->directory, directory, length + 1);
+  memset(worker->digest, 0, 32);
+  return CAPTURE_OK;
+}
+
 static void *worker_main(void *argument) {
   capture_worker *worker = argument;
   pthread_mutex_lock(&worker->lock);
@@ -185,9 +271,11 @@ static void *worker_main(void *argument) {
     worker->state = RUNNING;
     int cancelled = worker->cancel;
     pthread_mutex_unlock(&worker->lock);
-    int result = cancelled ? CAPTURE_CANCELLED : capture(worker);
+    int result = cancelled ? CAPTURE_CANCELLED :
+      (worker->job_kind == JOB_TLS ? materialize_tls(worker) : capture(worker));
     pthread_mutex_lock(&worker->lock);
     if (worker->cancel && result == CAPTURE_OK) {
+      if (worker->job_kind == JOB_TLS) release_tls_directory(worker->directory);
       clear_bytes(worker->data, (size_t)worker->max_bytes + 1);
       free(worker->data);
       worker->data = NULL;
@@ -250,6 +338,7 @@ int32_t moonbit_mqtt_capture_worker_submit(
   }
   worker->path = copy;
   worker->id = id;
+  worker->job_kind = JOB_FILE;
   worker->max_bytes = max_bytes;
   worker->private_file = private_file != 0;
   worker->cancel = 0;
@@ -258,6 +347,64 @@ int32_t moonbit_mqtt_capture_worker_submit(
   pthread_cond_signal(&worker->wake);
   pthread_mutex_unlock(&worker->lock);
   return 0;
+}
+
+MOONBIT_FFI_EXPORT
+int32_t moonbit_mqtt_capture_worker_submit_tls(
+  int64_t handle, int64_t id,
+  moonbit_bytes_t cert, int32_t cert_length,
+  moonbit_bytes_t key, int32_t key_length
+) {
+  capture_worker *worker = from_handle(handle);
+  if (worker == NULL || id <= 0 || cert_length < 1 || key_length < 1 ||
+      cert_length > 1048576 || key_length > 1048576) return -1;
+  unsigned char *cert_copy = malloc((size_t)cert_length);
+  unsigned char *key_copy = malloc((size_t)key_length);
+  if (cert_copy == NULL || key_copy == NULL) {
+    free(cert_copy); free(key_copy); return -2;
+  }
+  memcpy(cert_copy, cert, (size_t)cert_length);
+  memcpy(key_copy, key, (size_t)key_length);
+  pthread_mutex_lock(&worker->lock);
+  if (worker->stopping || worker->state != IDLE) {
+    pthread_mutex_unlock(&worker->lock);
+    clear_bytes(cert_copy, (size_t)cert_length);
+    clear_bytes(key_copy, (size_t)key_length);
+    free(cert_copy); free(key_copy);
+    return 1;
+  }
+  worker->id = id;
+  worker->job_kind = JOB_TLS;
+  worker->cert = cert_copy;
+  worker->key = key_copy;
+  worker->cert_length = cert_length;
+  worker->key_length = key_length;
+  worker->directory[0] = '\0';
+  worker->directory_taken = 0;
+  worker->cancel = 0;
+  worker->result = CAPTURE_IO;
+  worker->state = ASSIGNED;
+  pthread_cond_signal(&worker->wake);
+  pthread_mutex_unlock(&worker->lock);
+  return 0;
+}
+
+MOONBIT_FFI_EXPORT
+int32_t moonbit_mqtt_capture_worker_take_tls_directory(
+  int64_t handle, int64_t id
+) {
+  capture_worker *worker = from_handle(handle);
+  if (worker == NULL) return -1;
+  pthread_mutex_lock(&worker->lock);
+  int result = -1;
+  if (worker->state == COMPLETE && worker->id == id &&
+      worker->job_kind == JOB_TLS && worker->result == CAPTURE_OK &&
+      !worker->directory_taken) {
+    worker->directory_taken = 1;
+    result = 0;
+  }
+  pthread_mutex_unlock(&worker->lock);
+  return result;
 }
 
 MOONBIT_FFI_EXPORT
@@ -332,6 +479,20 @@ int32_t moonbit_mqtt_capture_worker_reap(int64_t handle, int64_t id) {
     pthread_mutex_unlock(&worker->lock);
     return 1;
   }
+  if (worker->job_kind == JOB_TLS && !worker->directory_taken &&
+      worker->directory[0] != '\0') {
+    release_tls_directory(worker->directory);
+  }
+  if (worker->cert != NULL) {
+    clear_bytes(worker->cert, (size_t)worker->cert_length);
+    free(worker->cert);
+    worker->cert = NULL;
+  }
+  if (worker->key != NULL) {
+    clear_bytes(worker->key, (size_t)worker->key_length);
+    free(worker->key);
+    worker->key = NULL;
+  }
   if (worker->data != NULL) {
     clear_bytes(worker->data, (size_t)worker->max_bytes + 1);
     free(worker->data);
@@ -344,6 +505,11 @@ int32_t moonbit_mqtt_capture_worker_reap(int64_t handle, int64_t id) {
   }
   clear_bytes(worker->digest, 32);
   worker->length = 0;
+  worker->cert_length = 0;
+  worker->key_length = 0;
+  worker->directory[0] = '\0';
+  worker->directory_taken = 0;
+  worker->job_kind = 0;
   worker->id = 0;
   worker->state = IDLE;
   pthread_cond_broadcast(&worker->wake);
