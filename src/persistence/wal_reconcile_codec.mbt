@@ -47,6 +47,24 @@ pub fn encode_wal_reconcile(
         writer.write_u8(qos, "reconcile-qos")
         writer.write_u32(payload_bytes, "reconcile-payload-bytes")
       }
+      DropPendingAt(index, topic, qos, payload_bytes) => {
+        if index < 0 ||
+          topic == "" ||
+          (qos != 1 && qos != 2) ||
+          payload_bytes < 0 {
+          raise InvalidConfiguration("invalid indexed reconcile descriptor")
+        }
+        writer.write_u8(3, "reconcile-kind")
+        writer.write_string(delta.client_id)
+        writer.write_positive_i64(
+          delta.expected_generation,
+          "reconcile-generation",
+        )
+        writer.write_u32(index, "reconcile-pending-index")
+        writer.write_string(topic)
+        writer.write_u8(qos, "reconcile-qos")
+        writer.write_u32(payload_bytes, "reconcile-payload-bytes")
+      }
     }
     let prefix = writer.finish()
     writer.write_u32_bits(crc32(prefix))
@@ -98,6 +116,16 @@ pub fn decode_wal_reconcile(
           raise wal_corrupt("reconcile-pending", reader.position())
         }
         DropPendingHead(topic, qos, payload_bytes)
+      }
+      3 => {
+        let index = reader.read_u32("reconcile-pending-index")
+        let topic = reader.read_string()
+        let qos = reader.read_u8()
+        let payload_bytes = reader.read_u32("reconcile-payload-bytes")
+        if topic == "" || (qos != 1 && qos != 2) {
+          raise wal_corrupt("reconcile-pending", reader.position())
+        }
+        DropPendingAt(index, topic, qos, payload_bytes)
       }
       _ => raise wal_corrupt("reconcile-kind", 12)
     }

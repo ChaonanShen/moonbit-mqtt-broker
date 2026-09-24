@@ -16,8 +16,8 @@ test "durable reconcile commits one denied filter and pending head" {
         inbound_qos2: [],
         inflight: [],
         pending: [
-          { topic: "private/value", payload: b"x", qos: 1, retain: false },
           { topic: "safe/value", payload: b"y", qos: 1, retain: false },
+          { topic: "private/value", payload: b"x", qos: 1, retain: false },
         ],
       },
     ],
@@ -38,18 +38,23 @@ test "durable reconcile commits one denied filter and pending head" {
   assert_eq(sub.commit(), Ok([]))
   state.end_action_scope()
   assert_eq(state.subscription_count(), 1)
-  let pending = state
-    .prepare_durable_reconcile(
+  let pending = match
+    state.prepare_durable_reconcile(
       client,
-      DropPendingHead("private/value", 1, 1),
+      DropPendingAt(1, "private/value", 1, 1),
       1L,
-    )
-    .unwrap()
+    ) {
+    Ok(value) => value
+    Err(InvariantViolation(message)) => fail("invariant: " + message)
+    Err(ByteResourceLimit(_)) => fail("byte budget")
+    Err(_) => fail("other reconcile preparation failure")
+  }
   assert_eq(accumulator.apply_reconcile(pending.delta()), Ok(()))
   state.begin_action_scope()
   assert_eq(pending.commit(), Ok([]))
   state.end_action_scope()
   assert_eq(state.pending_qos1_count(), 1)
+  assert_eq(state.export_snapshot().sessions[0].pending[0].topic, "safe/value")
   assert_eq(state.export_snapshot(), accumulator.export_snapshot().0)
   assert_eq(state.check_invariants(), Ok(()))
 }

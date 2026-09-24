@@ -477,6 +477,7 @@ async test "local policy cleanup replays without a whole Session delta" {
             inbound_qos2: [],
             inflight: [],
             pending: [
+              { topic: "safe/value", payload: b"legal", qos: 1, retain: false },
               {
                 topic: "private/value",
                 payload: b"body",
@@ -510,7 +511,7 @@ async test "local policy cleanup replays without a whole Session delta" {
       encode_wal_reconcile({
         client_id: "client-a",
         expected_generation: 1L,
-        change: @router.DropPendingHead("private/value", 1, 4),
+        change: @router.DropPendingAt(1, "private/value", 1, 4),
       }).unwrap(),
       encode_wal_policy_record({
         transition: PolicyReconciled,
@@ -533,7 +534,7 @@ async test "local policy cleanup replays without a whole Session delta" {
     let (recovered, replay) = WalStore::recover(second, limits).unwrap()
     let buffered = replay.restore_state(limits.broker_config(), limits).unwrap()
     assert_eq(buffered.state().subscription_count(), 0)
-    assert_eq(buffered.state().pending_qos1_count(), 0)
+    assert_eq(buffered.state().pending_qos1_count(), 1)
     recovered.close()
     let third = SnapshotStore::open(config).unwrap()
     let (streamed_store, streamed) = WalStore::recover_state(
@@ -542,7 +543,11 @@ async test "local policy cleanup replays without a whole Session delta" {
       limits,
     ).unwrap()
     assert_eq(streamed.state().subscription_count(), 0)
-    assert_eq(streamed.state().pending_qos1_count(), 0)
+    assert_eq(streamed.state().pending_qos1_count(), 1)
+    assert_eq(
+      streamed.state().export_snapshot().sessions[0].pending[0].topic,
+      "safe/value",
+    )
     assert_eq(
       streamed.policy(),
       Some({ sequence: 1L, fingerprint, reconcile_pending: false }),
