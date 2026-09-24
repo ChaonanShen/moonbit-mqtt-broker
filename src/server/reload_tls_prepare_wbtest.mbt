@@ -63,13 +63,13 @@ async test "captured TLS bytes publish a leased generation without source reread
   let baseline = ledger.occupied()
   let runtime_root = fixture + "/tls-runtime"
   @fs.mkdir(runtime_root, permission=0o700)
-  let prepared = prepare_tls_generation(bundle, effective, pool, runtime_root)
+  let initial = prepare_tls_generation(bundle, effective, pool, runtime_root)
   let provider = TlsMaterialProvider::new()
-  provider.add_initial(
-    "edge",
-    TlsMaterialLease::capture(TlsServerConfig::new(cert, key).unwrap()),
-  )
+  assert_false(initial.install_initial(provider, ["wrong"]))
+  assert_true(initial.install_initial(provider, ["edge"]))
+  assert_true(provider.current_config("edge") is Some(_))
   let old = provider.acquire("edge").unwrap()
+  let prepared = prepare_tls_generation(bundle, effective, pool, runtime_root)
   assert_true(prepared.publish(provider))
   let current = provider.acquire("edge").unwrap()
   assert_true(old.directory != current.directory)
