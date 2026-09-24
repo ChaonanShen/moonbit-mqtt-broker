@@ -108,6 +108,9 @@ max_accounts = 4096
 max_acl_rules = 4096
 ```
 
+启用 reload 时要求 `max_pending_per_session <= 4096`，从而使每次
+撤权清理复制和丢弃一条队列指针数组的工作量保持在固定单轮预算内。
+
 材料运行目录必须是私有、可写的绝对路径，且与来源及持久化目录分开。
 Broker 在准备候选前捕获并核验整个 bundle；无效或读取中变化的来源
 不会替换现役代际。`--check-config` 可以校验配置的 bundle，不激活
