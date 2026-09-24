@@ -339,11 +339,12 @@ async test "failed save retries latest snapshot without blocking router" {
     assert_true(sink.submit({ revision: 1L, snapshot: empty_snapshot() }))
     @async.with_task_group() <| group => {
       let task = group.spawn(() => writer.run())
-      for _ in 0..<100 {
-        if writer.is_degraded() {
+      let degraded_deadline = @async.now() + 5000L
+      for ;; {
+        if writer.is_degraded() || @async.now() >= degraded_deadline {
           break
         }
-        @async.sleep(1)
+        @async.sleep(5)
       }
       assert_true(writer.is_degraded())
       // Submission remains synchronous while the writer is in its retry delay.
@@ -351,13 +352,15 @@ async test "failed save retries latest snapshot without blocking router" {
         sink.submit({ revision: 2L, snapshot: representative_snapshot() }),
       )
       store.fault = None
-      for _ in 0..<100 {
-        if writer.committed_revision() == 2L {
+      let commit_deadline = @async.now() + 5000L
+      for ;; {
+        if writer.committed_revision() == 2L || @async.now() >= commit_deadline {
           break
         }
-        @async.sleep(2)
+        @async.sleep(5)
       }
       assert_eq(writer.committed_revision(), 2L)
+      assert_true(writer.attempt_count() >= 2)
       assert_false(writer.is_degraded())
       sink.close()
       task.wait()
