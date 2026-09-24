@@ -51,9 +51,10 @@ async fn prepare_tls_lease(
   source : TlsServerConfig,
   cert : Bytes,
   key : Bytes,
+  runtime_root : String,
   ticket : @budget.Ticket,
 ) -> TlsMaterialLease {
-  if worker.submit_tls(task_id, cert, key) is Err(_) {
+  if worker.submit_tls(task_id, cert, key, runtime_root~) is Err(_) {
     raise ResourceStartupFailure("TLS maintenance submission failed")
   }
   let mut active = true
@@ -77,7 +78,7 @@ async fn prepare_tls_lease(
       None => @async.sleep(1)
     }
   }
-  let directory = match worker.take_tls_directory(task_id) {
+  let directory = match worker.take_tls_directory(task_id, runtime_root~) {
     Ok(value) => value
     Err(_) => raise ResourceStartupFailure("TLS material validation failed")
   }
@@ -85,7 +86,12 @@ async fn prepare_tls_lease(
     raise ResourceStartupFailure("TLS material reap failed")
   }
   active = false
-  TlsMaterialLease::from_prepared_directory(source, directory, ticket~)
+  TlsMaterialLease::from_prepared_directory(
+    source,
+    directory,
+    runtime_root,
+    ticket~,
+  )
 }
 
 ///|
@@ -95,6 +101,7 @@ pub async fn prepare_tls_generation(
   bundle : @bundle.CapturedBundle,
   candidate : @bundle.ReloadEffectiveCandidate,
   pool : @budget.Pool,
+  runtime_root : String,
 ) -> PreparedTlsGeneration {
   let hot = candidate.hot()
   let leases : Array[(String, TlsMaterialLease)] = []
@@ -140,7 +147,9 @@ pub async fn prepare_tls_generation(
       source.key_path,
       handshake_timeout_ms=timeout,
     ).unwrap()
-    let lease = prepare_tls_lease(worker, task_id, original, cert, key, ticket)
+    let lease = prepare_tls_lease(
+      worker, task_id, original, cert, key, runtime_root, ticket,
+    )
     validate_tls_config(lease.config) catch {
       _ => {
         lease.release()

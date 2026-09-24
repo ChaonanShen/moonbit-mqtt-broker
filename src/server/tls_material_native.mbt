@@ -89,7 +89,9 @@ fn TlsMaterialLease::release(self : TlsMaterialLease) -> Unit {
   self.references -= 1
   if self.references == 0 {
     let path = @utf8.encode(self.directory)
-    ignore(tls_material_release_ffi(path, path.length()))
+    if tls_material_release_ffi(path, path.length()) != 0 {
+      abort("TLS material cleanup failed before budget release")
+    }
     release_optional(self.budget_ticket)
   }
 }
@@ -100,10 +102,11 @@ fn TlsMaterialLease::release(self : TlsMaterialLease) -> Unit {
 fn TlsMaterialLease::from_prepared_directory(
   original : TlsServerConfig,
   directory : String,
+  runtime_root : String,
   ticket? : @budget.Ticket,
 ) -> TlsMaterialLease {
-  if !directory.has_prefix("/tmp/moonbit-mqtt-tls-") ||
-    directory[21:].contains("/") {
+  let prefix = runtime_root + "/moonbit-mqtt-tls-"
+  if !directory.has_prefix(prefix) || directory[prefix.length():].contains("/") {
     abort("invalid prepared TLS material directory")
   }
   let config = TlsServerConfig::new(
