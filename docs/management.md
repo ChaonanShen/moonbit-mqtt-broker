@@ -7,7 +7,7 @@ Prometheus, and status work when management is enabled. Detail queries and
 operations have separate switches and are disabled by default. MQTT continues
 to run if a derived detail index becomes unavailable; detail and write routes
 then return 503 until restart. This API has no HTTPS, remote bind, UI, message
-payload view, bulk deletion, retained deletion, token rotation, or management-token rotation.
+payload view, bulk deletion, retained deletion, or management-token rotation.
 
 ## Start and roles
 
