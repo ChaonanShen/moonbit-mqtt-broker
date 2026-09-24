@@ -181,3 +181,66 @@ test "policy discard near reload queue cap copies only bounded message reference
   assert_eq(state.pending_qos1_count(), 4095)
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "prepared policy discard rejects a changed Session queue" {
+  let config = BrokerConfig::new(
+    4,
+    16,
+    4,
+    max_sessions=1,
+    max_pending_per_session=4,
+    max_pending_total=4,
+  ).unwrap()
+  let snapshot : BrokerSnapshotV3 = {
+    version: 3,
+    sessions: [
+      {
+        client_id: "changed",
+        owner_principal: "anonymous",
+        detached_at_ms: 0L,
+        next_packet_id: 1,
+        subscriptions: [{ filter: "safe/#", qos: 1 }],
+        inbound_qos2: [],
+        inflight: [],
+        pending: [
+          { topic: "private/one", payload: b"x", qos: 1, retain: false },
+        ],
+      },
+    ],
+    retained: [],
+  }
+  let state = BrokerState::from_snapshot(config, snapshot).unwrap()
+  state.enable_policy_index().unwrap()
+  let policy = @security.SecurityPolicy::new(
+    acl=@security.AclPolicy::parse("anonymous\ntopic read safe/#\n").unwrap(),
+  )
+  assert_true(state.set_security_policy(policy))
+  let client = @session.ClientId::new("changed").unwrap()
+  let plan = state
+    .prepare_durable_reconcile(
+      client,
+      DropPendingAt(0, "private/one", 1, 1),
+      1L,
+    )
+    .unwrap()
+  ignore(
+    state
+    .apply(
+      Publish({
+        origin: Internal,
+        topic: @topic.TopicName::new("safe/two").unwrap(),
+        payload: b"y",
+        qos: @session.QoS1,
+        retain: false,
+      }),
+    )
+    .unwrap(),
+  )
+  state.begin_action_scope()
+  assert_true(plan.commit() is Err(_))
+  state.end_action_scope()
+  plan.cancel()
+  assert_eq(state.pending_qos1_count(), 2)
+  assert_eq(state.check_invariants(), Ok(()))
+}
