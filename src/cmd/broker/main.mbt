@@ -1849,17 +1849,28 @@ async fn run_main() -> Unit {
     tokens,
   })
   match data_dir {
-    None =>
+    None => {
+      let initial_state = @router.BrokerState::new(broker_config)
+      if startup_sources is Some(_) {
+        @server.bootstrap_runtime_policy(
+          initial_state,
+          security,
+          1L,
+          reload_max_reconcile_items_per_turn,
+          reload_max_reconcile_bytes_per_turn.to_int64(),
+        )
+      }
       @server.run_listeners(
         effective_listeners,
         config,
-        @router.BrokerState::new(broker_config),
+        initial_state,
         shutdown_requested~,
         once~,
         security~,
         logger~,
         management?,
       )
+    }
     Some(path) => {
       let persistence_config = match
         @persistence.PersistenceConfig::new(
@@ -2021,6 +2032,20 @@ async fn run_main() -> Unit {
         Err(error) => {
           store.close()
           raise CliError("snapshot recovery: " + error.category())
+        }
+      }
+      if startup_sources is Some(_) {
+        @server.bootstrap_runtime_policy(
+          initial_state,
+          security,
+          1L,
+          reload_max_reconcile_items_per_turn,
+          reload_max_reconcile_bytes_per_turn.to_int64(),
+        ) catch {
+          error => {
+            store.close()
+            raise CliError("snapshot policy startup: " + error.to_string())
+          }
         }
       }
       let snapshot_bytes = match store.snapshot_size() {
