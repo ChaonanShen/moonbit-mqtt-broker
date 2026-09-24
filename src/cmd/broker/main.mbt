@@ -1886,6 +1886,7 @@ async fn run_main() -> Unit {
         logger~,
         management?,
         reload_tls?,
+        reload_enabled~,
       )
     }
     Some(path) => {
@@ -2041,6 +2042,7 @@ async fn run_main() -> Unit {
           logger~,
           management?,
           reload_tls?,
+          reload_enabled~,
         )
         return
       }
@@ -2109,6 +2111,7 @@ async fn run_main() -> Unit {
         logger~,
         management?,
         reload_tls?,
+        reload_enabled~,
       )
     }
   }
