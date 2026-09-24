@@ -430,6 +430,24 @@ static capture_worker *from_handle(int64_t handle) {
 }
 
 MOONBIT_FFI_EXPORT
+int32_t moonbit_mqtt_reload_sha256(
+  moonbit_bytes_t input, int32_t length, char *output, int32_t capacity
+) {
+  if (length < 0 || length > 1024 || capacity != 32) return -1;
+  pthread_once(&crypto_once, load_crypto);
+  if (crypto_library == NULL) return -2;
+  void *ctx = ctx_new();
+  if (ctx == NULL) return -3;
+  unsigned int produced = 0;
+  int valid = digest_init(ctx, sha256(), NULL) == 1 &&
+    digest_update(ctx, input, (size_t)length) == 1 &&
+    digest_final(ctx, (unsigned char *)output, &produced) == 1 &&
+    produced == 32u;
+  ctx_free(ctx);
+  return valid ? 0 : -3;
+}
+
+MOONBIT_FFI_EXPORT
 int64_t moonbit_mqtt_capture_worker_create(void) {
   pthread_once(&crypto_once, load_crypto);
   if (crypto_library == NULL) return 0;
