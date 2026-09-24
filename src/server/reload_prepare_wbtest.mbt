@@ -96,7 +96,21 @@ async test "reload prepare distinguishes cosmetic change, hot change, and restar
   }
   assert_false(candidate.security_changed())
   assert_true(ledger.occupied() > baseline)
+  let handle = GenerationHandle::new(
+    ConfigGeneration::initial(
+      initial,
+      effective,
+      @security.SecurityPolicy::permissive(),
+      initial.policy_fingerprint(effective),
+    ),
+  )
+  let retired = handle.publish(candidate, 0L).unwrap()
+  assert_eq(handle.active().config_epoch(), 1L)
+  assert_eq(handle.active().policy_epoch(), 0L)
+  retired.release()
   candidate.release()
+  assert_true(ledger.occupied() > baseline)
+  handle.close()
   assert_eq(ledger.occupied(), baseline)
   write_reload_prepare_fixture(
     config_path, manifest_path, "[server]\nmax_packet_size = 2048\n",
