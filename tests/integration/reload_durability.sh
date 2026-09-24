@@ -5,6 +5,9 @@ readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 RELOAD_EVIDENCE_DIR="${RELOAD_EVIDENCE_DIR:-$REPO_ROOT/.local/reload-integration/reload-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 moon build --target native >/dev/null
+if [[ ! -d tests/integration/node_modules/mqtt ]]; then
+  npm ci --prefix tests/integration --ignore-scripts >/dev/null
+fi
 readonly BROKER="$REPO_ROOT/_build/native/debug/build/cmd/broker/broker.exe"
 work="$(mktemp -d)"
 broker_pid=""
@@ -19,6 +22,9 @@ cleanup() {
     "$work"/*.log >"$RELOAD_EVIDENCE_DIR/durability-events.log" 2>/dev/null || true
   printf 'case=reload_durability\nexit_code=%s\n' "$rc" \
     >"$RELOAD_EVIDENCE_DIR/durability-summary.txt"
+  if [[ "$rc" -ne 0 ]]; then
+    cp "$work"/*.log "$RELOAD_EVIDENCE_DIR/" 2>/dev/null || true
+  fi
   rm -rf -- "$work"
   exit "$rc"
 }
@@ -28,6 +34,9 @@ write_config() {
   cat >"$work/config.toml" <<EOF
 [server]
 listen = "127.0.0.1:$port"
+[broker]
+max_sessions = 16
+max_subscriptions_total = 32
 [persistence]
 mode = "strict"
 data_dir = "$work/data"
@@ -78,6 +87,7 @@ stop_broker() {
 write_config ""
 make_manifest
 start_broker "$work/initial.log"
+node tests/integration/reload_durability.mjs seed "$port"
 printf 'anonymous\ntopic read safe/#\n' >"$work/acl.txt"
 write_config "acl_file = \"$work/acl.txt\""
 make_manifest
@@ -88,7 +98,11 @@ for _ in $(seq 1 800); do
   sleep 0.025
 done
 grep -q 'reload_completed.*config_epoch=1' "$work/initial.log"
-stop_broker
+kill -KILL "$broker_pid"
+crash_status=0
+wait "$broker_pid" 2>/dev/null || crash_status=$?
+[[ "$crash_status" -eq 137 ]]
+broker_pid=""
 start_broker "$work/recovered.log"
 grep -q wal_restored "$work/recovered.log"
 stop_broker
@@ -104,6 +118,16 @@ printf 'anonymous\ntopic read safe/#\n' >"$work/acl.txt"
 make_manifest
 start_broker "$work/rollback.log"
 grep -q wal_restored "$work/rollback.log"
+printf 'anonymous\ntopic read private/#\ntopic write private/#\n' >"$work/acl.txt"
+make_manifest
+kill -HUP "$broker_pid"
+for _ in $(seq 1 800); do
+  if grep -q 'reload_completed.*config_epoch=1' "$work/rollback.log"; then break; fi
+  if ! kill -0 "$broker_pid" 2>/dev/null; then cat "$work/rollback.log" >&2; exit 1; fi
+  sleep 0.025
+done
+grep -q 'reload_completed.*config_epoch=1' "$work/rollback.log"
+node tests/integration/reload_durability.mjs verify "$port"
 stop_broker
-echo 'reload strict activation, recovery and mismatch passed'
+echo 'reload strict activation, crash recovery, mismatch and durable cleanup passed'
 
