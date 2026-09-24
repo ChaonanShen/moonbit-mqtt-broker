@@ -88,6 +88,16 @@ fn print_help() -> Unit {
   println("  --management-command-burst N  Default 10")
   println("  --management-max-index-bytes N  Default 8388608")
   println("  --management-max-bytes-total N  Default 8388608")
+  println("  --reload-enabled true|false  Default false")
+  println("  --reload-manifest-file PATH  Fixed versioned bundle manifest")
+  println("  --reload-material-runtime-dir PATH  Private TLS material root")
+  println("  --reload-prepare-timeout-ms N  Default 30000")
+  println("  --reload-max-source-bytes N  Default 16777216")
+  println("  --reload-max-generation-bytes N  Default 67108864")
+  println("  --reload-max-reconcile-items-per-turn N  Default 64")
+  println("  --reload-max-reconcile-bytes-per-turn N  Default 1048576")
+  println("  --reload-max-accounts N  Default 4096")
+  println("  --reload-max-acl-rules N  Default 4096")
   println("  --max-connections N                Default 128")
   println("  --max-packet-size N                Default 1048576")
   println("  --max-receive-buffer-size N        Default 1048576")
@@ -406,6 +416,16 @@ async fn run_main() -> Unit {
   let mut management_command_burst = 10
   let mut management_max_index_bytes = 8388608L
   let mut management_max_bytes_total = 8388608L
+  let mut reload_enabled = false
+  let mut reload_manifest_file = ""
+  let mut reload_material_runtime_dir = ""
+  let mut reload_prepare_timeout_ms = 30000
+  let mut reload_max_source_bytes = 16777216
+  let mut reload_max_generation_bytes = 67108864L
+  let mut reload_max_reconcile_items_per_turn = 64
+  let mut reload_max_reconcile_bytes_per_turn = 1048576
+  let mut reload_max_accounts = 4096
+  let mut reload_max_acl_rules = 4096
   let mut once = false
   let mut index = 1
   while index < args.length() {
@@ -918,6 +938,66 @@ async fn run_main() -> Unit {
       "--management-max-bytes-total" => {
         management_max_bytes_total = parse_bounded_int64(
           args, index, "--management-max-bytes-total", 1L,
+        )
+        index += 2
+      }
+      "--reload-enabled" => {
+        reload_enabled = parse_bool_option(args, index, "--reload-enabled")
+        index += 2
+      }
+      "--reload-manifest-file" => {
+        if index + 1 >= args.length() {
+          raise CliError("--reload-manifest-file requires a path")
+        }
+        reload_manifest_file = args[index + 1]
+        index += 2
+      }
+      "--reload-material-runtime-dir" => {
+        if index + 1 >= args.length() {
+          raise CliError("--reload-material-runtime-dir requires a path")
+        }
+        reload_material_runtime_dir = args[index + 1]
+        index += 2
+      }
+      "--reload-prepare-timeout-ms" => {
+        reload_prepare_timeout_ms = parse_bounded_int(
+          args, index, "--reload-prepare-timeout-ms", 1,
+        )
+        index += 2
+      }
+      "--reload-max-source-bytes" => {
+        reload_max_source_bytes = parse_bounded_int(
+          args, index, "--reload-max-source-bytes", 16384,
+        )
+        index += 2
+      }
+      "--reload-max-generation-bytes" => {
+        reload_max_generation_bytes = parse_bounded_int64(
+          args, index, "--reload-max-generation-bytes", 1L,
+        )
+        index += 2
+      }
+      "--reload-max-reconcile-items-per-turn" => {
+        reload_max_reconcile_items_per_turn = parse_bounded_int(
+          args, index, "--reload-max-reconcile-items-per-turn", 1,
+        )
+        index += 2
+      }
+      "--reload-max-reconcile-bytes-per-turn" => {
+        reload_max_reconcile_bytes_per_turn = parse_bounded_int(
+          args, index, "--reload-max-reconcile-bytes-per-turn", 1,
+        )
+        index += 2
+      }
+      "--reload-max-accounts" => {
+        reload_max_accounts = parse_bounded_int(
+          args, index, "--reload-max-accounts", 1,
+        )
+        index += 2
+      }
+      "--reload-max-acl-rules" => {
+        reload_max_acl_rules = parse_bounded_int(
+          args, index, "--reload-max-acl-rules", 1,
         )
         index += 2
       }
@@ -1611,6 +1691,26 @@ async fn run_main() -> Unit {
     println("command_burst = " + management_command_burst.to_string())
     println("max_index_bytes = " + management_max_index_bytes.to_string())
     println("max_bytes_total = " + management_max_bytes_total.to_string())
+    println("[reload]")
+    println("enabled = " + reload_enabled.to_string())
+    println(
+      "manifest_file = " +
+      quote(if reload_manifest_file == "" { "" } else { "<redacted>" }),
+    )
+    println("material_runtime_dir = " + quote(reload_material_runtime_dir))
+    println("prepare_timeout_ms = " + reload_prepare_timeout_ms.to_string())
+    println("max_source_bytes = " + reload_max_source_bytes.to_string())
+    println("max_generation_bytes = " + reload_max_generation_bytes.to_string())
+    println(
+      "max_reconcile_items_per_turn = " +
+      reload_max_reconcile_items_per_turn.to_string(),
+    )
+    println(
+      "max_reconcile_bytes_per_turn = " +
+      reload_max_reconcile_bytes_per_turn.to_string(),
+    )
+    println("max_accounts = " + reload_max_accounts.to_string())
+    println("max_acl_rules = " + reload_max_acl_rules.to_string())
     println("[resources]")
     print_resource_section_values(resources, "resources")
     println("[limits]")
@@ -1662,6 +1762,30 @@ async fn run_main() -> Unit {
       }
     }
     return
+  }
+  if reload_enabled {
+    if config_path is None ||
+      reload_manifest_file == "" ||
+      !reload_manifest_file.has_prefix("/") {
+      raise CliError("reload requires --config and an absolute manifest path")
+    }
+    if !config_path.unwrap().has_prefix("/") {
+      raise CliError("reload requires an absolute --config path")
+    }
+    if effective_listeners.any(listener => listener.tls is Some(_)) &&
+      !reload_material_runtime_dir.has_prefix("/") {
+      raise CliError("reload TLS requires an absolute private material root")
+    }
+    if reload_prepare_timeout_ms > 300000 ||
+      reload_max_source_bytes > 67108864 ||
+      reload_max_generation_bytes > 268435456L ||
+      reload_max_reconcile_items_per_turn > 256 ||
+      reload_max_reconcile_bytes_per_turn > 4194304 ||
+      reload_max_accounts > 4096 ||
+      reload_max_acl_rules > 4096 {
+      raise CliError("reload resource limit exceeds supported range")
+    }
+    raise CliError("reload coordinator is not yet available")
   }
   if check_config {
     println("configuration valid")

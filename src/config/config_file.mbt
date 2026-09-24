@@ -237,6 +237,29 @@ fn map_section(
         add_string(args, "--log-format", entry, full_key)
       "observability.log_level" =>
         add_string(args, "--log-level", entry, full_key)
+      "reload.enabled" => add_boolean(args, "--reload-enabled", entry, full_key)
+      "reload.manifest_file" =>
+        add_string(args, "--reload-manifest-file", entry, full_key)
+      "reload.material_runtime_dir" =>
+        add_string(args, "--reload-material-runtime-dir", entry, full_key)
+      "reload.prepare_timeout_ms" =>
+        add_integer(args, "--reload-prepare-timeout-ms", entry, full_key)
+      "reload.max_source_bytes" =>
+        add_integer(args, "--reload-max-source-bytes", entry, full_key)
+      "reload.max_generation_bytes" =>
+        add_integer(args, "--reload-max-generation-bytes", entry, full_key)
+      "reload.max_reconcile_items_per_turn" =>
+        add_integer(
+          args, "--reload-max-reconcile-items-per-turn", entry, full_key,
+        )
+      "reload.max_reconcile_bytes_per_turn" =>
+        add_integer(
+          args, "--reload-max-reconcile-bytes-per-turn", entry, full_key,
+        )
+      "reload.max_accounts" =>
+        add_integer(args, "--reload-max-accounts", entry, full_key)
+      "reload.max_acl_rules" =>
+        add_integer(args, "--reload-max-acl-rules", entry, full_key)
       _ => {
         let specs = @budget.byte_limit_specs()
         specs.append(@budget.rate_limit_specs())
@@ -377,7 +400,7 @@ pub fn parse_config_file(
   let args : Array[String] = []
   let sections = [
     "server", "broker", "persistence", "tls", "security", "observability", "resources",
-    "limits", "management", "listeners",
+    "limits", "management", "reload", "listeners",
   ]
   for section in sections {
     match root.get(section) {
