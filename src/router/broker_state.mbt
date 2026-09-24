@@ -91,6 +91,11 @@ pub fn BrokerState::config(self : BrokerState) -> BrokerConfig {
 }
 
 ///|
+pub fn BrokerState::policy_action_scope_active(self : BrokerState) -> Bool {
+  self.action_scope
+}
+
+///|
 /// A prepared generation is installed only outside a router action scope.
 pub fn BrokerState::set_security_policy(
   self : BrokerState,

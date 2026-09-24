@@ -101,6 +101,28 @@ fn BrokerRuntime::release_policy_epoch(
 }
 
 ///|
+/// Preflight the same non-awaiting publication without changing the policy.
+pub fn BrokerRuntime::can_publish_security_generation(
+  self : BrokerRuntime,
+  next : @security.SecurityPolicy,
+  next_epoch : Int64,
+) -> Bool {
+  self.policy_epoch != 9223372036854775807L &&
+  next_epoch == self.policy_epoch + 1L &&
+  !next.same_security(self.security) &&
+  self.retired_security.length() < 2 &&
+  !self.broker_state.policy_action_scope_active()
+}
+
+///|
+pub fn BrokerRuntime::policy_reference_count(
+  self : BrokerRuntime,
+  epoch : Int64,
+) -> Int {
+  self.policy_references.get(epoch).unwrap_or(0)
+}
+
+///|
 /// The caller enters this non-awaiting method only at the serialized
 /// generation publication boundary after all required durable facts commit.
 pub fn BrokerRuntime::publish_security_generation(
@@ -108,10 +130,7 @@ pub fn BrokerRuntime::publish_security_generation(
   next : @security.SecurityPolicy,
   next_epoch : Int64,
 ) -> Bool {
-  if self.policy_epoch == 9223372036854775807L ||
-    next_epoch != self.policy_epoch + 1L ||
-    next.same_security(self.security) ||
-    self.retired_security.length() >= 2 {
+  if !self.can_publish_security_generation(next, next_epoch) {
     return false
   }
   if !self.broker_state.set_security_policy(next) {
