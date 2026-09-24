@@ -336,3 +336,68 @@ async test "full management request pool closes excess socket" {
   f.cache.close()
   assert_true(f.budget.close())
 }
+
+///|
+async test "config admin sees only boot-scoped reload ETag" {
+  let fixture = management_http_fixture(scopes="config_admin")
+  let root = @fs.tmpdir(prefix="mqtt-admin-reload-etag-")
+  let config_path = root + "/config.toml"
+  let manifest_path = root + "/manifest.toml"
+  @fs.write_file(
+    config_path,
+    b"[observability]\nlog_level = \"info\"\n",
+    create_mode=CreateNew,
+    permission=0o600,
+  )
+  let (status, output, _) = @process.collect_output("sha256sum", [config_path])
+  assert_eq(status, 0)
+  let digest = output.text().split(" ").to_array()[0].to_owned()
+  let text = "version = 1\n[[materials]]\nrole = \"config\"\npath = \"" +
+    config_path +
+    "\"\nsha256 = \"" +
+    digest +
+    "\"\n"
+  @fs.write_file(
+    manifest_path,
+    @utf8.encode(text),
+    create_mode=CreateNew,
+    permission=0o600,
+  )
+  let bundle = @bundle.capture_bundle(manifest_path)
+  let effective = bundle.evaluate(config_path, [])
+  let handle = GenerationHandle::new(
+    ConfigGeneration::initial(
+      bundle,
+      effective,
+      @security.SecurityPolicy::permissive(),
+      bundle.policy_fingerprint(effective),
+    ),
+  )
+  fixture.handler.reload_generation = Some(handle)
+  let denied = management_test_text(
+    fixture.handler.respond_reload_config(
+      management_test_head("/v1/config"),
+      0,
+      fixture.now,
+    ),
+  ).unwrap()
+  assert_true(denied.has_prefix("HTTP/1.1 401 Unauthorized"))
+  let response = management_test_text(
+    fixture.handler.respond_reload_config(
+      management_test_head("/v1/config", bearer=management_test_token()),
+      0,
+      fixture.now,
+    ),
+  ).unwrap()
+  assert_true(response.has_prefix("HTTP/1.1 200 OK"))
+  assert_true(response.contains("ETag: \"fixture-boot:g:0\"\r\n"))
+  assert_true(response.contains("\"config_epoch\":\"0\""))
+  assert_false(response.contains(config_path))
+  assert_false(response.contains("sha256"))
+  handle.close()
+  @fs.remove(manifest_path)
+  @fs.remove(config_path)
+  @fs.rmdir(root)
+  fixture.cache.close()
+  ignore(fixture.budget.close())
+}

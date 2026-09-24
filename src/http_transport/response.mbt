@@ -93,6 +93,7 @@ pub fn encode_response(
   max_body_bytes : Int,
   allow? : HttpAllow,
   location? : String,
+  etag? : String,
 ) -> Result[Bytes, HttpEncodeError] {
   if max_body_bytes < 0 || body.length() > max_body_bytes {
     return Err(ResponseTooLarge)
@@ -119,6 +120,16 @@ pub fn encode_response(
       return Err(ResponseHeaderTooLarge)
     }
     header = header + "Location: " + value + "\r\n"
+  }
+  if etag is Some(value) {
+    if value.length() > 100 ||
+      value.contains("\r") ||
+      value.contains("\n") ||
+      !value.has_prefix("\"") ||
+      !value.has_suffix("\"") {
+      return Err(ResponseHeaderTooLarge)
+    }
+    header = header + "ETag: " + value + "\r\n"
   }
   header = header + "\r\n"
   let header_bytes = @utf8.encode(header)

@@ -80,6 +80,13 @@ async fn ManagementHttp::serve_one_request(
             chunk.length() - consumed,
             @budget.monotonic_ms(),
           )
+        } else if head.target == "/v1/config" &&
+          self.reload_generation is Some(_) {
+          self.respond_reload_config(
+            head,
+            chunk.length() - consumed,
+            @budget.monotonic_ms(),
+          )
         } else if head.target.has_prefix("/v1/operations/") ||
           head.target == "/v1/audit" ||
           head.target.has_prefix("/v1/audit?") {
