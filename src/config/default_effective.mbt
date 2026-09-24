@@ -1,6 +1,5 @@
 ///|
-// Generated from broker --print-effective-config at baseline 776acb0.
-// Keep this fixture synchronized when startup defaults change.
+// Generated from broker --print-effective-config. Keep synchronized with startup defaults.
 fn default_effective_config_toml() -> String {
   (
     #|[server]
@@ -108,6 +107,17 @@ fn default_effective_config_toml() -> String {
     #|command_burst = 10
     #|max_index_bytes = 8388608
     #|max_bytes_total = 8388608
+    #|[reload]
+    #|enabled = false
+    #|manifest_file = ""
+    #|material_runtime_dir = ""
+    #|prepare_timeout_ms = 30000
+    #|max_source_bytes = 16777216
+    #|max_generation_bytes = 67108864
+    #|max_reconcile_items_per_turn = 64
+    #|max_reconcile_bytes_per_turn = 1048576
+    #|max_accounts = 4096
+    #|max_acl_rules = 4096
     #|[resources]
     #|max_managed_bytes_total = 268435456
     #|control_reserve_bytes = 2097152
