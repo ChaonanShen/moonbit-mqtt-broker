@@ -77,6 +77,19 @@ pub fn WalRecovery::restore_state(
           Ok(value) => Some(value)
           Err(error) => return Err(error)
         }
+      } else if is_wal_reconcile_record(transaction.delta) {
+        if !self.policy_required ||
+          !(policy is Some({ reconcile_pending: true, .. })) {
+          return Err(InvalidValue(field="wal-reconcile-order", offset=0))
+        }
+        let delta = match decode_wal_reconcile(transaction.delta) {
+          Ok(value) => value
+          Err(error) => return Err(error)
+        }
+        match accumulator.apply_reconcile(delta) {
+          Ok(_) => ()
+          Err(_) => return Err(SnapshotImport("invalid WAL reconcile state"))
+        }
       } else {
         let delta = match
           decode_durable_delta(

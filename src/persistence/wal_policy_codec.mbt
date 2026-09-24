@@ -151,6 +151,15 @@ fn fold_wal_policy_batches(
           Ok(value) => Some(value)
           Err(error) => return Err(error)
         }
+      } else if is_wal_reconcile_record(transaction.delta) {
+        if !policy_required ||
+          !(current is Some({ reconcile_pending: true, .. })) {
+          return Err(InvalidValue(field="wal-reconcile-order", offset=0))
+        }
+        match decode_wal_reconcile(transaction.delta) {
+          Ok(_) => ()
+          Err(error) => return Err(error)
+        }
       }
     }
   }

@@ -683,8 +683,10 @@ pub async fn WalStore::append_batch(
     return Err(FileSystem(operation="wal-not-writable", path=self.active_path))
   }
   if batch.transactions.length() != 1 &&
-    batch.transactions.any(item => is_wal_policy_record(item.delta)) {
-    return Err(InvalidConfiguration("policy WAL transition must be standalone"))
+    batch.transactions.any(item => {
+      is_wal_policy_record(item.delta) || is_wal_reconcile_record(item.delta)
+    }) {
+    return Err(InvalidConfiguration("policy WAL mutation must be standalone"))
   }
   let next_policy = match
     fold_wal_policy_batches(
