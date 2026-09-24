@@ -319,6 +319,7 @@ pub async fn WalStore::bootstrap(
       sealed_segments: [],
       active_segment_id: 1L,
       active_start_lsn: 1L,
+      policy_required: checkpoint.policy is Some(_),
     }
     let manifest_bytes = match encode_wal_manifest(manifest) {
       Ok(value) => value
