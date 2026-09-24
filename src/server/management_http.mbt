@@ -545,6 +545,7 @@ pub async fn ManagementHttp::respond_command(
   head : @http_transport.HttpRequestHead,
   same_read_suffix_bytes : Int,
   now_monotonic_ms : Int64,
+  body? : Bytes,
 ) -> Bytes {
   let request_id = match self.request_id() {
     Some(value) => value
@@ -555,11 +556,25 @@ pub async fn ManagementHttp::respond_command(
         @http_transport.JsonBody,
       )
   }
+  let reload_route = head.target == "/v1/config/reload" &&
+    head.method_name == "POST"
+  if reload_route && head.content_length.unwrap_or(0) > 4096 {
+    return self.reject(
+      @http_transport.BodyTooLarge,
+      "body_too_large",
+      request_id,
+      @management.RejectedParse,
+    )
+  }
   if head.target.contains("%") ||
     head.target.contains("?") ||
     head.target.contains("#") ||
     same_read_suffix_bytes != 0 ||
-    (head.content_length is Some(length) && length != 0) {
+    (!reload_route && head.content_length is Some(length) && length != 0) ||
+    (
+      reload_route &&
+      body.unwrap_or(b"").length() != head.content_length.unwrap_or(0)
+    ) {
     return self.reject(
       @http_transport.BadRequest,
       "bad_request",
@@ -595,7 +610,7 @@ pub async fn ManagementHttp::respond_command(
         @management.RejectedAuth,
       )
   }
-  if head.target == "/v1/config/reload" && head.method_name == "POST" {
+  if reload_route {
     if !actor.allows(@management.ConfigAdmin) {
       return self.reject(
         @http_transport.Forbidden,
@@ -604,14 +619,16 @@ pub async fn ManagementHttp::respond_command(
         @management.RejectedRole,
       )
     }
-    return self.reject(
-      @http_transport.NotImplemented,
-      "capability_unavailable",
-      request_id,
-      @management.RejectedOther,
-    )
+    if self.reload_generation is None {
+      return self.reject(
+        @http_transport.ServiceUnavailable,
+        "reload_disabled",
+        request_id,
+        @management.RejectedOther,
+      )
+    }
   }
-  if !actor.allows(@management.Operator) {
+  if !reload_route && !actor.allows(@management.Operator) {
     return self.reject(
       @http_transport.Forbidden,
       "forbidden",
@@ -669,7 +686,52 @@ pub async fn ManagementHttp::respond_command(
         @management.RejectedParse,
       )
   }
-  if !self.config.operations_enabled() {
+  if reload_route {
+    let content_length = head.content_length.unwrap_or(0)
+    if content_length > 0 {
+      let mut content_type_count = 0
+      for header in head.headers {
+        if header.name == "content-type" {
+          content_type_count += 1
+          if header.value != "application/json" {
+            return self.reject(
+              @http_transport.UnsupportedMediaType,
+              "unsupported_media_type",
+              request_id,
+              @management.RejectedParse,
+            )
+          }
+        }
+      }
+      if content_type_count != 1 {
+        return self.reject(
+          @http_transport.BadRequest,
+          "bad_request",
+          request_id,
+          @management.RejectedParse,
+        )
+      }
+    }
+    let expected = match @management.parse_reload_body(body.unwrap_or(b"")) {
+      Ok(value) => value
+      Err(_) =>
+        return self.reject(
+          @http_transport.BadRequest,
+          "bad_request",
+          request_id,
+          @management.RejectedParse,
+        )
+    }
+    if expected is Some(value) && value.to_string() != spec.target {
+      return self.reject(
+        @http_transport.PreconditionFailed,
+        "precondition_failed",
+        request_id,
+        @management.RejectedParse,
+      )
+    }
+  }
+  if !reload_route && !self.config.operations_enabled() {
     return self.reject(
       @http_transport.ServiceUnavailable,
       "operations_disabled",
@@ -795,7 +857,8 @@ pub async fn ManagementHttp::respond_operation(
       @management.RejectedRate,
     )
   }
-  if !self.config.operations_enabled() {
+  if !self.config.operations_enabled() &&
+    !(self.reload_generation is Some(_) && actor.allows(@management.ConfigAdmin)) {
     return self.reject(
       @http_transport.ServiceUnavailable,
       "operations_disabled",

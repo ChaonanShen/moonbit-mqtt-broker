@@ -73,7 +73,13 @@ async fn ManagementHttp::serve_one_request(
         return
       }
       @http_transport.Complete(head, consumed) => {
-        let response = if head.target.has_prefix("/v1/") &&
+        let response = if head.target == "/v1/config/reload" &&
+          head.method_name == "POST" {
+          let (body, extra) = read_reload_body(
+            connection, head, chunk, consumed,
+          )
+          self.respond_command(head, extra, @budget.monotonic_ms(), body?)
+        } else if head.target.has_prefix("/v1/") &&
           (head.method_name == "POST" || head.method_name == "DELETE") {
           self.respond_command(
             head,
@@ -141,4 +147,43 @@ pub async fn ManagementHttp::serve_connection(
   if completed is None {
     self.rejections.record(@management.RejectedDeadline)
   }
+}
+
+///|
+/// Only the reload route accepts a body. The outer request timeout already
+/// bounds these reads; the fixed 4096-byte limit prevents unbounded buffering.
+async fn read_reload_body(
+  connection : @socket.Tcp,
+  head : @http_transport.HttpRequestHead,
+  chunk : Bytes,
+  consumed : Int,
+) -> (Bytes?, Int) {
+  let length = head.content_length.unwrap_or(0)
+  if length < 0 || length > 4096 {
+    return (None, 0)
+  }
+  let suffix = chunk.length() - consumed
+  if suffix < 0 || suffix > length {
+    return (None, if suffix > length { suffix - length } else { 1 })
+  }
+  let bytes : Array[Byte] = []
+  for index in consumed..<chunk.length() {
+    bytes.push(chunk[index])
+  }
+  while bytes.length() < length {
+    let remaining = length - bytes.length()
+    let next = connection.read_some(
+      max_len=if remaining < 1024 { remaining } else { 1024 },
+    ) catch {
+      _ => return (None, 0)
+    }
+    match next {
+      Some(value) if value.length() > 0 && value.length() <= remaining =>
+        for byte in value {
+          bytes.push(byte)
+        }
+      _ => return (None, 0)
+    }
+  }
+  (Some(Bytes::from_array(bytes)), 0)
 }

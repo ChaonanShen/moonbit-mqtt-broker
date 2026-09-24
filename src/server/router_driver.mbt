@@ -26,6 +26,7 @@ pub struct RouterDriver {
   priv mut reload_reconciler : @router.PolicyReconciler?
   priv mut reload_issue : @router.PolicyIssue?
   priv mut strict_reload_pending : StrictReloadPending?
+  priv reload_service : ReloadService?
   priv reload_reconcile_items : Int
   priv reload_reconcile_bytes : Int64
   priv mut strict_checkpoint_cursor : @router.SnapshotExportCursor?
@@ -85,6 +86,7 @@ pub fn RouterDriver::new(
   material_provider? : TlsMaterialProvider,
   reload_reconcile_items? : Int = 64,
   reload_reconcile_bytes? : Int64 = 1048576L,
+  reload_service? : ReloadService,
 ) -> RouterDriver {
   let snapshot = snapshot.map(config => SnapshotDriverState::{
     oldest_uncommitted_ms: None,
@@ -116,6 +118,7 @@ pub fn RouterDriver::new(
     reload_reconciler: None,
     reload_issue: None,
     strict_reload_pending: None,
+    reload_service,
     reload_reconcile_items,
     reload_reconcile_bytes,
     strict_checkpoint_cursor: None,

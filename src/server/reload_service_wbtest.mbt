@@ -1,0 +1,31 @@
+///|
+test "shared reload operations keep stale queued HTTP request unapplied" {
+  let broker_config = @router.BrokerConfig::new(4, 16, 4).unwrap()
+  let broker = @router.BrokerState::new(broker_config)
+  let ledger = broker.resource_ledger()
+  let baseline = ledger.occupied()
+  let service = ReloadService::new(None, ledger, "off")
+  assert_eq(service.signal(0L), ReloadStarted(1L))
+  let tag = @management.config_etag(service.boot_id, 0L)
+  let spec = @management.parse_command(
+    "POST", "/v1/config/reload", tag, "Key_0123456789abc", "admin",
+  ).unwrap()
+  let record = service.admit_http(spec, 0L, 30000L).unwrap()
+  assert_eq(record.state, @management.Accepted)
+  assert_eq(service.signal(0L), ReloadBusy)
+  let first = service.requests.active().unwrap()
+  assert_true(service.start(first, 0L))
+  service.advance(first, @management.Reconciling, true, Some(1L))
+  service.finish(first, true, None, 1L, None)
+  let queued = service.requests.active().unwrap()
+  assert_eq(queued.source, Management)
+  assert_false(service.start(queued, 1L))
+  service.finish(queued, false, Some("precondition_failed"), 1L, None)
+  let terminal = service.operations.get(record.id, "admin").unwrap()
+  assert_eq(terminal.state, @management.Failed)
+  assert_false(terminal.effect_applied)
+  assert_eq(terminal.error_code, Some("precondition_failed"))
+  assert_true(service.operations.check_invariants())
+  service.close()
+  assert_eq(ledger.occupied(), baseline)
+}

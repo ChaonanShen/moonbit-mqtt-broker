@@ -39,6 +39,7 @@ async fn signal_reload_once(
   strict : StrictPersistenceRuntime?,
   logger : @observability.Logger,
   request : ReloadRequest,
+  service : ReloadService,
 ) -> Unit {
   let active = generation.active()
   let limits = broker.config().resources()
@@ -74,6 +75,7 @@ async fn signal_reload_once(
     ReloadPrepared(candidate) => {
       let mut transferred = false
       errdefer (if !transferred { candidate.release() })
+      service.advance(request, @management.WaitingBarrier, false, None)
       for ;; {
         let reply = @async.Queue(kind=Blocking(1))
         let state = send_reload_control(bus, ReloadEnterBarrier(reply), reply)
@@ -85,6 +87,7 @@ async fn signal_reload_once(
         }
       }
       let use_wal = strict is Some(_) && candidate.security_changed()
+      service.advance(request, @management.Activating, false, None)
       for ;; {
         let reply = @async.Queue(kind=Blocking(if use_wal { 2 } else { 1 }))
         let command = if use_wal {
@@ -126,6 +129,12 @@ async fn signal_reload_once(
           }
         }
       }
+      service.advance(
+        request,
+        @management.Reconciling,
+        true,
+        Some(generation.active().config_epoch()),
+      )
       for ;; {
         let reply = @async.Queue(kind=Blocking(1))
         let state = send_reload_control(
@@ -142,6 +151,12 @@ async fn signal_reload_once(
           _ => raise ResourceStartupFailure("reload reconcile reply invalid")
         }
       }
+      service.advance(
+        request,
+        @management.Retiring,
+        true,
+        Some(generation.active().config_epoch()),
+      )
       logger.log(
         @observability.LogRecord::new(
           @async.now(),
@@ -168,24 +183,36 @@ async fn run_reload_signals(
   strict : StrictPersistenceRuntime?,
   logger : @observability.Logger,
   shutdown_requested : () -> Bool,
+  service : ReloadService,
 ) -> Unit {
-  let requests = ReloadRequests::new(true)
   for ;; {
     @async.sleep(20)
     if shutdown_requested() || bus.closed {
       return
     }
     if (startup.signal_pending)() {
-      ignore(requests.signal(generation.active().config_epoch()))
+      ignore(service.signal(generation.active().config_epoch()))
     }
-    let request = match requests.active() {
+    let request = match service.requests.active() {
       Some(value) => value
       None => continue
     }
+    if !service.start(request, generation.active().config_epoch()) {
+      service.finish(
+        request,
+        false,
+        Some("precondition_failed"),
+        generation.active().config_epoch(),
+        None,
+      )
+      continue
+    }
+    let mut succeeded = true
     signal_reload_once(
-      startup, bus, generation, broker, strict, logger, request,
+      startup, bus, generation, broker, strict, logger, request, service,
     ) catch {
-      error =>
+      error => {
+        succeeded = false
         logger.log(
           @observability.LogRecord::new(
             @async.now(),
@@ -195,9 +222,24 @@ async fn run_reload_signals(
             reason=error.to_string(),
           ),
         )
+      }
     }
-    ignore(
-      requests.finish_active(request.id, generation.active().config_epoch()),
+    let lsn = match strict {
+      Some(runtime) if succeeded &&
+        service.activated_epochs.get(request.id) is Some(_) =>
+        Some(runtime.coordinator().applied_lsn())
+      _ => None
+    }
+    service.finish(
+      request,
+      succeeded,
+      if succeeded {
+        None
+      } else {
+        Some("reload_failed")
+      },
+      generation.active().config_epoch(),
+      lsn,
     )
   }
 }
