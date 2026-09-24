@@ -30,9 +30,10 @@ extern "C" fn tls_material_capture_ffi(
 extern "C" fn tls_material_release_ffi(directory : Bytes, length : Int) -> Int = "moonbit_mqtt_tls_material_release"
 
 ///|
-priv struct TlsMaterialLease {
+pub struct TlsMaterialLease {
   directory : String
   config : TlsServerConfig
+  mut references : Int
 }
 
 ///|
@@ -68,11 +69,25 @@ fn TlsMaterialLease::capture(
     path + "/key.pem",
     handshake_timeout_ms=config.handshake_timeout_ms(),
   ).unwrap()
-  { directory: path, config: copy }
+  { directory: path, config: copy, references: 1 }
+}
+
+///|
+fn TlsMaterialLease::retain(self : TlsMaterialLease) -> Unit {
+  if self.references < 1 || self.references == 2147483647 {
+    abort("invalid TLS material lease retain")
+  }
+  self.references += 1
 }
 
 ///|
 fn TlsMaterialLease::release(self : TlsMaterialLease) -> Unit {
-  let path = @utf8.encode(self.directory)
-  ignore(tls_material_release_ffi(path, path.length()))
+  if self.references < 1 {
+    abort("invalid TLS material lease release")
+  }
+  self.references -= 1
+  if self.references == 0 {
+    let path = @utf8.encode(self.directory)
+    ignore(tls_material_release_ffi(path, path.length()))
+  }
 }
