@@ -540,10 +540,18 @@ pub fn ClientSession::pending_head_topic(
 pub fn ClientSession::pending_head_reference(
   self : ClientSession,
 ) -> SessionMessage? {
-  if self.pending.is_empty() {
+  self.pending_item_reference(0)
+}
+
+///|
+pub fn ClientSession::pending_item_reference(
+  self : ClientSession,
+  index : Int,
+) -> SessionMessage? {
+  if index < 0 || index >= self.pending.length() {
     None
   } else {
-    Some(self.pending[0])
+    Some(self.pending[index])
   }
 }
 
@@ -552,11 +560,21 @@ pub fn ClientSession::pending_head_reference(
 pub fn ClientSession::pending_tail_for_policy(
   self : ClientSession,
 ) -> Array[SessionMessage] {
-  if self.pending.is_empty() {
-    []
-  } else {
-    self.pending[1:].to_owned()
+  self.pending_without_item_for_policy(0)
+}
+
+///|
+pub fn ClientSession::pending_without_item_for_policy(
+  self : ClientSession,
+  index : Int,
+) -> Array[SessionMessage] {
+  let remaining : Array[SessionMessage] = []
+  for position in 0..<self.pending.length() {
+    if position != index {
+      remaining.push(self.pending[position])
+    }
   }
+  remaining
 }
 
 ///|
@@ -565,8 +583,19 @@ pub fn ClientSession::discard_pending_head_prepared(
   expected : SessionMessage,
   remaining : Array[SessionMessage],
 ) -> Bool {
-  if self.pending.is_empty() ||
-    !physical_equal(self.pending[0], expected) ||
+  self.discard_pending_item_prepared(0, expected, remaining)
+}
+
+///|
+pub fn ClientSession::discard_pending_item_prepared(
+  self : ClientSession,
+  index : Int,
+  expected : SessionMessage,
+  remaining : Array[SessionMessage],
+) -> Bool {
+  if index < 0 ||
+    index >= self.pending.length() ||
+    !physical_equal(self.pending[index], expected) ||
     remaining.length() + 1 != self.pending.length() {
     return false
   }

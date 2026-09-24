@@ -10,7 +10,12 @@ test "reconcile WAL descriptors round trip without copying payload" {
     expected_generation: 7L,
     change: @router.DropPendingHead("private/data", 1, 1048576),
   }
-  for delta in [first, second] {
+  let third : @router.DurableReconcileDelta = {
+    client_id: "client-a",
+    expected_generation: 7L,
+    change: @router.DropPendingAt(12, "private/data", 1, 1048576),
+  }
+  for delta in [first, second, third] {
     let encoded = encode_wal_reconcile(delta).unwrap()
     assert_true(encoded.length() < 256)
     assert_true(decode_wal_reconcile(encoded) == Ok(delta))

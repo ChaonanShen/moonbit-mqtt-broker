@@ -6,6 +6,7 @@ pub struct DurableReconcilePlan {
   before_revision : Int64
   filter : @topic.TopicFilter?
   head : @session.SessionMessage?
+  pending_index : Int
   remaining : Array[@session.SessionMessage]
   next_subscription_bytes : Int64
   next_pending_bytes : Int64
@@ -46,10 +47,16 @@ pub fn BrokerState::prepare_durable_reconcile(
   if generation < 1L {
     return Err(InvariantViolation("invalid policy WAL Session generation"))
   }
+  let change = match change {
+    DropPendingHead(topic, qos, payload_bytes) =>
+      DropPendingAt(0, topic, qos, payload_bytes)
+    value => value
+  }
   let principal = session.owner()
   let owner = self.resources.owners.get(client_id).unwrap()
   let mut filter : @topic.TopicFilter? = None
   let mut head : @session.SessionMessage? = None
+  let mut pending_index = 0
   let mut remaining : Array[@session.SessionMessage] = []
   let mut next_usage = owner.usage
   let mut scratch_cost = 256L
@@ -77,10 +84,10 @@ pub fn BrokerState::prepare_durable_reconcile(
       scratch_cost += @budget.utf8_bytes(text)
       filter = Some(parsed)
     }
-    DropPendingHead(topic, qos, payload_bytes) => {
-      let current = match session.pending_head_reference() {
+    DropPendingAt(index, topic, qos, payload_bytes) => {
+      let current = match session.pending_item_reference(index) {
         Some(value) => value
-        None => return Err(InvariantViolation("policy pending head missing"))
+        None => return Err(InvariantViolation("policy pending item missing"))
       }
       if current.topic.value() != topic ||
         snapshot_qos(current.qos) != qos ||
@@ -89,7 +96,7 @@ pub fn BrokerState::prepare_durable_reconcile(
           policy.allows_principal(principal) &&
           policy.can_read_topic(principal, current.topic)
         ) {
-        return Err(InvariantViolation("policy pending head is not revoked"))
+        return Err(InvariantViolation("policy pending item is not revoked"))
       }
       let cost = current.cost()
       if cost > owner.usage.pending {
@@ -100,10 +107,13 @@ pub fn BrokerState::prepare_durable_reconcile(
       if scratch_cost > 1048576L {
         return Err(InvariantViolation("policy reconcile turn exceeds byte cap"))
       }
-      remaining = session.pending_tail_for_policy()
+      remaining = session.pending_without_item_for_policy(index)
+      pending_index = index
       next_usage = { ..owner.usage, pending: owner.usage.pending - cost }
       head = Some(current)
     }
+    DropPendingHead(_, _, _) =>
+      return Err(InvariantViolation("unreachable policy head conversion"))
   }
   let scratch = match self.reserve_scratch(scratch_cost) {
     Ok(value) => value
@@ -126,6 +136,7 @@ pub fn BrokerState::prepare_durable_reconcile(
     before_revision: self.snapshot_revision(),
     filter,
     head,
+    pending_index,
     remaining,
     next_subscription_bytes: next_usage.subscriptions,
     next_pending_bytes: next_usage.pending,
@@ -161,15 +172,17 @@ pub fn DurableReconcilePlan::commit(
         is None {
         return Err(InvariantViolation("policy subscription changed"))
       }
-    DropPendingHead(_, _, _) =>
+    DropPendingAt(_, _, _, _) =>
       if self.head is None ||
-        session.pending_head_reference() is None ||
+        session.pending_item_reference(self.pending_index) is None ||
         !physical_equal(
-          session.pending_head_reference().unwrap(),
+          session.pending_item_reference(self.pending_index).unwrap(),
           self.head.unwrap(),
         ) {
-        return Err(InvariantViolation("policy pending head changed"))
+        return Err(InvariantViolation("policy pending item changed"))
       }
+    DropPendingHead(_, _, _) =>
+      return Err(InvariantViolation("unreachable policy head conversion"))
   }
   if self.replacement.commit() is Err(_) {
     return Err(InvariantViolation("policy reconcile budget owner changed"))
@@ -182,8 +195,9 @@ pub fn DurableReconcilePlan::commit(
         index.remove_subscription(self.client_id, filter)
       }
     }
-    DropPendingHead(_, _, _) => {
-      if !session.discard_pending_head_prepared(
+    DropPendingAt(_, _, _, _) => {
+      if !session.discard_pending_item_prepared(
+          self.pending_index,
           self.head.unwrap(),
           self.remaining,
         ) {
@@ -191,6 +205,8 @@ pub fn DurableReconcilePlan::commit(
       }
       self.broker.pending_qos1_total -= 1
     }
+    DropPendingHead(_, _, _) =>
+      return Err(InvariantViolation("unreachable policy head conversion"))
   }
   let owner = self.broker.resources.owners.get(self.client_id).unwrap()
   owner.usage = {

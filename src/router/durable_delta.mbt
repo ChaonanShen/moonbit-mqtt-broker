@@ -2,6 +2,7 @@
 pub(all) enum DurablePolicyChange {
   DropSubscription(String)
   DropPendingHead(String, Int, Int)
+  DropPendingAt(Int, String, Int, Int)
 } derive(Eq)
 
 ///|
@@ -360,7 +361,12 @@ pub fn DurableAccumulator::apply_reconcile(
     _ => return Err(InvalidState("policy reconcile Session generation changed"))
   }
   let session = existing.session
-  let (replacement, released) = match delta.change {
+  let change = match delta.change {
+    DropPendingHead(topic, qos, payload_bytes) =>
+      DropPendingAt(0, topic, qos, payload_bytes)
+    value => value
+  }
+  let (replacement, released) = match change {
     DropSubscription(filter) => {
       if !session.subscriptions.any(item => item.filter == filter) {
         return Err(InvalidState("policy reconcile subscription missing"))
@@ -371,20 +377,28 @@ pub fn DurableAccumulator::apply_reconcile(
         @budget.subscription_cost(filter),
       )
     }
-    DropPendingHead(topic, qos, payload_bytes) => {
-      if session.pending.is_empty() ||
-        session.pending[0].topic != topic ||
-        session.pending[0].qos != qos ||
-        session.pending[0].payload.length() != payload_bytes {
-        return Err(InvalidState("policy reconcile pending head changed"))
+    DropPendingAt(index, topic, qos, payload_bytes) => {
+      if index < 0 ||
+        index >= session.pending.length() ||
+        session.pending[index].topic != topic ||
+        session.pending[index].qos != qos ||
+        session.pending[index].payload.length() != payload_bytes {
+        return Err(InvalidState("policy reconcile pending item changed"))
       }
-      let remaining = session.pending[1:].to_owned()
+      let remaining : Array[SnapshotMessageV3] = []
+      for position in 0..<session.pending.length() {
+        if position != index {
+          remaining.push(session.pending[position])
+        }
+      }
       let cost = match @budget.message_cost(topic, payload_bytes.to_int64()) {
         Ok(value) => value
         Err(_) => return Err(LimitExceeded("policy reconcile message cost"))
       }
       ({ ..session, pending: remaining }, cost)
     }
+    DropPendingHead(_, _, _) =>
+      return Err(InvalidState("unreachable policy head conversion"))
   }
   if released < 0L || released > self.bytes {
     return Err(InvalidState("policy reconcile byte count"))
