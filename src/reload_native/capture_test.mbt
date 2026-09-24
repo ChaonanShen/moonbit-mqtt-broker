@@ -92,19 +92,38 @@ async test "capture worker rejects unsafe and oversized sources" {
 }
 
 ///|
-async test "TLS native worker owns private material until explicit transfer" {
+async test "TLS native worker validates and owns material until transfer" {
+  let fixture = @fs.tmpdir(prefix="mqtt-native-tls-")
+  let cert = fixture + "/server.crt"
+  let key = fixture + "/server.key"
+  let other_key = fixture + "/other.key"
+  let other_cert = fixture + "/other.crt"
+  let (status, _, _) = @process.collect_output("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-sha256", "-nodes", "-days", "1", "-subj",
+    "/CN=localhost", "-keyout", key, "-out", cert,
+  ])
+  assert_eq(status, 0)
+  let (other_status, _, _) = @process.collect_output("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-sha256", "-nodes", "-days", "1", "-subj",
+    "/CN=localhost", "-keyout", other_key, "-out", other_cert,
+  ])
+  assert_eq(other_status, 0)
+  @fs.chmod(key, 0o600)
+  @fs.chmod(other_key, 0o600)
+  let cert_bytes = @fs.read_file(cert).binary()
+  let key_bytes = @fs.read_file(key).binary()
   let worker = CaptureWorker::new().unwrap()
-  assert_eq(worker.submit_tls(1L, b"certificate-v1", b"key-v1"), Ok(()))
+  assert_eq(worker.submit_tls(1L, cert_bytes, key_bytes), Ok(()))
   assert_eq(wait_capture(worker), 1L)
   let directory = worker.take_tls_directory(1L).unwrap()
-  assert_eq(@fs.read_file(directory + "/cert.pem").text(), "certificate-v1")
-  assert_eq(@fs.read_file(directory + "/key.pem").text(), "key-v1")
+  assert_eq(@fs.read_file(directory + "/cert.pem").binary(), cert_bytes)
+  assert_eq(@fs.read_file(directory + "/key.pem").binary(), key_bytes)
   assert_eq(worker.reap(1L), Ok(()))
   assert_true(@fs.exists(directory))
   @fs.remove(directory + "/cert.pem")
   @fs.remove(directory + "/key.pem")
   @fs.rmdir(directory)
-  assert_eq(worker.submit_tls(2L, b"certificate-v2", b"key-v2"), Ok(()))
+  assert_eq(worker.submit_tls(2L, cert_bytes, key_bytes), Ok(()))
   assert_eq(wait_capture(worker), 2L)
   let (length, _) = worker.result_info(2L).unwrap()
   let unpublished = @utf8.decode(worker.copy_chunk(2L, 0).unwrap())
@@ -112,5 +131,13 @@ async test "TLS native worker owns private material until explicit transfer" {
   assert_true(@fs.exists(unpublished))
   assert_eq(worker.reap(2L), Ok(()))
   assert_false(@fs.exists(unpublished))
+  assert_eq(
+    worker.submit_tls(3L, cert_bytes, @fs.read_file(other_key).binary()),
+    Ok(()),
+  )
+  assert_eq(wait_capture(worker), 3L)
+  assert_eq(worker.result_info(3L), Err(TlsInvalid))
+  assert_eq(worker.reap(3L), Ok(()))
   stop_capture(worker)
+  @fs.rmdir(fixture, recursive=true)
 }
