@@ -31,6 +31,11 @@ pub fn AclPolicy::same_rules(self : AclPolicy, other : AclPolicy) -> Bool {
 }
 
 ///|
+pub fn AclPolicy::rule_count(self : AclPolicy) -> Int {
+  self.rules.length()
+}
+
+///|
 fn split_acl_fields(line : StringView) -> Array[String] {
   line
   .split(" ")
