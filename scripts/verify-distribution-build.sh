@@ -35,5 +35,40 @@ printf '%s\n' "${management_token}" >/results/runtime/management-client-token
 chown 65532:65532 /results/runtime/management-tokens
 chmod 0400 /results/runtime/management-tokens
 chmod 0444 /results/runtime/management-client-token /results/runtime/management-admin-client-token
+cat >/results/runtime/reload-plain.toml <<'EOF'
+[server]
+listen = "127.0.0.1:1883"
+[reload]
+enabled = true
+manifest_file = "/artifact/reload-plain.manifest.toml"
+EOF
+cat >/results/runtime/reload-tls.toml <<'EOF'
+[server]
+listen = "127.0.0.1:1883"
+[tls]
+cert = "/artifact/server.crt"
+key = "/artifact/server.key"
+[reload]
+enabled = true
+manifest_file = "/artifact/reload-tls.manifest.toml"
+material_runtime_dir = "/reload-material"
+EOF
+make_reload_manifest() {
+  local kind="$1"
+  local output="/results/runtime/reload-${kind}.manifest.toml"
+  printf 'version = 1\n[[materials]]\nrole = "config"\npath = "/artifact/reload-%s.toml"\nsha256 = "%s"\n' \
+    "$kind" "$(sha256sum "/results/runtime/reload-${kind}.toml" | cut -d' ' -f1)" >"$output"
+  if [[ "$kind" = tls ]]; then
+    for item in 'mqtt_cert:server.crt' 'mqtt_key:server.key'; do
+      local role="${item%%:*}" name="${item#*:}"
+      printf '[[materials]]\nrole = "%s"\nlistener_id = "mqtt"\npath = "/artifact/%s"\nsha256 = "%s"\n' \
+        "$role" "$name" "$(sha256sum "/results/runtime/$name" | cut -d' ' -f1)" >>"$output"
+    done
+  fi
+  chown 65532:65532 "$output"
+  chmod 0600 "$output"
+}
+make_reload_manifest plain
+make_reload_manifest tls
 (cd /results && sha256sum package.zip runtime/broker >artifacts.sha256)
 echo 'DISTRIBUTION clean source, release archive, and exported native binary passed'
