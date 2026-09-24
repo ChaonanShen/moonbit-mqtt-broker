@@ -35,16 +35,3 @@ test "restart scalar comparison treats implicit snapshot mode as effective" {
   )
   assert_false(implicit.same_values(strict))
 }
-
-///|
-test "restart scalar comparison detects non-hot listener address changes" {
-  let baseline = effective_restart_scalars(
-    "[server]\nlisten = \"127.0.0.1:1883\"\n",
-    [],
-  )
-  let changed = effective_restart_scalars(
-    "[server]\nlisten = \"127.0.0.1:1884\"\n",
-    [],
-  )
-  assert_false(baseline.same_values(changed))
-}

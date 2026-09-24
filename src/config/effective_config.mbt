@@ -11,6 +11,22 @@ pub(all) struct HotTlsSource {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct ListenerRestart {
+  id : String
+  transport : String
+  listen : String
+  max_connections : Int
+  tls_handshake_timeout_ms : Int
+  ws_path : String
+  ws_allowed_origins : Array[String]
+  ws_require_origin : Bool
+  http_upgrade_timeout_ms : Int
+  max_http_header_bytes : Int
+  max_ws_frame_bytes : Int
+  max_ws_message_bytes : Int
+} derive(Eq, Debug)
+
+///|
 pub(all) struct HotConfig {
   allow_anonymous : Bool
   password_file : String?
@@ -21,14 +37,26 @@ pub(all) struct HotConfig {
   management_snapshot_interval_ms : Int
   management_snapshot_max_age_ms : Int
   tls_sources : Array[HotTlsSource]
+  listener_topology : Array[ListenerRestart]
 } derive(Eq, Debug)
 
 ///|
 priv struct HotListenerDraft {
   id : String
   mut transport : String
+  mut listen : String
+  mut max_connections : Int
   mut cert : String
   mut key : String
+  mut tls_handshake_timeout_ms : Int
+  mut ws_path : String
+  ws_allowed_origins : Array[String]
+  mut ws_require_origin : Bool
+  mut http_upgrade_timeout_ms : Int
+  mut max_http_header_bytes : Int
+  mut max_ws_frame_bytes : Int
+  mut max_ws_message_bytes : Int
+  mut ws_settings_used : Bool
 }
 
 ///|
@@ -87,6 +115,9 @@ pub fn effective_hot_config(
   let mut management_snapshot_max_age_ms = 5000
   let mut legacy_cert = ""
   let mut legacy_key = ""
+  let mut legacy_listen = "127.0.0.1:1883"
+  let mut legacy_tls_timeout = 10000
+  let mut global_max_connections = 128
   let listeners : Array[HotListenerDraft] = []
   let mut index = 0
   while index < args.length() {
@@ -123,21 +154,87 @@ pub fn effective_hot_config(
         management_snapshot_max_age_ms = hot_positive_int(value, option)
       "--tls-cert" => legacy_cert = hot_path(value, option)
       "--tls-key" => legacy_key = hot_path(value, option)
+      "--tls-handshake-timeout-ms" =>
+        legacy_tls_timeout = hot_positive_int(value, option)
+      "--listen" => legacy_listen = hot_path(value, option)
+      "--max-connections" =>
+        global_max_connections = hot_positive_int(value, option)
       "--listener-id" => {
         if value == "" || listeners.any(item => item.id == value) {
           raise EffectiveConfigError("invalid or duplicate listener id")
         }
-        listeners.push({ id: value, transport: "", cert: "", key: "" })
+        listeners.push({
+          id: value,
+          transport: "",
+          listen: "",
+          max_connections: -1,
+          cert: "",
+          key: "",
+          tls_handshake_timeout_ms: 10000,
+          ws_path: "/mqtt",
+          ws_allowed_origins: [],
+          ws_require_origin: false,
+          http_upgrade_timeout_ms: 5000,
+          max_http_header_bytes: 16384,
+          max_ws_frame_bytes: 1048576,
+          max_ws_message_bytes: 4194304,
+          ws_settings_used: false,
+        })
       }
-      "--listener-transport" | "--listener-tls-cert" | "--listener-tls-key" => {
+      "--listener-transport"
+      | "--listener-listen"
+      | "--listener-max-connections"
+      | "--listener-tls-cert"
+      | "--listener-tls-key"
+      | "--listener-tls-handshake-timeout-ms"
+      | "--listener-ws-path"
+      | "--listener-ws-allowed-origin"
+      | "--listener-ws-require-origin"
+      | "--listener-http-upgrade-timeout-ms"
+      | "--listener-max-http-header-bytes"
+      | "--listener-max-ws-frame-bytes"
+      | "--listener-max-ws-message-bytes" => {
         if listeners.is_empty() {
           raise EffectiveConfigError(option + " needs listener id")
         }
         let draft = listeners[listeners.length() - 1]
         match option {
           "--listener-transport" => draft.transport = value
+          "--listener-listen" => draft.listen = hot_path(value, option)
+          "--listener-max-connections" =>
+            draft.max_connections = hot_positive_int(value, option)
           "--listener-tls-cert" => draft.cert = hot_path(value, option)
-          _ => draft.key = hot_path(value, option)
+          "--listener-tls-key" => draft.key = hot_path(value, option)
+          "--listener-tls-handshake-timeout-ms" =>
+            draft.tls_handshake_timeout_ms = hot_positive_int(value, option)
+          "--listener-ws-path" => {
+            draft.ws_path = value
+            draft.ws_settings_used = true
+          }
+          "--listener-ws-allowed-origin" => {
+            draft.ws_allowed_origins.push(value)
+            draft.ws_settings_used = true
+          }
+          "--listener-ws-require-origin" => {
+            draft.ws_require_origin = hot_bool(value, option)
+            draft.ws_settings_used = true
+          }
+          "--listener-http-upgrade-timeout-ms" => {
+            draft.http_upgrade_timeout_ms = hot_positive_int(value, option)
+            draft.ws_settings_used = true
+          }
+          "--listener-max-http-header-bytes" => {
+            draft.max_http_header_bytes = hot_positive_int(value, option)
+            draft.ws_settings_used = true
+          }
+          "--listener-max-ws-frame-bytes" => {
+            draft.max_ws_frame_bytes = hot_positive_int(value, option)
+            draft.ws_settings_used = true
+          }
+          _ => {
+            draft.max_ws_message_bytes = hot_positive_int(value, option)
+            draft.ws_settings_used = true
+          }
         }
       }
       _ => ()
@@ -154,6 +251,7 @@ pub fn effective_hot_config(
     raise EffectiveConfigError("invalid management snapshot freshness")
   }
   let tls_sources : Array[HotTlsSource] = []
+  let listener_topology : Array[ListenerRestart] = []
   if listeners.is_empty() {
     if legacy_cert != "" || legacy_key != "" {
       if legacy_cert == "" || legacy_key == "" {
@@ -165,12 +263,46 @@ pub fn effective_hot_config(
         key_path: legacy_key,
       })
     }
+    listener_topology.push({
+      id: "mqtt",
+      transport: if legacy_cert == "" {
+        "tcp"
+      } else {
+        "tls"
+      },
+      listen: legacy_listen,
+      max_connections: global_max_connections,
+      tls_handshake_timeout_ms: legacy_tls_timeout,
+      ws_path: "/mqtt",
+      ws_allowed_origins: [],
+      ws_require_origin: false,
+      http_upgrade_timeout_ms: 5000,
+      max_http_header_bytes: 16384,
+      max_ws_frame_bytes: 1048576,
+      max_ws_message_bytes: 4194304,
+    })
   } else {
     if legacy_cert != "" || legacy_key != "" {
       raise EffectiveConfigError("named listeners cannot use legacy TLS")
     }
     for listener in listeners {
+      if listener.listen == "" ||
+        !["tcp", "tls", "ws", "wss"].contains(listener.transport) {
+        raise EffectiveConfigError("invalid listener topology")
+      }
+      let cap = if listener.max_connections < 0 {
+        global_max_connections
+      } else {
+        listener.max_connections
+      }
+      if cap > global_max_connections {
+        raise EffectiveConfigError("listener capacity exceeds global cap")
+      }
       let needs_tls = listener.transport == "tls" || listener.transport == "wss"
+      let needs_ws = listener.transport == "ws" || listener.transport == "wss"
+      if !needs_ws && listener.ws_settings_used {
+        raise EffectiveConfigError("non-WS listener has WS settings")
+      }
       if needs_tls {
         if listener.cert == "" || listener.key == "" {
           raise EffectiveConfigError("TLS listener requires cert and key")
@@ -180,9 +312,25 @@ pub fn effective_hot_config(
           cert_path: listener.cert,
           key_path: listener.key,
         })
-      } else if listener.cert != "" || listener.key != "" {
+      } else if listener.cert != "" ||
+        listener.key != "" ||
+        listener.tls_handshake_timeout_ms != 10000 {
         raise EffectiveConfigError("non-TLS listener has TLS material")
       }
+      listener_topology.push({
+        id: listener.id,
+        transport: listener.transport,
+        listen: listener.listen,
+        max_connections: cap,
+        tls_handshake_timeout_ms: listener.tls_handshake_timeout_ms,
+        ws_path: listener.ws_path,
+        ws_allowed_origins: listener.ws_allowed_origins.copy(),
+        ws_require_origin: listener.ws_require_origin,
+        http_upgrade_timeout_ms: listener.http_upgrade_timeout_ms,
+        max_http_header_bytes: listener.max_http_header_bytes,
+        max_ws_frame_bytes: listener.max_ws_frame_bytes,
+        max_ws_message_bytes: listener.max_ws_message_bytes,
+      })
     }
   }
   {
@@ -195,5 +343,26 @@ pub fn effective_hot_config(
     management_snapshot_interval_ms,
     management_snapshot_max_age_ms,
     tls_sources,
+    listener_topology,
   }
+}
+
+///|
+pub fn HotConfig::same_listener_topology(
+  self : HotConfig,
+  other : HotConfig,
+) -> Bool {
+  if self.listener_topology.length() != other.listener_topology.length() {
+    return false
+  }
+  let by_id : Map[String, ListenerRestart] = Map([])
+  for listener in other.listener_topology {
+    by_id.set(listener.id, listener)
+  }
+  for listener in self.listener_topology {
+    if by_id.get(listener.id) != Some(listener) {
+      return false
+    }
+  }
+  true
 }
