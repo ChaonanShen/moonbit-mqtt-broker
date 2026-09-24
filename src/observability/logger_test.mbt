@@ -53,3 +53,15 @@ test "listener origin fields are finite structured log values" {
   assert_true(rendered.contains("\"listener_id\":\"browser\""))
   assert_true(rendered.contains("\"transport\":\"wss\""))
 }
+
+///|
+test "logger hot settings switch level and format together" {
+  let logger = Logger::new(minimum_level=Warn, format=Text)
+  let record = LogRecord::new(1L, Info, "reload_test")
+  assert_true(logger.render(record) is None)
+  logger.reconfigure(Debug, Json)
+  let json = logger.render(record).unwrap()
+  assert_true(json.contains("\"event\":\"reload_test\""))
+  logger.reconfigure(Error, Text)
+  assert_true(logger.render(record) is None)
+}
