@@ -132,8 +132,9 @@ fn create_auth_executor(
   config : ServerConfig,
   security : @security.SecurityPolicy,
   ledger : @budget.Ledger,
+  reserve_for_reload? : Bool = false,
 ) -> (@security.AuthExecutor, @budget.Ticket)? raise ResourceStartupFailure {
-  if !security.has_passwords() {
+  if !security.has_passwords() && !reserve_for_reload {
     return None
   }
   let limits = config.broker_config().resources()
@@ -187,6 +188,7 @@ pub async fn serve_listeners(
   logger? : @observability.Logger = @observability.Logger::silent(),
   management? : ManagementRuntime,
   material_provider? : TlsMaterialProvider,
+  reload_enabled? : Bool = false,
 ) -> Unit {
   if persistence is Some(_) && strict is Some(_) {
     raise ResourceStartupFailure("snapshot and strict cannot run together")
@@ -214,6 +216,7 @@ pub async fn serve_listeners(
     config,
     security,
     initial_state.resource_ledger(),
+    reserve_for_reload=reload_enabled,
   )
   let auth_executor = match auth_runtime {
     Some((executor, _)) => Some(executor)
@@ -665,6 +668,7 @@ pub async fn run_listeners(
     @bundle.ReloadEffectiveCandidate,
     String,
   ),
+  reload_enabled? : Bool = false,
 ) -> Unit {
   defer (match persistence {
     Some(runtime) => runtime.close()
@@ -885,6 +889,7 @@ pub async fn run_listeners(
       logger~,
       management?=management_runtime,
       material_provider=materials,
+      reload_enabled~,
     )
   }
 }
