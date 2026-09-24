@@ -7,7 +7,7 @@ Prometheus, and status work when management is enabled. Detail queries and
 operations have separate switches and are disabled by default. MQTT continues
 to run if a derived detail index becomes unavailable; detail and write routes
 then return 503 until restart. This API has no HTTPS, remote bind, UI, message
-payload view, bulk deletion, retained deletion, token rotation, or live reload.
+payload view, bulk deletion, retained deletion, token rotation, or management-token rotation.
 
 ## Start and roles
 
@@ -61,7 +61,7 @@ binding. See [configuration](configuration.md) and
 | `GET /v1/sessions[/{handle}]` | read | Session identity, lifecycle, ownership and queue counts/bytes |
 | `GET /v1/sessions/{handle}/subscriptions` | read | Filter and QoS, no payload |
 | `GET /v1/retained` | read | Topic, QoS and payload byte count, no payload |
-| `GET /v1/config` | read | Whitelisted limits and switches, no token path or secrets |
+| `GET /v1/config` | config_admin | Current reload config/policy epochs and strong config ETag when reload is enabled |
 | `POST /v1/connections/{id}/disconnect` | operator | Close that connection; abnormal Will rules apply |
 | `DELETE /v1/sessions/{handle}` | operator | Delete only an offline persistent Session |
 | `GET /v1/operations/{id}` | operator or config_admin | Own in-process Operation |
@@ -79,6 +79,23 @@ recovering state forces `ready=false` regardless of the snapshot-only health
 switch; read-only status and metrics remain available while the event loop is
 healthy. Prometheus exposes bounded WAL LSN/pending gauges without Client ID,
 topic or file labels.
+
+## Configuration reload
+
+With reload enabled, a `config_admin` token can read `GET /v1/config`
+even when detail and ordinary operation routes are disabled. The response
+contains decimal-string `config_epoch` and `policy_epoch`, plus a strong,
+boot-scoped `ETag`. Send that ETag in `If-Match` and a 16–64 character
+`Idempotency-Key` to `POST /v1/config/reload`. The body may be empty,
+`{}`, or `{"expected_generation":0}` with a canonical nonnegative JSON
+integer matching the ETag. An accepted request returns 202 and an Operation
+location; the same key/request returns the original Operation, while a reused
+key for another request returns 409. A stale ETag fails with 412. Query the
+Operation until terminal: acceptance alone does not mean activation or
+reconciliation succeeded. A `config_admin` token can read its own Operation
+and audit entries without `operations_enabled`. SIGHUP uses the same bounded
+reload owner and records a local-signal audit entry even with management
+disabled. Neither path rotates the management token file.
 
 ## Details and pagination
 
@@ -169,7 +186,7 @@ Common errors are 401 invalid/missing token, 403 wrong scope, 428 missing
 command preconditions, 400 malformed input, 404 missing target or another
 token's Operation, 409 active Session or idempotency conflict, 410 expired
 cursor or previous-boot Operation, 412 stale ETag, 422 oversized row, 429
-capacity/rate exhaustion, 501 unavailable reload, and 503 disabled, degraded
+capacity/rate exhaustion, and 503 disabled, degraded
 or stopping facility. All responses use `Cache-Control: no-store`. The
 listener has independent connection, request and command token buckets and
 fixed queue/slot caps; slow readers hold their request slot through the
