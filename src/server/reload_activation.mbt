@@ -158,15 +158,19 @@ pub fn RouterDriver::activate_prepared_reload(
 }
 
 ///|
-/// Visit one core session slot per driver turn. Every active MQTT connection
-/// has a Session, including clean Sessions; this index is available without
-/// management details. A changed credential is closed even while idle.
+/// Visit at most the configured number of core session slots per driver turn.
+/// Every active MQTT connection has a Session, including clean Sessions; this
+/// index is available without management details. A changed credential is
+/// closed even while idle.
 fn RouterDriver::advance_reload_connections(self : RouterDriver) -> Unit {
   let slot = match self.reload_connection_slot {
     Some(value) => value
     None => return
   }
-  let page = match self.runtime.broker_state().policy_session_page(slot, 1) {
+  let page = match
+    self.runtime
+    .broker_state()
+    .policy_session_page(slot, self.reload_reconcile_items) {
     Some(value) => value
     None => abort("reload policy session index unavailable")
   }
@@ -174,35 +178,38 @@ fn RouterDriver::advance_reload_connections(self : RouterDriver) -> Unit {
     self.reload_connection_slot = None
     return
   }
-  self.reload_connection_slot = Some(page.next_slot)
-  if page.keys.is_empty() {
-    return
-  }
-  let client_id = match @session.ClientId::new(page.keys[0]) {
-    Ok(value) => value
-    Err(_) => abort("invalid core session client id")
-  }
-  let connection_id = match self.runtime.active_connection(client_id) {
-    Some(value) => value
-    None => return
-  }
-  if self.runtime.connection_credential_current(connection_id) {
-    return
-  }
-  if self.strict is Some(_) {
-    if self.sinks.get(connection_id) is Some(sink) {
-      sink.try_close(PolicyRevoked)
-    }
+  self.reload_connection_slot = if page.has_more {
+    Some(page.next_slot)
   } else {
-    self.dispatch(
-      self.runtime.apply(
-        TransportClosed({
-          connection_id,
-          reason: PolicyRevoked,
-          observed_at_ms: @async.now(),
-        }),
-      ),
-    )
+    None
+  }
+  for key in page.keys {
+    let client_id = match @session.ClientId::new(key) {
+      Ok(value) => value
+      Err(_) => abort("invalid core session client id")
+    }
+    let connection_id = match self.runtime.active_connection(client_id) {
+      Some(value) => value
+      None => continue
+    }
+    if self.runtime.connection_credential_current(connection_id) {
+      continue
+    }
+    if self.strict is Some(_) {
+      if self.sinks.get(connection_id) is Some(sink) {
+        sink.try_close(PolicyRevoked)
+      }
+    } else {
+      self.dispatch(
+        self.runtime.apply(
+          TransportClosed({
+            connection_id,
+            reason: PolicyRevoked,
+            observed_at_ms: @async.now(),
+          }),
+        ),
+      )
+    }
   }
 }
 
