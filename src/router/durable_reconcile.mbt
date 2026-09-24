@@ -14,6 +14,7 @@ pub struct DurableReconcilePlan {
   replacement : @budget.Replacement
   scratch : @budget.Ticket
   delta : DurableReconcileDelta
+  mut replacement_committed : Bool
   mut finished : Bool
 }
 
@@ -158,6 +159,7 @@ pub fn BrokerState::prepare_durable_reconcile(
       expected_generation: generation,
       change,
     },
+    replacement_committed: false,
     finished: false,
   })
 }
@@ -205,6 +207,7 @@ pub fn DurableReconcilePlan::commit(
   if self.replacement.commit() is Err(_) {
     return Err(InvariantViolation("policy reconcile budget owner changed"))
   }
+  self.replacement_committed = true
   match self.delta.change {
     DropSubscription(_) => {
       let filter = self.filter.unwrap()
@@ -243,7 +246,9 @@ pub fn DurableReconcilePlan::commit(
 ///|
 pub fn DurableReconcilePlan::cancel(self : DurableReconcilePlan) -> Unit {
   if !self.finished {
-    self.replacement.rollback().unwrap()
+    if !self.replacement_committed {
+      self.replacement.rollback().unwrap()
+    }
     self.scratch.release().unwrap()
     self.finished = true
   }

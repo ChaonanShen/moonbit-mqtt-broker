@@ -232,6 +232,14 @@ pub fn BrokerState::policy_session_incarnation(
 }
 
 ///|
+pub fn BrokerState::policy_session_revision(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Int64? {
+  self.sessions.get(client_id).map(session => session.policy_revision())
+}
+
+///|
 /// A page scans at most scan_limit physical slots, including empty slots.
 pub fn BrokerState::policy_session_page(
   self : BrokerState,
