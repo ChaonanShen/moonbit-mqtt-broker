@@ -99,3 +99,26 @@ test "detached session queues defensively copied qos1 payload" {
     is Err(PendingLimitReached(_)),
   )
 }
+
+///|
+test "policy revision changes with queue and attachment mutations" {
+  let session = ClientSession::new(qos1_client("revision"), mode=Persistent)
+  let limits = SessionLimits::new(1, 2).unwrap()
+  assert_eq(session.policy_revision(), 1L)
+  let first = match session.stage(qos1_message("first"), limits).unwrap() {
+    SendNow(delivery) => delivery
+    _ => fail("first message must be inflight")
+  }
+  let after_stage = session.policy_revision()
+  assert_true(after_stage > 1L)
+  assert_eq(session.stage(qos1_message("queued"), limits), Ok(Queued))
+  assert_true(session.policy_revision() > after_stage)
+  let before_ack = session.policy_revision()
+  ignore(session.ack(first.packet_id, limits))
+  assert_true(session.policy_revision() > before_ack)
+  session.detach()
+  let before_attach = session.policy_revision()
+  ignore(session.attach(limits))
+  assert_true(session.policy_revision() > before_attach)
+  assert_eq(session.copy().policy_revision(), session.policy_revision())
+}
