@@ -1,6 +1,7 @@
 import {
   "ChaonanShen/moonbit-mqtt-broker/resource_budget" @budget,
   "moonbitlang/core/encoding/utf8",
+  "moonbitlang/async",
   "ChaonanShen/moonbit-mqtt-broker/topic",
 }
 
@@ -13,6 +14,8 @@ options(
   ],
   targets: {
     "password.mbt": [ "native" ],
+    "password_candidate.mbt": [ "native" ],
+    "password_candidate_test.mbt": [ "native" ],
     "auth_executor.mbt": [ "native" ],
     "auth_executor_test.mbt": [ "native" ],
   },
