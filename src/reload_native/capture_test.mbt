@@ -158,6 +158,35 @@ async test "TLS native worker validates and owns material until transfer" {
   assert_eq(wait_capture(worker), 5L)
   assert_eq(worker.result_info(5L), Err(UnsafeSource))
   assert_eq(worker.reap(5L), Ok(()))
+  let missing_root = fixture + "/not-created"
+  assert_eq(
+    worker.submit_tls(
+      6L,
+      cert_bytes,
+      key_bytes,
+      runtime_root=missing_root,
+      validate_only=true,
+    ),
+    Ok(()),
+  )
+  assert_eq(wait_capture(worker), 6L)
+  assert_eq(worker.result_info(6L).unwrap().0, 0)
+  assert_eq(worker.reap(6L), Ok(()))
+  assert_false(@fs.exists(missing_root))
+  assert_eq(
+    worker.submit_tls(
+      7L,
+      cert_bytes,
+      @fs.read_file(other_key).binary(),
+      runtime_root=missing_root,
+      validate_only=true,
+    ),
+    Ok(()),
+  )
+  assert_eq(wait_capture(worker), 7L)
+  assert_eq(worker.result_info(7L), Err(TlsInvalid))
+  assert_eq(worker.reap(7L), Ok(()))
+  assert_false(@fs.exists(missing_root))
   stop_capture(worker)
   @fs.rmdir(fixture, recursive=true)
 }

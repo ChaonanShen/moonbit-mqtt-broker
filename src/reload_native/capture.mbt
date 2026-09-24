@@ -44,6 +44,7 @@ extern "C" fn ffi_submit_tls(
   key_length : Int,
   root : Bytes,
   root_length : Int,
+  validate_only : Int,
 ) -> Int = "moonbit_mqtt_capture_worker_submit_tls"
 
 ///|
@@ -164,6 +165,7 @@ pub fn CaptureWorker::submit_tls(
   cert : Bytes,
   key : Bytes,
   runtime_root? : String = "/tmp",
+  validate_only? : Bool = false,
 ) -> Result[Unit, CaptureError] {
   let root = @utf8.encode(runtime_root)
   match
@@ -176,6 +178,11 @@ pub fn CaptureWorker::submit_tls(
       key.length(),
       root,
       root.length(),
+      if validate_only {
+        1
+      } else {
+        0
+      },
     ) {
     0 => Ok(())
     1 => Err(Busy)

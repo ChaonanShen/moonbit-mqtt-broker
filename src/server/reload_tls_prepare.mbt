@@ -194,3 +194,73 @@ pub async fn prepare_tls_generation(
   finish_tls_worker(worker)
   { leases, transferred: false }
 }
+
+///|
+/// Check a captured TLS bundle on the maintenance worker without creating a
+/// material generation. The worker validates certificate/key bytes through
+/// anonymous Linux file descriptors and reaps them before returning.
+pub async fn validate_tls_bundle(
+  bundle : @bundle.CapturedBundle,
+  candidate : @bundle.ReloadEffectiveCandidate,
+) -> Unit {
+  let sources = candidate.hot().tls_sources
+  if sources.is_empty() {
+    return
+  }
+  let worker = match @native.CaptureWorker::new() {
+    Ok(value) => value
+    Err(_) =>
+      raise ResourceStartupFailure("TLS maintenance backend unavailable")
+  }
+  errdefer finish_tls_worker(worker)
+  let mut task_id = 1L
+  for source in sources {
+    let cert = match
+      bundle.material_bytes("mqtt_cert", listener_id=source.listener_id) {
+      Some(value) => value
+      None => raise ResourceStartupFailure("bundle TLS certificate missing")
+    }
+    let key = match
+      bundle.material_bytes("mqtt_key", listener_id=source.listener_id) {
+      Some(value) => value
+      None => raise ResourceStartupFailure("bundle TLS key missing")
+    }
+    if worker.submit_tls(task_id, cert, key, validate_only=true) is Err(_) {
+      raise ResourceStartupFailure("TLS maintenance submission failed")
+    }
+    let mut active = true
+    errdefer @async.protect_from_cancel(() => {
+      if active {
+        ignore(worker.cancel(task_id))
+        for ;; {
+          if worker.poll() is Some(_) {
+            ignore(worker.reap(task_id))
+            break
+          }
+          @async.sleep(1)
+        }
+      }
+    })
+    for ;; {
+      match worker.poll() {
+        Some(id) if id == task_id => break
+        Some(_) =>
+          raise ResourceStartupFailure("TLS maintenance completion mismatch")
+        None => @async.sleep(1)
+      }
+    }
+    let valid = match worker.result_info(task_id) {
+      Ok((0, _)) => true
+      _ => false
+    }
+    if worker.reap(task_id) is Err(_) {
+      raise ResourceStartupFailure("TLS material reap failed")
+    }
+    active = false
+    if !valid {
+      raise ResourceStartupFailure("TLS material validation failed")
+    }
+    task_id += 1L
+  }
+  finish_tls_worker(worker)
+}

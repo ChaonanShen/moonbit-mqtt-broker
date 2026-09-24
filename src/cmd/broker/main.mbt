@@ -1600,18 +1600,9 @@ async fn run_main() -> Unit {
       if !reload_material_runtime_dir.has_prefix("/") {
         raise CliError("reload TLS requires an absolute private material root")
       }
-      let state = @router.BrokerState::new(broker_config)
-      let limits = broker_config.resources()
-      let pool = state
-        .resource_ledger()
-        .pool(@budget.Infrastructure, limits.get("max_managed_bytes_total"))
-        .unwrap()
-      let prepared = @server.prepare_tls_generation(
-        bundle, candidate, pool, reload_material_runtime_dir,
-      ) catch {
+      @server.validate_tls_bundle(bundle, candidate) catch {
         _ => raise CliError("reload TLS material validation failed")
       }
-      prepared.release()
     }
   }
   if print_effective_config {
