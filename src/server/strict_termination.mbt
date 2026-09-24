@@ -8,6 +8,9 @@ fn BrokerRuntime::finish_strict_transport_close(
     None => return []
   }
   self.connections.remove(event.connection_id)
+  if meta.phase is Active(_) {
+    self.release_policy_epoch(meta.policy_epoch)
+  }
   let actions : Array[RuntimeAction] = []
   match meta.phase {
     Active(client_id) => {
