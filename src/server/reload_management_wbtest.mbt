@@ -106,6 +106,37 @@ async test "config admin accepts reload with B features disabled and reads own o
   assert_eq(read.status, @http_transport.Ok)
   assert_true(@utf8.decode(read.body).contains("\"kind\":\"reload\""))
   queries.release(qticket)
+  assert_eq(service.signal(0L), ReloadQueued(2L))
+  let signal_query : @management.QuerySpec = {
+    kind: @management.Operation,
+    target: management.context.boot_id + ".2",
+    actor_token_id: actor.token_id(),
+    limit: 1,
+    cursor: None,
+    filters: "",
+  }
+  let signal_ticket = queries.submit(signal_query).unwrap()
+  driver.handle(ManagementQuery(queries.take().unwrap()))
+  let signal_result = queries.wait(signal_ticket).unwrap()
+  assert_eq(signal_result.status, @http_transport.Ok)
+  assert_true(@utf8.decode(signal_result.body).contains("\"kind\":\"reload\""))
+  queries.release(signal_ticket)
+  let audit_query : @management.QuerySpec = {
+    kind: @management.Audit,
+    target: "",
+    actor_token_id: actor.token_id(),
+    limit: 10,
+    cursor: None,
+    filters: "",
+  }
+  let audit_ticket = queries.submit(audit_query).unwrap()
+  driver.handle(ManagementQuery(queries.take().unwrap()))
+  let audit_result = queries.wait(audit_ticket).unwrap()
+  assert_eq(audit_result.status, @http_transport.Ok)
+  assert_true(
+    @utf8.decode(audit_result.body).contains(management.context.boot_id + ".2"),
+  )
+  queries.release(audit_ticket)
   service.close()
   management.close()
   handle.close()
