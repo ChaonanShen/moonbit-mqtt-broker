@@ -26,3 +26,19 @@ extern "C" fn private_key_status_ffi(path : String, path_length : Int) -> Int = 
 fn private_key_status(path : String) -> Int {
   private_key_status_ffi(path, path.length())
 }
+
+///|
+extern "C" fn install_reload_handler_ffi() = "moonbit_mqtt_install_reload_handler"
+
+///|
+extern "C" fn take_reload_signal_ffi() -> Int = "moonbit_mqtt_take_reload_signal"
+
+///|
+pub fn install_reload_signal_handler() -> Unit {
+  install_reload_handler_ffi()
+}
+
+///|
+pub fn take_reload_signal() -> Bool {
+  take_reload_signal_ffi() != 0
+}

@@ -19,5 +19,9 @@ pkgtype(kind: "executable")
 
 options(
   "native-stub": [ "shutdown_signal.c" ],
-  targets: { "main.mbt": [ "native" ], "shutdown_signal.mbt": [ "native" ] },
+  targets: {
+    "main.mbt": [ "native" ],
+    "shutdown_signal.mbt": [ "native" ],
+    "shutdown_signal_wbtest.mbt": [ "native" ],
+  },
 )
