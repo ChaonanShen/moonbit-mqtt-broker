@@ -25,5 +25,6 @@ options(
   targets: {
     "fs_capability_test.mbt": [ "native" ],
     "wal_fs_native.mbt": [ "native" ],
+    "wal_policy_replay_wbtest.mbt": [ "native" ],
   },
 )

@@ -210,6 +210,7 @@ pub async fn WalStore::recover_state(
           disk_dirty: false,
           fault: None,
           committed_lsn,
+          policy_state: policy,
           fenced: false,
           closed: false,
         },
