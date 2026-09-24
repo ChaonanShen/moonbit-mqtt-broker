@@ -534,6 +534,46 @@ pub fn ClientSession::pending_head_topic(
     Some(self.pending[0].topic)
   }
 }
+
+///|
+/// Read-only reference; the immutable payload is not cloned for policy checks.
+pub fn ClientSession::pending_head_reference(
+  self : ClientSession,
+) -> SessionMessage? {
+  if self.pending.is_empty() {
+    None
+  } else {
+    Some(self.pending[0])
+  }
+}
+
+///|
+/// Prepare the shallow pointer tail before committing a WAL cleanup record.
+pub fn ClientSession::pending_tail_for_policy(
+  self : ClientSession,
+) -> Array[SessionMessage] {
+  if self.pending.is_empty() {
+    []
+  } else {
+    self.pending[1:].to_owned()
+  }
+}
+
+///|
+pub fn ClientSession::discard_pending_head_prepared(
+  self : ClientSession,
+  expected : SessionMessage,
+  remaining : Array[SessionMessage],
+) -> Bool {
+  if self.pending.is_empty() ||
+    !physical_equal(self.pending[0], expected) ||
+    remaining.length() + 1 != self.pending.length() {
+    return false
+  }
+  self.pending = remaining
+  self.pending_cost -= expected.cost()
+  true
+}
 // @session.ClientSession exposes a bounded promotion step for the broker's
 // durable prepare path; the caller invokes it on an isolated session copy.
 

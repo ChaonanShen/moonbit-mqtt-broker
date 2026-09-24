@@ -10,6 +10,7 @@ pub(all) enum PreparedBrokerMutation {
   Subscribe(@router.DurableSubscribePlan)
   Unsubscribe(@router.DurableUnsubscribePlan)
   PolicyRecord(@persistence.WalPolicyRecord)
+  PolicyReconcile(@router.DurableReconcilePlan)
 }
 
 ///|
@@ -26,7 +27,7 @@ fn PreparedBrokerMutation::delta(
     Lifecycle(value) => value.delta()
     Subscribe(value) => value.delta()
     Unsubscribe(value) => value.delta()
-    PolicyRecord(_) => @router.DurableDelta::empty()
+    PolicyRecord(_) | PolicyReconcile(_) => @router.DurableDelta::empty()
   }
 }
 
@@ -45,6 +46,7 @@ fn PreparedBrokerMutation::commit(
     Subscribe(value) => value.commit()
     Unsubscribe(value) => value.commit()
     PolicyRecord(_) => Ok([])
+    PolicyReconcile(value) => value.commit()
   }
 }
 
@@ -67,6 +69,7 @@ fn PreparedBrokerMutation::cancel(self : PreparedBrokerMutation) -> Unit {
     Subscribe(value) => value.cancel()
     Unsubscribe(value) => value.cancel()
     PolicyRecord(_) => ()
+    PolicyReconcile(value) => value.cancel()
   }
 }
 
@@ -507,6 +510,12 @@ pub fn CommitCoordinator::submit(
     self.fenced = true
     return Err(CommitFenced)
   }
+  if plan is PolicyReconcile(_) &&
+    !(self.writer.policy_state() is Some({ reconcile_pending: true, .. })) {
+    plan.cancel()
+    self.fenced = true
+    return Err(CommitFenced)
+  }
   let delta = plan.delta()
   if !self.can_collect(plan, delta) {
     plan.cancel()
@@ -516,6 +525,14 @@ pub fn CommitCoordinator::submit(
     PolicyRecord(record) =>
       match @persistence.encode_wal_policy_record(record) {
         Ok(value) => value
+        Err(_) => {
+          plan.cancel()
+          return Err(CommitEncoding)
+        }
+      }
+    PolicyReconcile(value) =>
+      match @persistence.encode_wal_reconcile(value.delta()) {
+        Ok(bytes) => bytes
         Err(_) => {
           plan.cancel()
           return Err(CommitEncoding)
