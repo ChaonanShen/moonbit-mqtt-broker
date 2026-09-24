@@ -19,6 +19,11 @@ pub(all) enum OperationStage {
   ClosingTransport
   WaitingAuthReap
   Applying
+  Preparing
+  WaitingBarrier
+  Activating
+  Reconciling
+  Retiring
   Done
 } derive(Eq, Debug)
 
@@ -270,6 +275,26 @@ pub fn OperationTable::start(
 }
 
 ///|
+pub fn OperationTable::advance_reload(
+  self : OperationTable,
+  id : String,
+  stage : OperationStage,
+  activated : Bool,
+  effective_epoch : Int64?,
+) -> Bool {
+  match self.get_internal(id) {
+    Some(record) if record.kind == Reload && record.state == Running =>
+      self.replace({
+        ..record,
+        stage,
+        effect_applied: activated,
+        state_revision_after: effective_epoch,
+      })
+    _ => false
+  }
+}
+
+///|
 pub fn OperationTable::finish(
   self : OperationTable,
   id : String,
@@ -432,6 +457,11 @@ fn operation_stage_name(stage : OperationStage) -> String {
     ClosingTransport => "closing_transport"
     WaitingAuthReap => "waiting_auth_reap"
     Applying => "applying"
+    Preparing => "preparing"
+    WaitingBarrier => "waiting_barrier"
+    Activating => "activating"
+    Reconciling => "reconciling"
+    Retiring => "retiring"
     Done => "done"
   }
 }
