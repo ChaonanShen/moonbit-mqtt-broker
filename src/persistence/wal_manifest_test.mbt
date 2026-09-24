@@ -10,6 +10,7 @@ fn wal_test_manifest() -> WalManifest {
     ],
     active_segment_id: 7L,
     active_start_lsn: 61L,
+    policy_required: false,
   }
 }
 
@@ -42,4 +43,13 @@ test "WAL manifest refuses missing and overlapping LSN ranges" {
   assert_true(encode_wal_manifest(gap) is Err(InvalidValue(..)))
   let overlap : WalManifest = { ..base, active_start_lsn: 60L }
   assert_true(encode_wal_manifest(overlap) is Err(InvalidValue(..)))
+}
+
+///|
+test "WAL manifest v2 advertises required policy capability" {
+  let original = wal_test_manifest()
+  let policy : WalManifest = { ..original, policy_required: true }
+  let bytes = encode_wal_manifest(policy).unwrap()
+  assert_eq(decode_wal_manifest(bytes), Ok(policy))
+  assert_true(bytes != encode_wal_manifest(original).unwrap())
 }
