@@ -75,3 +75,76 @@ test "hot config rejects invalid effective safety settings" {
   }
   assert_true(stale)
 }
+
+///|
+test "listener topology comparison ignores order and hot TLS paths" {
+  let first = effective_hot_config(
+    (
+      #|[[listeners]]
+      #|id = "plain"
+      #|transport = "tcp"
+      #|listen = "127.0.0.1:1883"
+      #|[[listeners]]
+      #|id = "secure"
+      #|transport = "tls"
+      #|listen = "127.0.0.1:8883"
+      #|tls_cert = "/bundle/old.crt"
+      #|tls_key = "/bundle/old.key"
+      #|
+    ),
+    [],
+  )
+  let reordered = effective_hot_config(
+    (
+      #|[[listeners]]
+      #|id = "secure"
+      #|transport = "tls"
+      #|listen = "127.0.0.1:8883"
+      #|tls_cert = "/bundle/new.crt"
+      #|tls_key = "/bundle/new.key"
+      #|[[listeners]]
+      #|id = "plain"
+      #|transport = "tcp"
+      #|listen = "127.0.0.1:1883"
+      #|
+    ),
+    [],
+  )
+  assert_true(first.same_listener_topology(reordered))
+  assert_false(first.tls_sources == reordered.tls_sources)
+  let changed = effective_hot_config(
+    (
+      #|[[listeners]]
+      #|id = "plain"
+      #|transport = "tcp"
+      #|listen = "127.0.0.1:1884"
+      #|[[listeners]]
+      #|id = "secure"
+      #|transport = "tls"
+      #|listen = "127.0.0.1:8883"
+      #|tls_cert = "/bundle/old.crt"
+      #|tls_key = "/bundle/old.key"
+      #|
+    ),
+    [],
+  )
+  assert_false(first.same_listener_topology(changed))
+}
+
+///|
+test "legacy listener address is restart-only while TLS paths are hot" {
+  let first = effective_hot_config(
+    "[server]\nlisten = \"127.0.0.1:8883\"\n[tls]\ncert = \"/old.crt\"\nkey = \"/old.key\"\n",
+    [],
+  )
+  let rotated = effective_hot_config(
+    "[server]\nlisten = \"127.0.0.1:8883\"\n[tls]\ncert = \"/new.crt\"\nkey = \"/new.key\"\n",
+    [],
+  )
+  assert_true(first.same_listener_topology(rotated))
+  let moved = effective_hot_config(
+    "[server]\nlisten = \"127.0.0.1:8884\"\n[tls]\ncert = \"/old.crt\"\nkey = \"/old.key\"\n",
+    [],
+  )
+  assert_false(first.same_listener_topology(moved))
+}

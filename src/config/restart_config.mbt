@@ -8,7 +8,7 @@ fn is_hot_option(option : String) -> Bool {
   [
     "--allow-anonymous", "--password-file", "--acl-file", "--log-format", "--log-level",
     "--system-metrics-interval-ms", "--management-snapshot-interval-ms", "--management-snapshot-max-age-ms",
-    "--tls-cert", "--tls-key",
+    "--tls-cert", "--tls-key", "--listen", "--tls-handshake-timeout-ms",
   ].contains(option)
 }
 
