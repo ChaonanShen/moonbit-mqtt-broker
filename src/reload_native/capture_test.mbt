@@ -204,3 +204,28 @@ test "reload SHA256 matches the independent abc vector" {
     ),
   )
 }
+
+///|
+async test "cancelled native job remains owned until completion and one reap" {
+  let worker = CaptureWorker::new().unwrap()
+  assert_true(worker.submit_test_hold(81L))
+  let mut running = false
+  for _ in 0..<1000 {
+    if worker.test_running(81L) {
+      running = true
+      break
+    }
+    @async.sleep(1)
+  }
+  assert_true(running)
+  assert_eq(worker.cancel(81L), Ok(true))
+  assert_eq(worker.poll(), None)
+  assert_eq(worker.reap(81L), Err(InvalidState))
+  assert_eq(worker.submit_test_hold(82L), false)
+  assert_true(worker.release_test_hold(81L))
+  assert_eq(wait_capture(worker), 81L)
+  assert_eq(worker.result_info(81L), Err(Cancelled))
+  assert_eq(worker.reap(81L), Ok(()))
+  assert_eq(worker.reap(81L), Err(InvalidState))
+  stop_capture(worker)
+}

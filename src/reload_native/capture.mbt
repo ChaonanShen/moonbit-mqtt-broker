@@ -48,6 +48,15 @@ extern "C" fn ffi_submit_tls(
 ) -> Int = "moonbit_mqtt_capture_worker_submit_tls"
 
 ///|
+extern "C" fn ffi_test_hold(handle : Int64, task_id : Int64) -> Int = "moonbit_mqtt_capture_worker_test_hold"
+
+///|
+extern "C" fn ffi_test_running(handle : Int64, task_id : Int64) -> Int = "moonbit_mqtt_capture_worker_test_running"
+
+///|
+extern "C" fn ffi_test_release(handle : Int64, task_id : Int64) -> Int = "moonbit_mqtt_capture_worker_test_release"
+
+///|
 extern "C" fn ffi_take_tls_directory(handle : Int64, task_id : Int64) -> Int = "moonbit_mqtt_capture_worker_take_tls_directory"
 
 ///|
@@ -323,4 +332,29 @@ pub fn CaptureWorker::destroy(self : CaptureWorker) -> Bool {
   } else {
     false
   }
+}
+
+///|
+/// Internal deterministic worker barrier used by the cancellation/reap test.
+pub fn CaptureWorker::submit_test_hold(
+  self : CaptureWorker,
+  task_id : Int64,
+) -> Bool {
+  ffi_test_hold(self.handle, task_id) == 0
+}
+
+///|
+pub fn CaptureWorker::test_running(
+  self : CaptureWorker,
+  task_id : Int64,
+) -> Bool {
+  ffi_test_running(self.handle, task_id) == 1
+}
+
+///|
+pub fn CaptureWorker::release_test_hold(
+  self : CaptureWorker,
+  task_id : Int64,
+) -> Bool {
+  ffi_test_release(self.handle, task_id) == 0
 }

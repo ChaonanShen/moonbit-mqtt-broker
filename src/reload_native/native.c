@@ -121,7 +121,7 @@ static void clear_bytes(void *pointer, size_t length) {
 }
 
 enum { IDLE = 0, ASSIGNED = 1, RUNNING = 2, COMPLETE = 3 };
-enum { JOB_FILE = 1, JOB_TLS = 2, JOB_TLS_VALIDATE = 3 };
+enum { JOB_FILE = 1, JOB_TLS = 2, JOB_TLS_VALIDATE = 3, JOB_TEST_HOLD = 4 };
 enum {
   CAPTURE_OK = 0, CAPTURE_UNSAFE = 1, CAPTURE_CHANGED = 2,
   CAPTURE_TOO_LARGE = 3, CAPTURE_IO = 4, CAPTURE_CANCELLED = 5,
@@ -146,6 +146,7 @@ typedef struct {
   char root[513];
   char directory[640];
   int directory_taken;
+  int test_released;
   int max_bytes;
   int private_file;
   unsigned char *data;
@@ -439,6 +440,14 @@ static int materialize_tls(capture_worker *worker) {
   return CAPTURE_OK;
 }
 
+static int test_hold_until_released(capture_worker *worker) {
+  pthread_mutex_lock(&worker->lock);
+  while (!worker->test_released)
+    pthread_cond_wait(&worker->wake, &worker->lock);
+  pthread_mutex_unlock(&worker->lock);
+  return CAPTURE_OK;
+}
+
 static void *worker_main(void *argument) {
   capture_worker *worker = argument;
   pthread_mutex_lock(&worker->lock);
@@ -456,6 +465,7 @@ static void *worker_main(void *argument) {
     int result = cancelled ? CAPTURE_CANCELLED :
       (worker->job_kind == JOB_TLS ? materialize_tls(worker) :
        worker->job_kind == JOB_TLS_VALIDATE ? validate_tls_bytes(worker) :
+       worker->job_kind == JOB_TEST_HOLD ? test_hold_until_released(worker) :
        capture(worker));
     pthread_mutex_lock(&worker->lock);
     if (worker->cancel && result == CAPTURE_OK) {
@@ -599,6 +609,54 @@ int32_t moonbit_mqtt_capture_worker_submit_tls(
   return 0;
 }
 
+/* Deterministic test barrier: cancellation must retain the worker slot
+ * until the held native job actually completes and is reaped. */
+MOONBIT_FFI_EXPORT
+int32_t moonbit_mqtt_capture_worker_test_hold(int64_t handle, int64_t id) {
+  capture_worker *worker = from_handle(handle);
+  if (worker == NULL || id <= 0) return -1;
+  pthread_mutex_lock(&worker->lock);
+  if (worker->stopping || worker->state != IDLE) {
+    pthread_mutex_unlock(&worker->lock);
+    return 1;
+  }
+  worker->id = id;
+  worker->job_kind = JOB_TEST_HOLD;
+  worker->test_released = 0;
+  worker->cancel = 0;
+  worker->result = CAPTURE_IO;
+  worker->state = ASSIGNED;
+  pthread_cond_signal(&worker->wake);
+  pthread_mutex_unlock(&worker->lock);
+  return 0;
+}
+
+MOONBIT_FFI_EXPORT
+int32_t moonbit_mqtt_capture_worker_test_running(int64_t handle, int64_t id) {
+  capture_worker *worker = from_handle(handle);
+  if (worker == NULL) return 0;
+  pthread_mutex_lock(&worker->lock);
+  int result = worker->id == id && worker->state == RUNNING;
+  pthread_mutex_unlock(&worker->lock);
+  return result;
+}
+
+MOONBIT_FFI_EXPORT
+int32_t moonbit_mqtt_capture_worker_test_release(int64_t handle, int64_t id) {
+  capture_worker *worker = from_handle(handle);
+  if (worker == NULL) return -1;
+  pthread_mutex_lock(&worker->lock);
+  if (worker->id != id || worker->state != RUNNING ||
+      worker->job_kind != JOB_TEST_HOLD) {
+    pthread_mutex_unlock(&worker->lock);
+    return -1;
+  }
+  worker->test_released = 1;
+  pthread_cond_signal(&worker->wake);
+  pthread_mutex_unlock(&worker->lock);
+  return 0;
+}
+
 MOONBIT_FFI_EXPORT
 int32_t moonbit_mqtt_capture_worker_take_tls_directory(
   int64_t handle, int64_t id
@@ -720,6 +778,7 @@ int32_t moonbit_mqtt_capture_worker_reap(int64_t handle, int64_t id) {
   worker->directory[0] = '\0';
   worker->root[0] = '\0';
   worker->directory_taken = 0;
+  worker->test_released = 0;
   worker->job_kind = 0;
   worker->id = 0;
   worker->state = IDLE;
