@@ -220,3 +220,25 @@ async fn bootstrap_local_policy_change(
     raise ResourceStartupFailure("policy cleanup apply failed")
   }
 }
+
+///|
+/// Keep startup error categories visible across the opaque server package
+/// boundary without leaking paths, credentials, or WAL payloads.
+pub async fn bootstrap_strict_policy_checked(
+  store : @persistence.WalStore,
+  broker : @router.BrokerState,
+  identities : Array[@persistence.WalSessionIdentity],
+  policy : @security.SecurityPolicy,
+  fingerprint : Bytes,
+  max_items : Int,
+  max_bytes : Int64,
+) -> Result[StrictPolicyBootstrap, String] {
+  Ok(
+    bootstrap_strict_policy(
+      store, broker, identities, policy, fingerprint, max_items, max_bytes,
+    ),
+  ) catch {
+    ResourceStartupFailure(message) => Err(message)
+    _ => Err("policy_bootstrap_failed")
+  }
+}
