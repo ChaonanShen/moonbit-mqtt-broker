@@ -346,16 +346,42 @@ async test "policy WAL transitions survive buffered and streaming recovery" {
     )
     assert_eq(wal.require_policy_capability(), Ok(()))
     assert_true(wal.manifest().policy_required)
-    assert_eq(
+    assert_true(
       wal.append_batch({
         previous_lsn: 0L,
         transactions: [
           { lsn: 1L, delta: activated },
           { lsn: 2L, delta: reconciled },
         ],
+      })
+      is Err(_),
+    )
+    assert_eq(
+      wal.append_batch({
+        previous_lsn: 0L,
+        transactions: [{ lsn: 1L, delta: activated }],
+      }),
+      Ok(1L),
+    )
+    assert_eq(
+      wal.append_batch({
+        previous_lsn: 1L,
+        transactions: [{ lsn: 2L, delta: reconciled }],
       }),
       Ok(2L),
     )
+    let policy = wal.policy_state()
+    assert_eq(
+      policy,
+      Some({ sequence: 1L, fingerprint, reconcile_pending: false }),
+    )
+    let incomplete : WalCheckpoint = {
+      ..wal_store_empty_checkpoint(),
+      generation: 2L,
+      lsn: 2L,
+    }
+    assert_true(wal.publish_checkpoint(incomplete) is Err(_))
+    assert_eq(wal.publish_checkpoint({ ..incomplete, policy, }), Ok(()))
     wal.close()
     let limits = wal_store_limits()
     let second = SnapshotStore::open(config).unwrap()
@@ -378,7 +404,7 @@ async test "policy WAL transitions survive buffered and streaming recovery" {
 }
 
 ///|
-async test "policy WAL replay rejects reconciliation without activation" {
+async test "policy WAL writer rejects reconciliation without activation" {
   with_wal_store_dir("policy-order", path => {
     let config = PersistenceConfig::new(path).unwrap()
     let first = SnapshotStore::open(config).unwrap()
@@ -393,24 +419,16 @@ async test "policy WAL replay rejects reconciliation without activation" {
       fingerprint: Bytes::from_array(digest),
     }).unwrap()
     assert_eq(wal.require_policy_capability(), Ok(()))
-    assert_eq(
+    assert_true(
       wal.append_batch({
         previous_lsn: 0L,
         transactions: [{ lsn: 1L, delta: invalid }],
-      }),
-      Ok(1L),
+      })
+      is Err(_),
     )
+    assert_eq(wal.committed_lsn(), 0L)
+    assert_eq(wal.policy_state(), None)
     wal.close()
-    let limits = wal_store_limits()
-    let second = SnapshotStore::open(config).unwrap()
-    let (recovered, replay) = WalStore::recover(second, limits).unwrap()
-    assert_true(replay.restore_state(limits.broker_config(), limits) is Err(_))
-    recovered.close()
-    let third = SnapshotStore::open(config).unwrap()
-    assert_true(
-      WalStore::recover_state(third, limits.broker_config(), limits) is Err(_),
-    )
-    third.close()
   })
 }
 

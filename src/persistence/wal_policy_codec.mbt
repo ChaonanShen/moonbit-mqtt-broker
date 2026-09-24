@@ -129,3 +129,30 @@ fn apply_policy_record(
       }
   }
 }
+
+///|
+fn fold_wal_policy_batches(
+  initial : WalPolicyState?,
+  batches : Array[WalBatch],
+  policy_required : Bool,
+) -> Result[WalPolicyState?, PersistenceError] {
+  let mut current = initial
+  for batch in batches {
+    for transaction in batch.transactions {
+      if is_wal_policy_record(transaction.delta) {
+        if !policy_required {
+          return Err(InvalidValue(field="wal-policy-capability", offset=0))
+        }
+        let record = match decode_wal_policy_record(transaction.delta) {
+          Ok(value) => value
+          Err(error) => return Err(error)
+        }
+        current = match apply_policy_record(current, record) {
+          Ok(value) => Some(value)
+          Err(error) => return Err(error)
+        }
+      }
+    }
+  }
+  Ok(current)
+}
