@@ -164,6 +164,39 @@ pub fn BrokerRuntime::connection_credential_current(
 }
 
 ///|
+/// The writer calls this immediately before the first byte of a queued MQTT
+/// PUBLISH. It validates the precise connection and session incarnation.
+pub fn BrokerRuntime::authorize_outbound(
+  self : BrokerRuntime,
+  authorization : OutboundAuthorization,
+) -> Bool {
+  if !self.connection_credential_current(authorization.connection_id) {
+    return false
+  }
+  let meta = match self.connections.get(authorization.connection_id) {
+    Some(value) => value
+    None => return false
+  }
+  match meta.phase {
+    Active(client_id) if client_id == authorization.client_id &&
+      self.active_by_client.get(client_id) == Some(authorization.connection_id) =>
+      ()
+    _ => return false
+  }
+  if authorization.session_incarnation is Some(expected) &&
+    self.broker_state.policy_session_incarnation(authorization.client_id) !=
+    Some(expected) {
+    return false
+  }
+  let principal = match meta.principal {
+    Some(value) => value
+    None => return false
+  }
+  self.security.allows_principal(principal) &&
+  self.security.can_read_topic(principal, authorization.topic)
+}
+
+///|
 pub fn BrokerRuntime::has_connection(
   self : BrokerRuntime,
   connection_id : ConnectionId,

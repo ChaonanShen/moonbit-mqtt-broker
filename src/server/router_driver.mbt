@@ -387,7 +387,13 @@ fn RouterDriver::dispatch(
     match action {
       SendPacket(send) =>
         if self.sinks.get(send.connection_id) is Some(sink) {
-          match self.encode_and_queue(sink, send.packet, None) {
+          match
+            self.encode_and_queue(
+              sink,
+              send.packet,
+              None,
+              connection_id=send.connection_id,
+            ) {
             Err(reason) => {
               if send.packet is Connack(_) {
                 sink.resolve_handshake(false)
@@ -408,6 +414,7 @@ fn RouterDriver::dispatch(
             sink,
             send.packet,
             Some(send.reason),
+            connection_id=send.connection_id,
           )
           if send.packet is Connack(_) {
             sink.resolve_handshake(false)
@@ -574,6 +581,9 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
       if self.sinks.get(register.connection_id) is Some(_) {
         return
       }
+      register.sink.set_writer_gate(authorization => {
+        self.runtime.authorize_outbound(authorization)
+      })
       self.sinks.set(register.connection_id, register.sink)
       if self.management_connections is Some(index) {
         if index.put(register.connection_id.value().to_string())
@@ -723,8 +733,46 @@ fn RouterDriver::encode_and_queue(
   sink : TransportSink,
   packet : @protocol.Packet,
   close : CloseReason?,
+  connection_id? : ConnectionId,
 ) -> Result[Unit, CloseReason] {
+  let authorization : OutboundAuthorization? = match packet {
+    Publish(value) =>
+      match connection_id {
+        None => None
+        Some(id) => {
+          let client_id = match self.runtime.connections.get(id) {
+            Some({ phase: Active(value), .. }) => value
+            _ => return Err(PolicyRevoked)
+          }
+          let topic = match @topic.TopicName::new(value.topic) {
+            Ok(value) => value
+            Err(_) => return Err(EncodeFailure)
+          }
+          let value : OutboundAuthorization = {
+            connection_id: id,
+            client_id,
+            session_incarnation: self.runtime
+            .broker_state()
+            .policy_session_incarnation(client_id),
+            topic,
+          }
+          if !self.runtime.authorize_outbound(value) {
+            return Err(PolicyRevoked)
+          }
+          Some(value)
+        }
+      }
+    _ => None
+  }
   let bound = wire_cost_bound(packet)
+  let charged = match
+    @budget.checked_add(
+      bound,
+      authorization.map(value => value.cost()).unwrap_or(0L),
+    ) {
+    Ok(value) => value
+    Err(_) => return Err(ResourceExhausted)
+  }
   let prepared = if packet is Connack(_) {
     let value = sink.handshake
     sink.handshake = None
@@ -735,7 +783,7 @@ fn RouterDriver::encode_and_queue(
   let (ticket, temporary) = match prepared {
     Some((frame, scratch)) => (Some(frame), Some(scratch))
     None => {
-      let ticket = match sink.reserve_frame(bound, control_packet(packet)) {
+      let ticket = match sink.reserve_frame(charged, control_packet(packet)) {
         Ok(t) => t
         Err(_) => return Err(SlowConsumer)
       }
@@ -781,7 +829,7 @@ fn RouterDriver::encode_and_queue(
       return Err(EncodeFailure)
     }
   }
-  if sink.enqueue_frame(frame, ticket, close) {
+  if sink.enqueue_frame(frame, ticket, close, authorization?) {
     Ok(())
   } else {
     Err(SlowConsumer)

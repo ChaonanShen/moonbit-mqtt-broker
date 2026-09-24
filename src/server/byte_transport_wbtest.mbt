@@ -270,3 +270,31 @@ async test "authentication infrastructure is charged until executor destroy" {
   driver.shutdown_authentication()
   assert_eq(state.managed_bytes(), baseline)
 }
+
+///|
+async test "queued MQTT publish is denied at writer start after policy change" {
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  defer listener.close()
+  let client = @socket.Tcp::connect(listener.addr)
+  defer client.close()
+  let (connection, _) = listener.accept()
+  defer connection.close()
+  let sink = TransportSink::new(2)
+  defer sink.close()
+  let mut permitted = true
+  sink.set_writer_gate(_ => permitted)
+  let authorization : OutboundAuthorization = {
+    connection_id: ConnectionId::new(1L),
+    client_id: @session.ClientId::new("client").unwrap(),
+    session_incarnation: Some(1L),
+    topic: @topic.TopicName::new("private/value").unwrap(),
+  }
+  assert_true(sink.enqueue_frame(b"must-not-write", None, None, authorization~))
+  permitted = false
+  assert_eq(
+    write_transport(ConnectionTransport::plain(connection), sink),
+    PolicyRevoked,
+  )
+  connection.close()
+  assert_eq(client.read_some(), None)
+}
