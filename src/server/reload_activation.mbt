@@ -228,3 +228,192 @@ fn RouterDriver::advance_reload_reconciliation(self : RouterDriver) -> Unit {
     }
   }
 }
+
+///|
+fn RouterDriver::handle_reload_control(
+  self : RouterDriver,
+  command : ReloadDriverCommand,
+) -> Unit {
+  match command {
+    ReloadEnterBarrier(reply) => {
+      let ready = if self.strict is None {
+        true
+      } else if self.reload_barrier_ready() {
+        true
+      } else {
+        ignore(self.begin_reload_barrier())
+        self.reload_barrier_ready()
+      }
+      ignore(
+        reply.try_put(
+          if ready {
+            ReloadDriverReady
+          } else {
+            ReloadDriverWaiting
+          },
+        ),
+      ) catch {
+        _ => ()
+      }
+    }
+    ReloadActivate(candidate, expected_epoch, reply) => {
+      let result = self.activate_prepared_reload(candidate, expected_epoch)
+      let response = match result {
+        ReloadActivated(config_epoch, policy_epoch) =>
+          ReloadDriverActivated(config_epoch, policy_epoch)
+        ReloadActivationBusy => ReloadDriverWaiting
+        ReloadActivationStale => ReloadDriverRejected("stale_generation")
+        ReloadActivationInvalid => ReloadDriverRejected("invalid_candidate")
+      }
+      if !(reply.try_put(response) catch { _ => false }) {
+        candidate.release()
+      }
+    }
+    ReloadCommitPolicy(candidate, expected_epoch, reply) =>
+      self.stage_strict_reload(candidate, expected_epoch, reply)
+    ReloadQueryCompletion(expected_epoch, reply) => {
+      let state = match self.generation {
+        Some(handle) if handle.active().config_epoch() == expected_epoch =>
+          if self.strict_fenced {
+            ReloadDriverRejected("durability_fenced")
+          } else if self.reload_reconciler is Some(_) ||
+            self.strict_reload_pending is Some(_) ||
+            (
+              self.strict is Some(coordinator) &&
+              coordinator.policy_state()
+              is Some({ reconcile_pending: true, .. })
+            ) {
+            ReloadDriverWaiting
+          } else {
+            ReloadDriverReady
+          }
+        _ => ReloadDriverRejected("stale_generation")
+      }
+      ignore(reply.try_put(state)) catch {
+        _ => ()
+      }
+    }
+  }
+}
+
+///|
+fn RouterDriver::stage_strict_reload(
+  self : RouterDriver,
+  candidate : PreparedReload,
+  expected_epoch : Int64,
+  reply : @async.Queue[ReloadDriverReply],
+) -> Unit {
+  let coordinator = match self.strict {
+    Some(value) => value
+    None => {
+      ignore(reply.try_put(ReloadDriverRejected("not_strict"))) catch {
+        _ => ()
+      }
+      return
+    }
+  }
+  let active = match self.generation {
+    Some(value) => value.active()
+    None => {
+      ignore(reply.try_put(ReloadDriverRejected("reload_disabled"))) catch {
+        _ => ()
+      }
+      return
+    }
+  }
+  if !candidate.security_changed ||
+    active.config_epoch() != expected_epoch ||
+    self.strict_reload_pending is Some(_) ||
+    self.reload_reconciler is Some(_) {
+    ignore(reply.try_put(ReloadDriverRejected("stale_generation"))) catch {
+      _ => ()
+    }
+    return
+  }
+  if !self.reload_barrier_ready() {
+    ignore(reply.try_put(ReloadDriverWaiting)) catch {
+      _ => ()
+    }
+    return
+  }
+  match coordinator.policy_state() {
+    Some(state) if !state.reconcile_pending &&
+      state.sequence == active.policy_epoch() &&
+      state.fingerprint == active.fingerprint => ()
+    _ => {
+      ignore(reply.try_put(ReloadDriverRejected("policy_state_mismatch"))) catch {
+        _ => ()
+      }
+      return
+    }
+  }
+  if !self.runtime.can_publish_security_generation(
+      candidate.security,
+      active.policy_epoch() + 1L,
+    ) {
+    ignore(reply.try_put(ReloadDriverWaiting)) catch {
+      _ => ()
+    }
+    return
+  }
+  let pending : StrictReloadPending = {
+    candidate,
+    expected_epoch,
+    reply,
+    committed: false,
+  }
+  match
+    coordinator.submit(
+      PolicyRecord({
+        transition: @persistence.PolicyActivated,
+        sequence: active.policy_epoch() + 1L,
+        fingerprint: candidate.fingerprint,
+      }),
+      _ => {
+        pending.committed = true
+        []
+      },
+    ) {
+    Ok(_) => {
+      self.strict_reload_pending = Some(pending)
+      ignore(reply.try_put(ReloadDriverStaged)) catch {
+        _ => ()
+      }
+    }
+    Err(CommitBusy) =>
+      ignore(reply.try_put(ReloadDriverWaiting)) catch {
+        _ => ()
+      }
+    Err(_) => {
+      self.strict_fence("reload-policy-activated-submit")
+      ignore(reply.try_put(ReloadDriverRejected("durability_failed"))) catch {
+        _ => ()
+      }
+    }
+  }
+}
+
+///|
+fn RouterDriver::finish_committed_reload(self : RouterDriver) -> Unit {
+  let pending = match self.strict_reload_pending {
+    Some(value) if value.committed => value
+    _ => return
+  }
+  self.strict_reload_pending = None
+  let outcome = self.activate_prepared_reload(
+    pending.candidate,
+    pending.expected_epoch,
+  )
+  let response = match outcome {
+    ReloadActivated(config_epoch, policy_epoch) =>
+      ReloadDriverActivated(config_epoch, policy_epoch)
+    _ => {
+      pending.candidate.release()
+      self.strict_fence("reload-committed-publication")
+      ReloadDriverRejected("durability_failed")
+    }
+  }
+  ignore(pending.reply.try_put(response)) catch {
+    _ => ()
+  }
+}

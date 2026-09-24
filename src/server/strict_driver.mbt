@@ -42,6 +42,10 @@ fn RouterDriver::strict_fence(self : RouterDriver, reason : String) -> Unit {
     return
   }
   self.strict_fenced = true
+  if self.strict_reload_pending is Some(pending) {
+    pending.candidate.release()
+    self.strict_reload_pending = None
+  }
   self.runtime.logger.log(
     @observability.LogRecord::new(
       @async.now(),

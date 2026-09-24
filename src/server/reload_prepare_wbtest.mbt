@@ -115,10 +115,9 @@ async test "reload prepare distinguishes cosmetic change, hot change, and restar
     logger~,
   )
   let driver = RouterDriver::new(runtime, generation=handle)
-  assert_eq(
-    driver.activate_prepared_reload(candidate, 0L),
-    ReloadActivated(1L, 0L),
-  )
+  let reply = @async.Queue(kind=Blocking(1))
+  driver.handle(ReloadControl(ReloadActivate(candidate, 0L, reply)))
+  assert_eq(reply.try_get(), Some(ReloadDriverActivated(1L, 0L)))
   assert_eq(handle.active().config_epoch(), 1L)
   assert_eq(handle.active().policy_epoch(), 0L)
   assert_true(

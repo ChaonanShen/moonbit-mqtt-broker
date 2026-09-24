@@ -192,7 +192,11 @@ pub async fn serve_listeners(
   reload_enabled? : Bool = false,
   reload_reconcile_items? : Int = 64,
   reload_reconcile_bytes? : Int64 = 1048576L,
+  reload? : ReloadStartup,
 ) -> Unit {
+  if reload is Some(_) && generation is None {
+    raise ResourceStartupFailure("reload generation unavailable")
+  }
   if persistence is Some(_) && strict is Some(_) {
     raise ResourceStartupFailure("snapshot and strict cannot run together")
   }
@@ -304,6 +308,13 @@ pub async fn serve_listeners(
     @async.with_task_group() <| group => {
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         driver.run_budgeted(bus)
+      }
+      if reload is Some(startup) && generation is Some(handle) {
+        group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
+          run_reload_signals(
+            startup, bus, handle, initial_state, strict, logger, shutdown_requested,
+          )
+        }
       }
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         let observation_interval_ms = management.map(active => {
@@ -685,6 +696,7 @@ pub async fn run_listeners(
   reload_enabled? : Bool = false,
   reload_reconcile_items? : Int = 64,
   reload_reconcile_bytes? : Int64 = 1048576L,
+  reload? : ReloadStartup,
 ) -> Unit {
   defer (match persistence {
     Some(runtime) => runtime.close()
@@ -939,6 +951,7 @@ pub async fn run_listeners(
       reload_enabled~,
       reload_reconcile_items~,
       reload_reconcile_bytes~,
+      reload?,
     )
   }
 }

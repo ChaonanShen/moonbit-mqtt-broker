@@ -1890,6 +1890,21 @@ async fn run_main() -> Unit {
     }
     None => None
   }
+  let reload : @server.ReloadStartup? = if reload_enabled {
+    install_reload_signal_handler()
+    Some({
+      config_path: config_path.unwrap(),
+      manifest_path: reload_manifest_file,
+      cli_args,
+      runtime_root: reload_material_runtime_dir,
+      prepare_timeout_ms: reload_prepare_timeout_ms,
+      max_source_bytes: reload_max_source_bytes,
+      max_generation_bytes: reload_max_generation_bytes,
+      signal_pending: take_reload_signal,
+    })
+  } else {
+    None
+  }
   let management : @server.ManagementStartup? = management_tokens.map(tokens => {
     config: management_config,
     tokens,
@@ -1919,6 +1934,7 @@ async fn run_main() -> Unit {
         reload_enabled~,
         reload_reconcile_items=reload_max_reconcile_items_per_turn,
         reload_reconcile_bytes=reload_max_reconcile_bytes_per_turn.to_int64(),
+        reload?,
       )
     }
     Some(path) => {
@@ -2077,6 +2093,7 @@ async fn run_main() -> Unit {
           reload_enabled~,
           reload_reconcile_items=reload_max_reconcile_items_per_turn,
           reload_reconcile_bytes=reload_max_reconcile_bytes_per_turn.to_int64(),
+          reload?,
         )
         return
       }
@@ -2148,6 +2165,7 @@ async fn run_main() -> Unit {
         reload_enabled~,
         reload_reconcile_items=reload_max_reconcile_items_per_turn,
         reload_reconcile_bytes=reload_max_reconcile_bytes_per_turn.to_int64(),
+        reload?,
       )
     }
   }
