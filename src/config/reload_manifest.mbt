@@ -181,3 +181,60 @@ pub fn parse_reload_manifest(
   }
   { materials, }
 }
+
+///|
+pub(all) struct ReloadTlsPaths {
+  listener_id : String
+  cert_path : String
+  key_path : String
+} derive(Eq, Debug)
+
+///|
+/// The manifest must describe precisely the effective sources after CLI
+/// overrides, including every TLS/WSS listener and no unused material.
+pub fn ReloadManifest::validate_effective_paths(
+  self : ReloadManifest,
+  config_path : String,
+  password_path : String?,
+  acl_path : String?,
+  tls : Array[ReloadTlsPaths],
+) -> Unit raise ReloadManifestError {
+  let expected : Map[String, String] = Map([])
+  expected.set("config:", config_path)
+  if password_path is Some(path) {
+    expected.set("passwords:", path)
+  }
+  if acl_path is Some(path) {
+    expected.set("acl:", path)
+  }
+  for listener in tls {
+    if !valid_listener_id(listener.listener_id) {
+      raise ReloadManifestError("invalid TLS listener_id")
+    }
+    let cert_key = "mqtt_cert:" + listener.listener_id
+    let key_key = "mqtt_key:" + listener.listener_id
+    if expected.contains(cert_key) {
+      raise ReloadManifestError("duplicate TLS listener_id")
+    }
+    expected.set(cert_key, listener.cert_path)
+    expected.set(key_key, listener.key_path)
+  }
+  if self.materials.length() != expected.length() {
+    raise ReloadManifestError("manifest role set differs from effective config")
+  }
+  for material in self.materials {
+    let key = material.role + ":" + material.listener_id.unwrap_or("")
+    match expected.get(key) {
+      Some(path) =>
+        if path != material.path {
+          raise ReloadManifestError(
+            "manifest path differs from effective config",
+          )
+        }
+      None =>
+        raise ReloadManifestError(
+          "manifest role set differs from effective config",
+        )
+    }
+  }
+}

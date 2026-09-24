@@ -26,11 +26,59 @@ test "reload manifest accepts exact typed bundle roles" {
       #|listener_id = "edge-1"
       #|path = "/srv/bundle/cert.pem"
       #|sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+      #|[[materials]]
+      #|role = "mqtt_key"
+      #|listener_id = "edge-1"
+      #|path = "/srv/bundle/key.pem"
+      #|sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
       #|
     ),
   )
-  assert_eq(manifest.materials.length(), 3)
+  assert_eq(manifest.materials.length(), 4)
   assert_eq(manifest.materials[2].listener_id, Some("edge-1"))
+  let tls : Array[ReloadTlsPaths] = [
+    {
+      listener_id: "edge-1",
+      cert_path: "/srv/bundle/cert.pem",
+      key_path: "/srv/bundle/key.pem",
+    },
+  ]
+  manifest.validate_effective_paths(
+    "/srv/bundle/config.toml",
+    Some("/srv/bundle/passwords"),
+    None,
+    tls,
+  )
+  let mismatch = try {
+    manifest.validate_effective_paths(
+      "/srv/bundle/config.toml",
+      None,
+      None,
+      tls,
+    )
+    false
+  } catch {
+    _ => true
+  }
+  assert_true(mismatch)
+  let wrong_key = try {
+    manifest.validate_effective_paths(
+      "/srv/bundle/config.toml",
+      Some("/srv/bundle/passwords"),
+      None,
+      [
+        {
+          listener_id: "edge-1",
+          cert_path: "/srv/bundle/cert.pem",
+          key_path: "/srv/bundle/other.pem",
+        },
+      ],
+    )
+    false
+  } catch {
+    _ => true
+  }
+  assert_true(wrong_key)
   assert_eq(
     manifest.materials[0].sha256,
     Bytes::from_array([
