@@ -1954,6 +1954,35 @@ async fn run_main() -> Unit {
           }
           (wal_store, initial_state, identities, 0L)
         }
+        let (identities, committed_lsn) = if wal_store.manifest().policy_required ||
+          reload_enabled {
+          let fingerprint = match startup_sources {
+            Some((_, _, value)) => value
+            None => {
+              wal_store.close()
+              raise CliError(
+                "strict policy source requires a matching reload bundle",
+              )
+            }
+          }
+          let boot = @server.bootstrap_strict_policy(
+            wal_store,
+            initial_state,
+            identities,
+            security,
+            fingerprint,
+            reload_max_reconcile_items_per_turn,
+            reload_max_reconcile_bytes_per_turn.to_int64(),
+          ) catch {
+            error => {
+              wal_store.close()
+              raise CliError("strict policy startup: " + error.to_string())
+            }
+          }
+          (boot.identities, boot.committed_lsn)
+        } else {
+          (identities, committed_lsn)
+        }
         let strict = match
           @server.StrictPersistenceRuntime::new(
             wal_store, initial_state, identities, committed_lsn,
