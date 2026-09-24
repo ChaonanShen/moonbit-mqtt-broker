@@ -1917,6 +1917,8 @@ async fn run_main() -> Unit {
         management?,
         reload_tls?,
         reload_enabled~,
+        reload_reconcile_items=reload_max_reconcile_items_per_turn,
+        reload_reconcile_bytes=reload_max_reconcile_bytes_per_turn.to_int64(),
       )
     }
     Some(path) => {
@@ -2073,6 +2075,8 @@ async fn run_main() -> Unit {
           management?,
           reload_tls?,
           reload_enabled~,
+          reload_reconcile_items=reload_max_reconcile_items_per_turn,
+          reload_reconcile_bytes=reload_max_reconcile_bytes_per_turn.to_int64(),
         )
         return
       }
@@ -2142,6 +2146,8 @@ async fn run_main() -> Unit {
         management?,
         reload_tls?,
         reload_enabled~,
+        reload_reconcile_items=reload_max_reconcile_items_per_turn,
+        reload_reconcile_bytes=reload_max_reconcile_bytes_per_turn.to_int64(),
       )
     }
   }

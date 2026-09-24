@@ -190,6 +190,8 @@ pub async fn serve_listeners(
   material_provider? : TlsMaterialProvider,
   generation? : GenerationHandle,
   reload_enabled? : Bool = false,
+  reload_reconcile_items? : Int = 64,
+  reload_reconcile_bytes? : Int64 = 1048576L,
 ) -> Unit {
   if persistence is Some(_) && strict is Some(_) {
     raise ResourceStartupFailure("snapshot and strict cannot run together")
@@ -256,6 +258,8 @@ pub async fn serve_listeners(
         strict_generations~,
         generation?,
         material_provider?,
+        reload_reconcile_items~,
+        reload_reconcile_bytes~,
       )
     None =>
       RouterDriver::new(
@@ -267,6 +271,8 @@ pub async fn serve_listeners(
         strict_generations~,
         generation?,
         material_provider?,
+        reload_reconcile_items~,
+        reload_reconcile_bytes~,
       )
   }
   if management is Some(active) && active.config.details_enabled() {
@@ -677,6 +683,8 @@ pub async fn run_listeners(
     String,
   ),
   reload_enabled? : Bool = false,
+  reload_reconcile_items? : Int = 64,
+  reload_reconcile_bytes? : Int64 = 1048576L,
 ) -> Unit {
   defer (match persistence {
     Some(runtime) => runtime.close()
@@ -929,6 +937,8 @@ pub async fn run_listeners(
       material_provider=materials,
       generation?,
       reload_enabled~,
+      reload_reconcile_items~,
+      reload_reconcile_bytes~,
     )
   }
 }

@@ -15,6 +15,10 @@ pub struct RouterDriver {
   priv generation : GenerationHandle?
   priv material_provider : TlsMaterialProvider?
   priv mut retired_generations : Array[ConfigGeneration]
+  priv mut reload_reconciler : @router.PolicyReconciler?
+  priv mut reload_issue : @router.PolicyIssue?
+  priv reload_reconcile_items : Int
+  priv reload_reconcile_bytes : Int64
   priv mut strict_checkpoint_cursor : @router.SnapshotExportCursor?
   priv mut strict_checkpoint_lsn : Int64
   priv mut strict_checkpoint_inflight : Bool
@@ -70,6 +74,8 @@ pub fn RouterDriver::new(
   strict_generations? : Map[@session.ClientId, Int64] = Map([]),
   generation? : GenerationHandle,
   material_provider? : TlsMaterialProvider,
+  reload_reconcile_items? : Int = 64,
+  reload_reconcile_bytes? : Int64 = 1048576L,
 ) -> RouterDriver {
   let snapshot = snapshot.map(config => SnapshotDriverState::{
     oldest_uncommitted_ms: None,
@@ -98,6 +104,10 @@ pub fn RouterDriver::new(
     generation,
     material_provider,
     retired_generations: [],
+    reload_reconciler: None,
+    reload_issue: None,
+    reload_reconcile_items,
+    reload_reconcile_bytes,
     strict_checkpoint_cursor: None,
     strict_checkpoint_lsn: 0L,
     strict_checkpoint_inflight: false,
@@ -607,6 +617,15 @@ fn RouterDriver::dispatch(
 
 ///|
 pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
+  self.handle_scoped(event)
+  self.advance_reload_reconciliation()
+}
+
+///|
+fn RouterDriver::handle_scoped(
+  self : RouterDriver,
+  event : DriverEvent,
+) -> Unit {
   self.runtime.broker_state().begin_action_scope()
   defer {
     let completed = @budget.monotonic_ms()

@@ -74,6 +74,7 @@ pub fn RouterDriver::apply_policy_issue_strict(
       match
         coordinator.submit(Lifecycle(plan), _ => {
           ignore(reconciler.complete_issue(issue))
+          self.reload_issue = None
           []
         }) {
         Ok(_) => PolicyIssueSubmitted
@@ -164,6 +165,7 @@ fn RouterDriver::submit_policy_local_change(
     match
       coordinator.submit(PolicyReconcile(plan), _ => {
         ignore(reconciler.complete_issue(issue))
+        self.reload_issue = None
         []
       }) {
       Ok(_) => PolicyIssueSubmitted

@@ -60,8 +60,23 @@ pub fn RouterDriver::activate_prepared_reload(
   if active.config_epoch() != expected_epoch {
     return ReloadActivationStale
   }
-  if self.runtime.broker_state().policy_action_scope_active() {
+  if self.runtime.broker_state().policy_action_scope_active() ||
+    self.reload_reconciler is Some(_) {
     return ReloadActivationBusy
+  }
+  let scan = if prepared.security_changed {
+    match
+      @router.PolicyReconciler::new(
+        prepared.security,
+        active.policy_epoch() + 1L,
+        self.reload_reconcile_items,
+        self.reload_reconcile_bytes,
+      ) {
+      Some(value) => Some(value)
+      None => return ReloadActivationInvalid
+    }
+  } else {
+    None
   }
   if self.strict is Some(coordinator) {
     if !self.reload_barrier_ready() {
@@ -121,6 +136,95 @@ pub fn RouterDriver::activate_prepared_reload(
   } else {
     retired.release()
   }
+  self.reload_reconciler = scan
+  if self.strict is Some(_) {
+    self.end_reload_barrier()
+  }
   let now = handle.active()
   ReloadActivated(now.config_epoch(), now.policy_epoch())
+}
+
+///|
+fn RouterDriver::advance_reload_reconciliation(self : RouterDriver) -> Unit {
+  let scan = match self.reload_reconciler {
+    Some(value) => value
+    None => return
+  }
+  if self.strict_fenced {
+    return
+  }
+  let issue = match self.reload_issue {
+    Some(value) => Some(value)
+    None =>
+      match scan.next(self.runtime.broker_state()) {
+        @router.PolicyScanIssue(value) => {
+          self.reload_issue = Some(value)
+          Some(value)
+        }
+        @router.PolicyScanProgress => return
+        @router.PolicyScanWaiting => return
+        @router.PolicyScanUnavailable =>
+          abort("reload policy index became unavailable")
+        @router.PolicyScanDone => {
+          if self.strict is Some(coordinator) {
+            if coordinator.has_pending() ||
+              self.strict_checkpoint_cursor is Some(_) ||
+              self.strict_checkpoint_inflight {
+              return
+            }
+            let active = self.generation.unwrap().active()
+            let state = match coordinator.policy_state() {
+              Some(value) if value.reconcile_pending &&
+                value.sequence == active.policy_epoch() &&
+                value.fingerprint == active.fingerprint => value
+              _ => {
+                self.strict_fence("reload-policy-state-mismatch")
+                return
+              }
+            }
+            match
+              coordinator.submit(
+                PolicyRecord({
+                  transition: @persistence.PolicyReconciled,
+                  sequence: state.sequence,
+                  fingerprint: state.fingerprint,
+                }),
+                _ => {
+                  self.reload_issue = None
+                  self.reload_reconciler = None
+                  []
+                },
+              ) {
+              Ok(_) => ()
+              Err(CommitBusy) => ()
+              Err(_) => self.strict_fence("reload-reconciled-submit")
+            }
+          } else {
+            self.reload_reconciler = None
+          }
+          return
+        }
+      }
+  }
+  let value = issue.unwrap()
+  if self.strict is Some(_) {
+    match self.apply_policy_issue_strict(value, scan) {
+      PolicyIssueSubmitted | PolicyClosePending | PolicyIssueBusy => ()
+      PolicyIssueStale => self.reload_issue = None
+      PolicyIssueFailed => self.strict_fence("reload-policy-cleanup")
+    }
+  } else {
+    match self.runtime.apply_policy_issue_runtime(value) {
+      PolicyApplied(actions) => {
+        self.dispatch(actions)
+        ignore(scan.complete_issue(value))
+        self.reload_issue = None
+      }
+      PolicyStale => {
+        ignore(scan.complete_issue(value))
+        self.reload_issue = None
+      }
+      PolicyFailed => abort("runtime reload policy cleanup failed")
+    }
+  }
 }
