@@ -66,7 +66,7 @@ binding. See [configuration](configuration.md) and
 | `DELETE /v1/sessions/{handle}` | operator | Delete only an offline persistent Session |
 | `GET /v1/operations/{id}` | operator or config_admin | Own in-process Operation |
 | `GET /v1/audit` | operator or config_admin | Own recent in-process audit events |
-| `POST /v1/config/reload` | config_admin | 501 `capability_unavailable` until the reload coordinator exists |
+| `POST /v1/config/reload` | config_admin | 202 for an accepted reload when enabled; 503 `reload_disabled` when disabled |
 
 A connection begins at `await_connect`, may enter `authenticating`, and then
 `active`. TLS handshakes before MQTT registration are not listed. Named TCP/TLS/WS/WSS MQTT listeners share the same Broker state; the
