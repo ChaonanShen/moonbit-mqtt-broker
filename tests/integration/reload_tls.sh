@@ -22,6 +22,9 @@ cleanup() {
     "$work/broker.log" >"$RELOAD_EVIDENCE_DIR/tls-events.log" 2>/dev/null || true
   printf 'case=reload_tls\nexit_code=%s\n' "$rc" \
     >"$RELOAD_EVIDENCE_DIR/tls-summary.txt"
+  if [[ "$rc" -ne 0 ]]; then
+    cp "$work/broker.log" "$RELOAD_EVIDENCE_DIR/debug-broker.log" || true
+  fi
   rm -rf -- "$work"
   exit "$rc"
 }
@@ -38,6 +41,9 @@ openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 1 \
   -keyout "$work/key.pem" -out "$work/cert.pem" >/dev/null 2>&1
 chmod 600 "$work/key.pem"
 cat >"$work/config.toml" <<EOF
+[limits]
+enabled = false
+per_ip_enabled = false
 [reload]
 enabled = true
 manifest_file = "$work/manifest.toml"
