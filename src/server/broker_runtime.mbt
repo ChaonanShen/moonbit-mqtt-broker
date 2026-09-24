@@ -222,6 +222,7 @@ fn close_reason_name(reason : CloseReason) -> String {
     ConnectTimeout => "connect_timeout"
     ClientTakeover => "client_takeover"
     AdminKick => "admin_kick"
+    PolicyRevoked => "policy_revoked"
     SlowConsumer => "slow_consumer"
     EncodeFailure => "encode_failure"
     RateLimited => "rate_limited"
@@ -469,7 +470,12 @@ fn BrokerRuntime::terminate(
         reason != ConnectRejected &&
         reason != ServerShutdown
       if publish_will && meta.will is Some(will) {
-        actions.append(self.publish_stored_will(client_id, will))
+        match meta.principal {
+          Some(principal) if self.security.allows_principal(principal) &&
+            self.security.can_write_topic(principal, will.topic) =>
+            actions.append(self.publish_stored_will(client_id, will))
+          _ => self.metrics.record_dropped()
+        }
       }
     }
   }
@@ -1190,11 +1196,19 @@ fn BrokerRuntime::handle_packet(
       if self.active_by_client.get(client_id) != Some(event.connection_id) {
         return []
       }
+      if !self.connection_credential_current(event.connection_id) {
+        return self.terminate(
+          event.connection_id,
+          PolicyRevoked,
+          observed_at_ms=event.received_at_ms,
+        )
+      }
+      let current = self.connections.get(event.connection_id).unwrap()
       self.connections.set(event.connection_id, {
-        ..meta,
+        ..current,
         last_control_at_ms: event.received_at_ms,
       })
-      let principal = meta.principal.unwrap()
+      let principal = current.principal.unwrap()
       self.handle_active_packet(
         event.connection_id,
         client_id,

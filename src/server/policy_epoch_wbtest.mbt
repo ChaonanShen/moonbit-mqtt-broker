@@ -91,3 +91,71 @@ test "stale policy epoch rejects strict authentication completion" {
   assert_eq(rt.auth_task_count(), 0)
   rt.check_invariants().unwrap()
 }
+
+///|
+test "strict active packet closes a revoked credential before preparing WAL" {
+  let rt = policy_epoch_runtime()
+  let id = ConnectionId::new(853L)
+  ignore(rt.apply(TransportOpened({ connection_id: id, accepted_at_ms: 0L })))
+  let connect : @protocol.Packet = match policy_epoch_connect() {
+    Connect(value) =>
+      Connect({
+        ..value,
+        will: Some({
+          topic: "allowed/will",
+          payload: b"must-not-publish",
+          qos: QoS1,
+          retain: true,
+        }),
+      })
+    _ => abort("invalid connect fixture")
+  }
+  let begin = rt.prepare_strict_connect_packet(
+    { connection_id: id, packet: connect, received_at_ms: 1L },
+    Map([]),
+    1L,
+  )
+  assert_true(begin is StrictImmediate(_))
+  let completed = rt.prepare_strict_auth_completion(
+    {
+      request_id: 1L,
+      outcome: @security.AuthCompletionOutcome::HashMatched,
+      completed_at_ms: 2L,
+    },
+    Map([]),
+    1L,
+  )
+  let (plan, after) = match completed {
+    StrictPrepared(plan, after) => (plan, after)
+    _ => fail("strict authentication must prepare activation")
+  }
+  rt.broker_state().begin_action_scope()
+  ignore(after(plan.commit().unwrap()))
+  rt.broker_state().end_action_scope()
+  assert_true(
+    rt.publish_security_generation(@security.SecurityPolicy::permissive(), 1L),
+  )
+  let result = rt.prepare_strict_active_packet(
+    {
+      connection_id: id,
+      packet: Publish({
+        topic: "allowed/value",
+        payload: b"must-not-route",
+        qos: QoS0,
+        packet_id: None,
+        dup: false,
+        retain: true,
+      }),
+      received_at_ms: 3L,
+    },
+    Map([]),
+  )
+  assert_true(result is StrictClose(_, PolicyRevoked))
+  let closed = rt.finish_strict_transport_close({
+    connection_id: id,
+    reason: PolicyRevoked,
+    observed_at_ms: 4L,
+  })
+  assert_false(closed.any(action => action is StartDurableWill(_)))
+  assert_eq(rt.broker_state().retained_count(), 0)
+}
