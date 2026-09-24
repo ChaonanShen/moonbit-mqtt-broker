@@ -83,7 +83,19 @@ Prometheus 的 WAL LSN/待提交 gauge 使用固定名称，不引入 Client ID�
 或使用与 ETag 一致的规范非负 JSON 整数
 `{"expected_generation":0}`。受理返回 202 和 Operation 位置；
 同一 key/请求返回原 Operation，同一 key 改请求返回 409，
-陈旧 ETag 返回 412。应查询 Operation 直至终态：受理并不表示
+陈旧 ETag 返回 412。发布完整 bundle 后，可按下列顺序调用：
+
+```bash
+curl -i -H "Authorization: Bearer $token" http://127.0.0.1:9091/v1/config
+curl -i -X POST -H "Authorization: Bearer $token" \
+  -H "If-Match: $etag" -H "Idempotency-Key: reload-20260924-0001" \
+  -H "Content-Type: application/json" -d '{"expected_generation":0}' \
+  http://127.0.0.1:9091/v1/config/reload
+curl -i -H "Authorization: Bearer $token" \
+  "http://127.0.0.1:9091/v1/operations/$operation_id"
+```
+
+从首个响应取得 `etag`，从受理响应取得 `operation_id`；将示例代际 0 换成实测 `config_epoch`。应查询 Operation 直至终态：受理并不表示
 激活或清理成功。`config_admin` 可在 `operations_enabled=false`
 时查询自己的 Operation 和审计。SIGHUP 使用同一有界 reload owner；
 即使管理关闭，也会记录本地信号审计。两条路径均不轮换管理令牌文件。

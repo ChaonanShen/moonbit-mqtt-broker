@@ -90,7 +90,19 @@ boot-scoped `ETag`. Send that ETag in `If-Match` and a 16–64 character
 `{}`, or `{"expected_generation":0}` with a canonical nonnegative JSON
 integer matching the ETag. An accepted request returns 202 and an Operation
 location; the same key/request returns the original Operation, while a reused
-key for another request returns 409. A stale ETag fails with 412. Query the
+key for another request returns 409. A stale ETag fails with 412. For example, after publishing the complete bundle, use the ETag returned by the first command:
+
+```bash
+curl -i -H "Authorization: Bearer $token" http://127.0.0.1:9091/v1/config
+curl -i -X POST -H "Authorization: Bearer $token" \
+  -H "If-Match: $etag" -H "Idempotency-Key: reload-20260924-0001" \
+  -H "Content-Type: application/json" -d '{"expected_generation":0}' \
+  http://127.0.0.1:9091/v1/config/reload
+curl -i -H "Authorization: Bearer $token" \
+  "http://127.0.0.1:9091/v1/operations/$operation_id"
+```
+
+Set `etag` from the first response and `operation_id` from the accepted response; replace generation 0 with the observed `config_epoch`. Query the
 Operation until terminal: acceptance alone does not mean activation or
 reconciliation succeeded. A `config_admin` token can read its own Operation
 and audit entries without `operations_enabled`. SIGHUP uses the same bounded
