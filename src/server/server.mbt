@@ -902,6 +902,11 @@ pub async fn run_listeners(
     }
   }
   defer (if management_runtime is Some(active) { active.close() })
+  if reload is Some(_) &&
+    management_runtime is Some(active) &&
+    generation is Some(handle) {
+    active.enable_reload(handle, initial_state.resource_ledger())
+  }
   if management_runtime is Some(active) {
     active.set_mqtt_listener_address(bound[0].socket.addr.to_string())
   }

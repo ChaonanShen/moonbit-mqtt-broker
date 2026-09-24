@@ -29,10 +29,11 @@ pub struct ManagementRuntime {
   cache : @management.ObservationCache
   http : ManagementHttp
   availability : ManagementAvailability
-  query_mailbox : ManagementQueryMailbox?
-  command_mailbox : ManagementCommandMailbox?
-  operations : @management.OperationTable?
-  audit : @management.AuditRing?
+  mut query_mailbox : ManagementQueryMailbox?
+  mut command_mailbox : ManagementCommandMailbox?
+  mut operations : @management.OperationTable?
+  mut audit : @management.AuditRing?
+  mut reload_budget : @budget.Ticket?
   mut pending_kick_reservations : Int
   cursor_table : @management.CursorTable?
   mut mqtt_listener_address : String
@@ -140,6 +141,7 @@ pub fn ManagementRuntime::new(
     command_mailbox,
     operations,
     audit,
+    reload_budget: None,
     pending_kick_reservations: 0,
     cursor_table,
     mqtt_listener_address: "",
@@ -187,6 +189,10 @@ pub fn ManagementRuntime::close(self : ManagementRuntime) -> Unit {
     self.cache.close()
     ignore(self.budget.close())
     self.budget.release_b_tables()
+    if self.reload_budget is Some(ticket) {
+      ticket.release().unwrap()
+      self.reload_budget = None
+    }
     self.listener.close()
   }
 }
@@ -197,4 +203,68 @@ fn ManagementRuntime::set_mqtt_listener_address(
   address : String,
 ) -> Unit {
   self.mqtt_listener_address = address
+}
+
+///|
+/// The reload lifecycle reserves its own bounded command/query path when the
+/// B management features are disabled. When B is enabled, both commands share
+/// the same OperationTable and audit ring.
+fn ManagementRuntime::enable_reload(
+  self : ManagementRuntime,
+  generation : GenerationHandle,
+  ledger : @budget.Ledger,
+) -> Unit raise ResourceStartupFailure {
+  if self.reload_budget is Some(_) {
+    return
+  }
+  let owns_table = self.operations is None
+  let cost = if owns_table {
+    self.config.max_operation_records().to_int64() * 2048L +
+    self.config.max_audit_records().to_int64() * 512L +
+    self.config.operation_queue_limit().to_int64() * 1024L +
+    self.config.query_queue_limit().to_int64() * 1024L +
+    8192L
+  } else {
+    65536L
+  }
+  if cost > self.config.max_bytes_total() {
+    raise ResourceStartupFailure("reload management budget exceeds cap")
+  }
+  let pool = ledger
+    .pool(@budget.ManagementInfrastructure, self.config.max_bytes_total())
+    .unwrap()
+  let ticket = match pool.reserve(cost) {
+    Ok(value) => value
+    Err(_) =>
+      raise ResourceStartupFailure("reload management budget unavailable")
+  }
+  ticket.commit().unwrap()
+  self.reload_budget = Some(ticket)
+  if self.operations is None {
+    self.operations = Some(
+      @management.OperationTable::new(
+        self.context.boot_id,
+        self.config.max_operation_records(),
+        self.config.operation_retention_ms().to_int64(),
+      ),
+    )
+  }
+  if self.audit is None {
+    self.audit = Some(
+      @management.AuditRing::new(self.config.max_audit_records()),
+    )
+  }
+  if self.query_mailbox is None {
+    self.query_mailbox = Some(
+      ManagementQueryMailbox::new(self.config.query_queue_limit()),
+    )
+  }
+  if self.command_mailbox is None {
+    self.command_mailbox = Some(
+      ManagementCommandMailbox::new(self.config.operation_queue_limit()),
+    )
+  }
+  self.http.query_mailbox = self.query_mailbox
+  self.http.command_mailbox = self.command_mailbox
+  self.http.reload_generation = Some(generation)
 }
