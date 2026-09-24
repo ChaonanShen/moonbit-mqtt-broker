@@ -412,6 +412,10 @@ MQTT.js 检查四入口 QoS 1 路由及 TCP 到 WSS 的持久会话恢复。
 Upgrade、WebSocket 帧边界、验证证书的 WSS，以及私有 TLS 材料捕获。
 对已提交候选的完整功能与分发记录由 CI 提供；开发侧只做定向检查。
 
+## P1-04 热更新门禁
+
+累计入口依次运行 reload 生命周期、TLS/WSS 材料轮换、strict 恢复和安全撤权进程测试。安全撤权脚本分别以 off、snapshot、strict 模式验证匿名关闭、密码变更时空闲连接断开，以及 ACL 收紧后的投递阻断。分发证据只放行各模式的摘要和脱敏事件日志；密码库、manifest 和私钥不得上传。
+
 ## P1-01 强持久性门禁
 
 已提交候选的 `verify-release.sh` 各调用一次 `durability_transports.sh`
