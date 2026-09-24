@@ -337,6 +337,15 @@ async test "policy WAL transitions survive buffered and streaming recovery" {
       sequence: 1L,
       fingerprint,
     }).unwrap()
+    assert_true(
+      wal.append_batch({
+        previous_lsn: 0L,
+        transactions: [{ lsn: 1L, delta: activated }],
+      })
+      is Err(_),
+    )
+    assert_eq(wal.require_policy_capability(), Ok(()))
+    assert_true(wal.manifest().policy_required)
     assert_eq(
       wal.append_batch({
         previous_lsn: 0L,
@@ -383,6 +392,7 @@ async test "policy WAL replay rejects reconciliation without activation" {
       sequence: 1L,
       fingerprint: Bytes::from_array(digest),
     }).unwrap()
+    assert_eq(wal.require_policy_capability(), Ok(()))
     assert_eq(
       wal.append_batch({
         previous_lsn: 0L,
@@ -401,5 +411,28 @@ async test "policy WAL replay rejects reconciliation without activation" {
       WalStore::recover_state(third, limits.broker_config(), limits) is Err(_),
     )
     third.close()
+  })
+}
+
+///|
+async test "policy capability upgrade before activation recovers safely" {
+  with_wal_store_dir("policy-upgrade-only", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let first = SnapshotStore::open(config).unwrap()
+    let wal = WalStore::bootstrap(first, wal_store_empty_checkpoint()).unwrap()
+    assert_eq(wal.require_policy_capability(), Ok(()))
+    assert_eq(wal.require_policy_capability(), Ok(()))
+    wal.close()
+    let limits = wal_store_limits()
+    let second = SnapshotStore::open(config).unwrap()
+    let (recovered, state) = WalStore::recover_state(
+      second,
+      limits.broker_config(),
+      limits,
+    ).unwrap()
+    assert_true(state.policy_required())
+    assert_eq(state.policy(), None)
+    assert_eq(state.committed_lsn(), 0L)
+    recovered.close()
   })
 }

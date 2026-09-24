@@ -92,6 +92,7 @@ pub struct WalRecovery {
   batches : Array[WalBatch]
   committed_lsn : Int64
   recovered_tail : Bool
+  policy_required : Bool
 }
 
 ///|
@@ -396,7 +397,8 @@ pub async fn WalStore::recover(
       Err(error) => raise error
     }
     if checkpoint.generation != manifest.checkpoint_generation ||
-      checkpoint.lsn != manifest.checkpoint_lsn {
+      checkpoint.lsn != manifest.checkpoint_lsn ||
+      (!manifest.policy_required && checkpoint.policy is Some(_)) {
       raise wal_corrupt("checkpoint-manifest-mismatch", 0)
     }
     let batches : Array[WalBatch] = []
@@ -466,6 +468,7 @@ pub async fn WalStore::recover(
       batches,
       committed_lsn: scan.committed_lsn,
       recovered_tail: scan.recovered_tail,
+      policy_required: manifest.policy_required,
     }
     Ok(
       (
@@ -589,6 +592,68 @@ async fn WalStore::rotate(self : WalStore) -> Result[Unit, PersistenceError] {
 }
 
 ///|
+/// Persist the required policy capability before any policy transaction can
+/// be committed. A crash after this manifest switch but before activation is
+/// recoverable by the new reader; an old reader rejects manifest version 2.
+pub async fn WalStore::require_policy_capability(
+  self : WalStore,
+) -> Result[Unit, PersistenceError] {
+  if self.manifest.policy_required {
+    return Ok(())
+  }
+  if self.closed ||
+    self.fenced ||
+    self.manifest.generation == 9223372036854775807L {
+    return Err(InvalidConfiguration("WAL policy capability unavailable"))
+  }
+  let dir = self.snapshot_store.data_dir()
+  let temp = dir + "/" + wal_manifest_temp_name
+  let path = dir + "/" + wal_manifest_name
+  try {
+    if wal_exists(temp) {
+      raise InvalidConfiguration("WAL policy upgrade found orphan manifest")
+    }
+    let next : WalManifest = {
+      ..self.manifest,
+      generation: self.manifest.generation + 1L,
+      policy_required: true,
+    }
+    let encoded = match encode_wal_manifest(next) {
+      Ok(value) => value
+      Err(error) => raise error
+    }
+    if self.disk_dirty {
+      self.disk_bytes = wal_disk_usage(dir)
+      self.disk_dirty = false
+    }
+    if self.disk_bytes >
+      self.disk_max_bytes -
+      self.disk_reserve_bytes -
+      encoded.length().to_int64() {
+      raise LimitExceeded(
+        resource="wal-disk-bytes",
+        actual=self.disk_bytes + encoded.length().to_int64(),
+        limit=self.disk_max_bytes - self.disk_reserve_bytes,
+      )
+    }
+    wal_write_synced_new(temp, encoded)
+    @fs.rename(temp, path, replace=true) catch {
+      _ => raise FileSystem(operation="wal-policy-manifest-rename", path~)
+    }
+    sync_directory(dir)
+    self.manifest = next
+    self.disk_bytes = wal_disk_usage(dir)
+    Ok(())
+  } catch {
+    error => {
+      self.disk_dirty = true
+      self.fenced = true
+      Err(error)
+    }
+  }
+}
+
+///|
 pub async fn WalStore::append_batch(
   self : WalStore,
   batch : WalBatch,
@@ -596,6 +661,10 @@ pub async fn WalStore::append_batch(
 ) -> Result[Int64, PersistenceError] {
   if self.closed || self.fenced || batch.previous_lsn != self.committed_lsn {
     return Err(FileSystem(operation="wal-not-writable", path=self.active_path))
+  }
+  if !self.manifest.policy_required &&
+    batch.transactions.any(item => is_wal_policy_record(item.delta)) {
+    return Err(InvalidConfiguration("policy WAL requires manifest capability"))
   }
   let encoded = match encode_wal_batch(batch) {
     Ok(value) => value
@@ -716,7 +785,8 @@ pub async fn WalStore::publish_checkpoint(
     checkpoint.lsn != self.committed_lsn ||
     self.manifest.checkpoint_generation == 9223372036854775807L ||
     self.manifest.generation == 9223372036854775807L ||
-    checkpoint.generation != self.manifest.checkpoint_generation + 1L {
+    checkpoint.generation != self.manifest.checkpoint_generation + 1L ||
+    (!self.manifest.policy_required && checkpoint.policy is Some(_)) {
     return Err(InvalidConfiguration("invalid WAL checkpoint publication"))
   }
   let encoded = match encode_wal_checkpoint_sliced(checkpoint, preempt~) {
