@@ -482,7 +482,21 @@ test "policy publication blocks a deleted user and retires old credential state"
   let id = cid(852L)
   open(rt, id, 0L)
   assert_eq(
-    receive(rt, id, authenticated_connect("deleted-user", b"correct horse"), 1L),
+    receive(
+      rt,
+      id,
+      authenticated_connect(
+        "deleted-user",
+        b"correct horse",
+        will=Some({
+          topic: "allowed/will",
+          payload: b"must-not-publish",
+          qos: QoS1,
+          retain: true,
+        }),
+      ),
+      1L,
+    ),
     [SendPacket({ connection_id: id, packet: test_connack(Accepted) })],
   )
   assert_true(rt.connection_credential_current(id))
@@ -494,11 +508,22 @@ test "policy publication blocks a deleted user and retires old credential state"
   )
   assert_true(rt.publish_security_generation(new_policy, 1L))
   assert_false(rt.connection_credential_current(id))
-  ignore(
-    rt.apply(
-      TransportClosed({ connection_id: id, reason: PeerEof, observed_at_ms: 2L }),
-    ),
+  let actions = receive(
+    rt,
+    id,
+    Publish({
+      topic: "allowed/value",
+      payload: b"must-not-route",
+      qos: QoS0,
+      packet_id: None,
+      dup: false,
+      retain: true,
+    }),
+    2L,
   )
+  assert_true(actions.any(action => action is CloseTransport(_)))
+  assert_false(rt.has_connection(id))
+  assert_eq(rt.broker_state().retained_count(), 0)
   assert_true(rt.publish_security_generation(security_fixture(), 2L))
   rt.check_invariants().unwrap()
 }
