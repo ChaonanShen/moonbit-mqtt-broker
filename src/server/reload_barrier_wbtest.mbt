@@ -47,6 +47,12 @@ async test "strict reload barrier drains older WAL and holds later business" {
     0L,
   ).unwrap()
   let driver = RouterDriver::new(runtime, strict=coordinator)
+  driver.strict_checkpoint_cursor = Some(broker.start_snapshot_export(Map([])))
+  assert_false(driver.begin_reload_barrier())
+  driver.strict_checkpoint_cursor = None
+  driver.strict_checkpoint_inflight = true
+  assert_false(driver.begin_reload_barrier())
+  driver.strict_checkpoint_inflight = false
   let publish = fn(topic : String, packet_id : Int) {
     driver.handle(
       Runtime(
