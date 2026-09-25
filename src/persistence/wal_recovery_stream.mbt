@@ -214,6 +214,7 @@ pub async fn WalStore::recover_state(
         {
           snapshot_store,
           manifest,
+          manifest_v5: None,
           active_file,
           active_path,
           active_bytes: scan.committed_bytes.to_int64(),
