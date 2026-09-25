@@ -298,23 +298,8 @@ fn RouterDriver::handle_strict_runtime_event(
   }
   match event {
     Mqtt5PacketReceived(packet) => {
-      if packet.packet is @protocol.PacketV5::Connect5(_) &&
-        self.runtime.connections.get(packet.connection_id)
-        is Some({ phase: AwaitConnect, .. }) {
-        if self.sinks.get(packet.connection_id) is Some(sink) &&
-          !sink.prepare_handshake(
-            self.runtime.config
-            .broker_config()
-            .resources()
-            .get("control_reserve_bytes"),
-            frame_bytes=5L,
-            scratch_bytes=10L,
-          ) {
-          self.dispatch(
-            self.transport_failed(packet.connection_id, ResourceExhausted),
-          )
-          return
-        }
+      if !self.prepare_mqtt5_handshake(packet) {
+        return
       }
       let plan = match self.runtime.connections.get(packet.connection_id) {
         Some({ phase: AwaitConnect, .. }) =>
@@ -480,6 +465,58 @@ fn RouterDriver::handle_strict_runtime_event(
               ),
             )
           }
+        }
+      }
+      if !coordinator.has_pending() && !self.strict_fenced {
+        match
+          self.runtime
+          .broker_state()
+          .next_expired_pending(@budget.monotonic_ms()) {
+          None => ()
+          Some((client_id, index)) =>
+            match
+              self.runtime
+              .broker_state()
+              .prepare_durable_pending_expiry(
+                client_id,
+                index,
+                @budget.monotonic_ms(),
+              ) {
+              Ok(plan) =>
+                ignore(
+                  self.strict_submit_packet_plan(
+                    ConnectionId::new(0L),
+                    StrictPrepared(PendingExpiry(plan), actions => {
+                      self.runtime.map_broker_actions(actions)
+                    }),
+                  ),
+                )
+              Err(_) => self.strict_fence("pending-expiry-prepare")
+            }
+        }
+      }
+      if !coordinator.has_pending() && !self.strict_fenced {
+        match
+          self.runtime
+          .broker_state()
+          .next_expired_retained(@budget.monotonic_ms()) {
+          None => ()
+          Some(topic) =>
+            match
+              self.runtime
+              .broker_state()
+              .prepare_durable_retained_expiry(topic, @budget.monotonic_ms()) {
+              Ok(plan) =>
+                ignore(
+                  self.strict_submit_packet_plan(
+                    ConnectionId::new(0L),
+                    StrictPrepared(RetainedExpiry(plan), actions => {
+                      self.runtime.map_broker_actions(actions)
+                    }),
+                  ),
+                )
+              Err(_) => self.strict_fence("retained-expiry-prepare")
+            }
         }
       }
       if !coordinator.has_pending() && !self.strict_fenced {

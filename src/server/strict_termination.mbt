@@ -120,9 +120,7 @@ pub fn BrokerRuntime::prepare_strict_termination(
       let will_plan = match self.v5_will_ids.get(event.connection_id) {
         None => None
         Some(id) =>
-          if event.reason == NormalDisconnect ||
-            event.reason == ConnectRejected ||
-            event.reason == ServerShutdown {
+          if event.reason == NormalDisconnect || event.reason == ConnectRejected {
             match self.broker_state.prepare_durable_will_cancel(id) {
               Ok(value) => Some(value)
               Err(_) =>

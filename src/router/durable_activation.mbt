@@ -30,6 +30,13 @@ pub struct DurableActivationPlan {
 }
 
 ///|
+pub fn DurableActivationPlan::persistent_after(
+  self : DurableActivationPlan,
+) -> Bool {
+  self.candidate.mode() == @session.Persistent
+}
+
+///|
 pub fn DurableActivationPlan::session_incarnation_after(
   self : DurableActivationPlan,
 ) -> Int64 {
@@ -152,6 +159,8 @@ pub fn BrokerState::prepare_durable_activation(
         candidate.with_retention(retention)
       } else {
         candidate
+        .with_retention(@session.LegacyBrokerPolicy)
+        .with_last_protocol(4)
       },
       deliveries,
     )
@@ -455,7 +464,9 @@ pub fn DurableActivationPlan::delta_v5(
       None =>
         return Err(InvariantViolation("Will disappeared before activation"))
     }
-    will_deletes.push({ id, expected_revision: record.revision })
+    if old_persistent {
+      will_deletes.push({ id, expected_revision: record.revision })
+    }
   }
   let will_puts : Array[Mqtt5WillPut] = []
   for entry in self.trigger_wills {
@@ -486,7 +497,14 @@ pub fn DurableActivationPlan::delta_v5(
       Ok(value) => value
       Err(error) => return Err(error)
     }
-    will_puts.push({ expected_revision: record.revision, will: saved })
+    will_puts.push({
+      expected_revision: if old_persistent {
+        record.revision
+      } else {
+        0L
+      },
+      will: saved,
+    })
   }
   self.will_transition_mono_ms = now_mono_ms
   self.will_transition_wall_ms = now_wall_ms

@@ -1551,6 +1551,18 @@ fn BrokerRuntime::check_deadlines(
   }
   let now_mono_ms = @budget.monotonic_ms()
   for _ in 0..<self.config.protocol_config().max_expiry_work_per_turn {
+    match self.broker_state.expire_one_pending_v5(now_mono_ms) {
+      Ok(true) => ()
+      Ok(false) | Err(_) => break
+    }
+  }
+  for _ in 0..<self.config.protocol_config().max_expiry_work_per_turn {
+    match self.broker_state.expire_one_retained_v5(now_mono_ms) {
+      Ok(true) => ()
+      Ok(false) | Err(_) => break
+    }
+  }
+  for _ in 0..<self.config.protocol_config().max_expiry_work_per_turn {
     let will_id = match self.broker_state.next_due_will(now_mono_ms) {
       Some(value) => value
       None => break

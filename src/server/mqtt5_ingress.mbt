@@ -109,15 +109,22 @@ fn BrokerRuntime::handle_mqtt5_packet(
       if !self.config.protocol_config().mqtt5_enabled {
         return self.reject_mqtt5_connect(event.connection_id, 0x84)
       }
-      let plan = match
-        normalize_mqtt5_connect(connect, self.config, client_id => {
-          self.broker_state.has_session(
-            @session.ClientId::new(client_id).unwrap(),
-          )
-        }) {
-        Ok(value) => value
-        Err(error) =>
-          return self.reject_mqtt5_connect(event.connection_id, error.reason)
+      let plan = match self.v5_pending.get(event.connection_id) {
+        Some(value) => value
+        None =>
+          match
+            normalize_mqtt5_connect(connect, self.config, client_id => {
+              self.broker_state.has_session(
+                @session.ClientId::new(client_id).unwrap(),
+              )
+            }) {
+            Ok(value) => value
+            Err(error) =>
+              return self.reject_mqtt5_connect(
+                event.connection_id,
+                error.reason,
+              )
+          }
       }
       // The first runtime activation stage keeps unsupported state out of V3 storage.
       self.v5_pending.set(event.connection_id, {

@@ -171,6 +171,14 @@ pub fn ClientSession::last_protocol(self : ClientSession) -> Int {
 }
 
 ///|
+pub fn ClientSession::with_last_protocol(
+  self : ClientSession,
+  version : Int,
+) -> ClientSession {
+  { ..self, last_protocol: version }
+}
+
+///|
 pub fn ClientSession::with_retention(
   self : ClientSession,
   retention : Retention,
@@ -300,12 +308,19 @@ fn ClientSession::promote_pending(
         self.inflight.length() < limits.max_inflight &&
         self.pending.length() > 0 {
     let message = self.pending[0]
-    if message.cost() > limits.max_inflight_bytes - self.inflight_bytes() {
-      break
-    }
     let remaining : Array[SessionMessage] = []
     for index in 1..<self.pending.length() {
       remaining.push(self.pending[index])
+    }
+    if message.metadata.expiry is Some(deadline) &&
+      deadline.remaining_at(@budget.monotonic_ms()) == 0L {
+      self.pending = remaining
+      self.pending_cost -= message.cost()
+      self.bump_policy_revision()
+      continue
+    }
+    if message.cost() > limits.max_inflight_bytes - self.inflight_bytes() {
+      break
     }
     match self.stage_inflight(message) {
       Ok(delivery) => {

@@ -31,7 +31,15 @@ pub fn BrokerState::prepare_durable_publish(
   generations : Map[@session.ClientId, Int64],
   inbound_packet_id? : @session.SessionPacketId,
   metadata? : @session.MessageMetadata = @session.MessageMetadata::empty(),
+  now_mono_ms? : Int64 = @budget.monotonic_ms(),
 ) -> Result[DurablePublishPlan, RouterError] {
+  let expired = metadata.expiry is Some(deadline) &&
+    deadline.remaining_at(now_mono_ms) == 0L
+  let source = if expired && source.retain {
+    { ..source, payload: Bytes::from_array([]) }
+  } else {
+    source
+  }
   if source.retain &&
     source.payload.length() > 0 &&
     self.retained.peek(source.topic) is None &&
@@ -68,9 +76,12 @@ pub fn BrokerState::prepare_durable_publish(
     }
   }
   let new_retained_cost = if source.retain && source.payload.length() > 0 {
-    @budget.message_cost(
-      source.topic.value(),
-      source.payload.length().to_int64(),
+    @budget.checked_add(
+      @budget.message_cost(
+        source.topic.value(),
+        source.payload.length().to_int64(),
+      ).unwrap(),
+      metadata.cost(),
     ).unwrap()
   } else {
     0L
@@ -107,7 +118,7 @@ pub fn BrokerState::prepare_durable_publish(
   let strict = input.origin is Client(_)
   let planned = match
     self.preflight_deliveries(
-      self.delivery_candidates(input, metadata~),
+      self.delivery_candidates(input, metadata~, now_mono_ms~),
       strict,
       retained_delta~,
     ) {

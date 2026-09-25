@@ -117,3 +117,35 @@ async test "C-T31 V3 strict migration publishes one V5 authority" {
     recovered.close()
   })
 }
+
+///|
+async test "C-T31 V5 manifest capability can advance beyond old checkpoint" {
+  with_wal_store_dir("v5-policy-capability", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let lock = SnapshotStore::open(config).unwrap()
+    let checkpoint : WalCheckpointV5 = {
+      generation: 1L,
+      lsn: 0L,
+      identities: [],
+      required_features: feature_mqtt5_model,
+      policy: None,
+      snapshot: v5_empty_snapshot(),
+    }
+    let wal = WalStore::bootstrap_v5(lock, checkpoint).unwrap()
+    assert_eq(wal.require_policy_capability(), Ok(()))
+    wal.close()
+    let reopened = SnapshotStore::open(config).unwrap()
+    let limits = SnapshotDecodeLimits::new(
+      @router.BrokerConfig::new(4, 16, 8, max_sessions=8).unwrap(),
+      1024,
+    ).unwrap()
+    let (recovered, state) = WalStore::recover_state_v5(
+      reopened,
+      limits.broker_config(),
+      limits,
+    ).unwrap()
+    assert_eq(state.committed_lsn(), 0L)
+    assert_true(state.policy_required())
+    recovered.close()
+  })
+}

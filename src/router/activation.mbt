@@ -74,6 +74,8 @@ pub fn BrokerState::prepare_activation(
         session.with_retention(retention)
       } else {
         session
+        .with_retention(@session.LegacyBrokerPolicy)
+        .with_last_protocol(4)
       },
       deliveries,
     )

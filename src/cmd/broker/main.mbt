@@ -2117,7 +2117,12 @@ async fn run_main() -> Unit {
             Ok(value) => value
             Err(error) => {
               store.close()
-              raise CliError("WAL recovery: " + error.category())
+              let detail = match error {
+                @persistence.InvalidValue(field~, offset~) =>
+                  "invalid-value " + field + " at " + offset.to_string()
+                _ => error.category()
+              }
+              raise CliError("WAL recovery: " + detail)
             }
           }
           (

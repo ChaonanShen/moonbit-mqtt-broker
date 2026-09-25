@@ -13,6 +13,8 @@ pub(all) enum PreparedBrokerMutation {
   )
   Lifecycle(@router.DurableLifecyclePlan)
   Will(@router.DurableWillPlan)
+  RetainedExpiry(@router.DurableRetainedExpiryPlan)
+  PendingExpiry(@router.DurablePendingExpiryPlan)
   LifecycleWithV5Will(@router.DurableLifecyclePlan, @router.DurableWillPlan)
   Subscribe(@router.DurableSubscribePlan)
   Unsubscribe(@router.DurableUnsubscribePlan)
@@ -33,7 +35,8 @@ fn PreparedBrokerMutation::delta(
     ActivationWithWill(value, _) => value.delta()
     V5ActivationWithWill(value, _, _) => value.delta()
     Lifecycle(value) => value.delta()
-    Will(_) => @router.DurableDelta::empty()
+    Will(_) | RetainedExpiry(_) | PendingExpiry(_) =>
+      @router.DurableDelta::empty()
     LifecycleWithV5Will(value, _) => value.delta()
     Subscribe(value) => value.delta()
     Unsubscribe(value) => value.delta()
@@ -70,11 +73,15 @@ fn PreparedBrokerMutation::delta_v5(
         Err(error) => return Err(error)
       }
       delta.id_floors.append(will_delta.id_floors)
-      delta.will_puts.append(will_delta.will_puts)
+      if value.persistent_after() {
+        delta.will_puts.append(will_delta.will_puts)
+      }
       Ok(delta)
     }
     Lifecycle(value) => value.delta_v5(now_mono_ms, now_wall_ms)
     Will(value) => value.delta_v5(now_mono_ms, now_wall_ms)
+    RetainedExpiry(value) => value.delta_v5(now_mono_ms, now_wall_ms)
+    PendingExpiry(value) => value.delta_v5(now_mono_ms, now_wall_ms)
     LifecycleWithV5Will(value, will) => {
       let delta = match value.delta_v5(now_mono_ms, now_wall_ms) {
         Ok(result) => result
@@ -119,6 +126,8 @@ fn PreparedBrokerMutation::commit(
     }
     Lifecycle(value) => value.commit()
     Will(value) => value.commit()
+    RetainedExpiry(value) => value.commit()
+    PendingExpiry(value) => value.commit()
     LifecycleWithV5Will(value, will) => {
       let actions = match value.commit() {
         Ok(result) => result
@@ -159,6 +168,8 @@ fn PreparedBrokerMutation::cancel(self : PreparedBrokerMutation) -> Unit {
     }
     Lifecycle(value) => value.cancel()
     Will(value) => value.cancel()
+    RetainedExpiry(value) => value.cancel()
+    PendingExpiry(value) => value.cancel()
     LifecycleWithV5Will(value, will) => {
       value.cancel()
       will.cancel()
