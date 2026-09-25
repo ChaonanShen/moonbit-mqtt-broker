@@ -15,6 +15,7 @@ pub struct ServerConfig {
   auth_result_batch_limit : Int
   auth_shutdown_grace_ms : Int
   broker_config : @router.BrokerConfig
+  protocol_config : @config.ProtocolConfig
 } derive(Eq, Debug)
 
 ///|
@@ -34,6 +35,7 @@ pub fn ServerConfig::new(
   auth_poll_interval_ms? : Int = 1,
   auth_result_batch_limit? : Int = 16,
   auth_shutdown_grace_ms? : Int = 10000,
+  protocol_config? : @config.ProtocolConfig = @config.ProtocolConfig::new().unwrap(),
 ) -> Result[ServerConfig, ServerError] {
   if max_connections < 1 {
     return Err(InvalidConfiguration("max_connections must be at least 1"))
@@ -99,6 +101,35 @@ pub fn ServerConfig::new(
       InvalidConfiguration("auth_shutdown_grace_ms must be at least 1"),
     )
   }
+  if protocol_config.mqtt5_enabled {
+    if protocol_config.max_property_bytes > max_packet_size {
+      return Err(
+        InvalidConfiguration("max_property_bytes exceeds max_packet_size"),
+      )
+    }
+    if protocol_config.server_receive_maximum >
+      broker_config.max_inbound_qos2_per_session() {
+      return Err(
+        InvalidConfiguration(
+          "server_receive_maximum exceeds inbound QoS2 limit",
+        ),
+      )
+    }
+    if protocol_config.max_delayed_wills >
+      broker_config.max_sessions() + max_connections {
+      return Err(
+        InvalidConfiguration(
+          "max_delayed_wills exceeds session and connection capacity",
+        ),
+      )
+    }
+    if protocol_config.mqtt5_enabled &&
+      broker_config.max_inflight_per_session() < 1 {
+      return Err(
+        InvalidConfiguration("MQTT 5 requires outbound inflight capacity"),
+      )
+    }
+  }
   let resources = broker_config.resources()
   let fixed_control = max_connections.to_int64() * 512L + 256L
   let fixed_data = max_runtime_events.to_int64() * 64L + 17408L
@@ -132,6 +163,7 @@ pub fn ServerConfig::new(
     auth_result_batch_limit,
     auth_shutdown_grace_ms,
     broker_config,
+    protocol_config,
   })
 }
 
@@ -224,4 +256,11 @@ pub fn ServerConfig::auth_shutdown_grace_ms(self : ServerConfig) -> Int {
 ///|
 pub fn ServerConfig::broker_config(self : ServerConfig) -> @router.BrokerConfig {
   self.broker_config
+}
+
+///|
+pub fn ServerConfig::protocol_config(
+  self : ServerConfig,
+) -> @config.ProtocolConfig {
+  self.protocol_config
 }

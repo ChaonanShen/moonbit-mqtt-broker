@@ -311,19 +311,23 @@ fn TransportSink::take_frame_ticket(
 fn TransportSink::prepare_handshake(
   self : TransportSink,
   control_limit : Int64,
+  frame_bytes? : Int64 = 4L,
+  scratch_bytes? : Int64 = 8L,
 ) -> Bool {
-  if self.handshake is Some(_) {
+  if frame_bytes < 2L ||
+    scratch_bytes < frame_bytes ||
+    self.handshake is Some(_) {
     return false
   }
   match self.budget {
     None => true
     Some((ledger, _, control)) => {
       let scratch_pool = ledger.pool(ControlWork, control_limit).unwrap()
-      let frame = match control.reserve(4L) {
+      let frame = match control.reserve(frame_bytes) {
         Ok(t) => t
         Err(_) => return false
       }
-      let scratch = match scratch_pool.reserve(8L) {
+      let scratch = match scratch_pool.reserve(scratch_bytes) {
         Ok(t) => t
         Err(_) => {
           frame.release().unwrap()

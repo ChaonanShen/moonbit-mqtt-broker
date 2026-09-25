@@ -21,6 +21,18 @@ fn default_effective_config_toml() -> String {
     #|max_connection_metadata_bytes_total = 1048576
     #|max_connections_per_ip = 32
     #|max_runtime_events_per_connection = 32
+    #|[protocol]
+    #|mqtt5_enabled = false
+    #|server_receive_maximum = 16
+    #|server_keep_alive = -1
+    #|topic_alias_maximum = 32
+    #|max_property_bytes = 16384
+    #|max_user_properties = 64
+    #|max_subscription_entries = 256
+    #|max_alias_bytes_per_connection = 65536
+    #|max_delayed_wills = 1024
+    #|max_expiry_work_per_turn = 128
+    #|write_timeout_ms = 10000
     #|[broker]
     #|max_subscriptions_per_session = 128
     #|max_subscriptions_total = 16384

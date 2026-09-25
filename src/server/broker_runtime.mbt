@@ -1585,6 +1585,7 @@ pub fn BrokerRuntime::apply(
     AuthenticationSubmitFailed(request_id) =>
       self.authentication_submit_failed(request_id)
     PacketReceived(packet) => self.handle_packet(packet)
+    Mqtt5PacketReceived(packet) => self.handle_mqtt5_packet(packet)
     TransportClosed(closed) =>
       self.terminate(
         closed.connection_id,

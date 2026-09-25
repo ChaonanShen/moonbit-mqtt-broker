@@ -339,6 +339,17 @@ async fn run_main() -> Unit {
   let listener_drafts : Array[ListenerDraft] = []
   let mut max_connections = 128
   let mut max_packet_size = 1048576
+  let mut mqtt5_enabled = false
+  let mut mqtt5_server_receive_maximum = 16
+  let mut mqtt5_server_keep_alive = -1
+  let mut mqtt5_topic_alias_maximum = 32
+  let mut mqtt5_max_property_bytes = 16384
+  let mut mqtt5_max_user_properties = 64
+  let mut mqtt5_max_subscription_entries = 256
+  let mut mqtt5_max_alias_bytes_per_connection = 65536
+  let mut mqtt5_max_delayed_wills = 1024
+  let mut mqtt5_max_expiry_work_per_turn = 128
+  let mut mqtt5_write_timeout_ms = 10000
   let mut max_receive_buffer_size = 1048576
   let mut max_outbound_queue = 64
   let mut max_runtime_events = 512
@@ -450,6 +461,70 @@ async fn run_main() -> Unit {
       }
       "--max-connections" => {
         max_connections = parse_bounded_int(args, index, "--max-connections", 1)
+        index = index + 2
+      }
+      "--mqtt5-enabled" => {
+        mqtt5_enabled = parse_bool_option(args, index, "--mqtt5-enabled")
+        index = index + 2
+      }
+      "--mqtt5-server-receive-maximum" => {
+        mqtt5_server_receive_maximum = parse_bounded_int(
+          args, index, "--mqtt5-server-receive-maximum", 1,
+        )
+        index = index + 2
+      }
+      "--mqtt5-server-keep-alive" => {
+        mqtt5_server_keep_alive = parse_bounded_int(
+          args, index, "--mqtt5-server-keep-alive", -1,
+        )
+        index = index + 2
+      }
+      "--mqtt5-topic-alias-maximum" => {
+        mqtt5_topic_alias_maximum = parse_bounded_int(
+          args, index, "--mqtt5-topic-alias-maximum", 0,
+        )
+        index = index + 2
+      }
+      "--mqtt5-max-property-bytes" => {
+        mqtt5_max_property_bytes = parse_bounded_int(
+          args, index, "--mqtt5-max-property-bytes", 1,
+        )
+        index = index + 2
+      }
+      "--mqtt5-max-user-properties" => {
+        mqtt5_max_user_properties = parse_bounded_int(
+          args, index, "--mqtt5-max-user-properties", 0,
+        )
+        index = index + 2
+      }
+      "--mqtt5-max-subscription-entries" => {
+        mqtt5_max_subscription_entries = parse_bounded_int(
+          args, index, "--mqtt5-max-subscription-entries", 1,
+        )
+        index = index + 2
+      }
+      "--mqtt5-max-alias-bytes-per-connection" => {
+        mqtt5_max_alias_bytes_per_connection = parse_bounded_int(
+          args, index, "--mqtt5-max-alias-bytes-per-connection", 0,
+        )
+        index = index + 2
+      }
+      "--mqtt5-max-delayed-wills" => {
+        mqtt5_max_delayed_wills = parse_bounded_int(
+          args, index, "--mqtt5-max-delayed-wills", 0,
+        )
+        index = index + 2
+      }
+      "--mqtt5-max-expiry-work-per-turn" => {
+        mqtt5_max_expiry_work_per_turn = parse_bounded_int(
+          args, index, "--mqtt5-max-expiry-work-per-turn", 1,
+        )
+        index = index + 2
+      }
+      "--mqtt5-write-timeout-ms" => {
+        mqtt5_write_timeout_ms = parse_bounded_int(
+          args, index, "--mqtt5-write-timeout-ms", 1,
+        )
         index = index + 2
       }
       "--max-packet-size" => {
@@ -1183,6 +1258,23 @@ async fn run_main() -> Unit {
       "--keep-alive-check-interval-ms must not exceed --connect-timeout-ms",
     )
   }
+  let protocol_config = match
+    @config.ProtocolConfig::new(
+      mqtt5_enabled~,
+      server_receive_maximum=mqtt5_server_receive_maximum,
+      server_keep_alive=mqtt5_server_keep_alive,
+      topic_alias_maximum=mqtt5_topic_alias_maximum,
+      max_property_bytes=mqtt5_max_property_bytes,
+      max_user_properties=mqtt5_max_user_properties,
+      max_subscription_entries=mqtt5_max_subscription_entries,
+      max_alias_bytes_per_connection=mqtt5_max_alias_bytes_per_connection,
+      max_delayed_wills=mqtt5_max_delayed_wills,
+      max_expiry_work_per_turn=mqtt5_max_expiry_work_per_turn,
+      write_timeout_ms=mqtt5_write_timeout_ms,
+    ) {
+    Ok(value) => value
+    Err(_) => raise CliError("invalid MQTT 5 protocol configuration")
+  }
   let config = match
     @server.ServerConfig::new(
       max_connections,
@@ -1200,6 +1292,7 @@ async fn run_main() -> Unit {
       auth_poll_interval_ms~,
       auth_result_batch_limit~,
       auth_shutdown_grace_ms~,
+      protocol_config~,
     ) {
     Ok(value) => value
     Err(_) => raise CliError("invalid server configuration")
@@ -1622,6 +1715,27 @@ async fn run_main() -> Unit {
       keep_alive_check_interval_ms.to_string(),
     )
     print_resource_section_values(resources, "server")
+    println("[protocol]")
+    println("mqtt5_enabled = " + mqtt5_enabled.to_string())
+    println(
+      "server_receive_maximum = " + mqtt5_server_receive_maximum.to_string(),
+    )
+    println("server_keep_alive = " + mqtt5_server_keep_alive.to_string())
+    println("topic_alias_maximum = " + mqtt5_topic_alias_maximum.to_string())
+    println("max_property_bytes = " + mqtt5_max_property_bytes.to_string())
+    println("max_user_properties = " + mqtt5_max_user_properties.to_string())
+    println(
+      "max_subscription_entries = " + mqtt5_max_subscription_entries.to_string(),
+    )
+    println(
+      "max_alias_bytes_per_connection = " +
+      mqtt5_max_alias_bytes_per_connection.to_string(),
+    )
+    println("max_delayed_wills = " + mqtt5_max_delayed_wills.to_string())
+    println(
+      "max_expiry_work_per_turn = " + mqtt5_max_expiry_work_per_turn.to_string(),
+    )
+    println("write_timeout_ms = " + mqtt5_write_timeout_ms.to_string())
     println("[broker]")
     println(
       "max_subscriptions_per_session = " +

@@ -25,14 +25,21 @@ pub fn BrokerState::prepare_activation(
   id : @session.ClientId,
   mode : @session.SessionMode,
   owner : @security.Principal,
+  v5_resume? : Bool = false,
+  v5_retention? : @session.Retention,
+  now_mono_ms? : Int64 = 0L,
 ) -> Result[SessionActivation, RouterError] {
   let old = self.sessions.get(id)
   if old is None && self.sessions.length() >= self.config.max_sessions() {
     return Err(SessionLimitReached(self.config.max_sessions()))
   }
-  let restoring = mode == @session.SessionMode::Persistent &&
+  let restoring = if v5_retention is Some(_) {
+    v5_resume && old is Some(s) && !s.logically_expired(now_mono_ms)
+  } else {
+    mode == @session.SessionMode::Persistent &&
     old is Some(s) &&
     s.mode() == @session.SessionMode::Persistent
+  }
   let old_usage = self.resources.owners.get(id).map(r => r.usage)
   let desired = if restoring {
     old_usage.unwrap()
@@ -62,9 +69,28 @@ pub fn BrokerState::prepare_activation(
     let deliveries = session
       .attach(self.session_limits(max_inflight=0))
       .unwrap()
-    (session, deliveries)
+    (
+      if v5_retention is Some(retention) {
+        session.with_retention(retention)
+      } else {
+        session
+      },
+      deliveries,
+    )
   } else {
-    (@session.ClientSession::new(id, mode~, attached=true, owner~), [])
+    (
+      if v5_retention is Some(retention) {
+        @session.ClientSession::new_with_retention(
+          id,
+          retention,
+          attached=true,
+          owner~,
+        )
+      } else {
+        @session.ClientSession::new(id, mode~, attached=true, owner~)
+      },
+      [],
+    )
   }
   let replay : Array[BrokerAction] = []
   for delivery in deliveries {

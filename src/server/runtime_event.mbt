@@ -12,6 +12,13 @@ pub(all) struct PacketReceivedEvent {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct Mqtt5PacketReceivedEvent {
+  connection_id : ConnectionId
+  packet : @protocol.PacketV5
+  received_at_ms : Int64
+} derive(Eq, Debug)
+
+///|
 pub(all) struct TransportClosedEvent {
   connection_id : ConnectionId
   reason : CloseReason
@@ -35,6 +42,7 @@ pub(all) struct AuthenticationCompletedEvent {
 pub(all) enum RuntimeEvent {
   TransportOpened(TransportOpenedEvent)
   PacketReceived(PacketReceivedEvent)
+  Mqtt5PacketReceived(Mqtt5PacketReceivedEvent)
   TransportClosed(TransportClosedEvent)
   CheckDeadlines(Int64)
   AuthenticationPollDue(Int64)

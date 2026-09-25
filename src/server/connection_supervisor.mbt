@@ -43,6 +43,7 @@ async fn read_transport(
     Err(e) => return e
   }
   defer release_optional(decoder_ticket)
+  let mut decode_phase : @protocol.DecodePhase = FirstConnect
   for ;; {
     let read_capacity = match
       next_read_capacity(decoder, config.max_receive_buffer_size()) {
@@ -116,45 +117,91 @@ async fn read_transport(
           }
           let mut moved = false
           defer (if !moved { release_optional(packet_ticket) })
-          let packet = match @protocol.decode_packet(frame) {
+          let protocol_config = config.protocol_config()
+          let limits : @protocol.DecodeLimits = {
+            max_packet_bytes: config.max_packet_size(),
+            max_property_bytes: protocol_config.max_property_bytes,
+            max_user_properties: protocol_config.max_user_properties,
+            max_subscription_entries: protocol_config.max_subscription_entries,
+          }
+          let packet = match
+            @protocol.decode_wire(
+              frame,
+              decode_phase,
+              @protocol.PacketDirection::ClientToServer,
+              limits,
+            ) {
             Err(_) => return ProtocolError
             Ok(value) => value
           }
-          if @protocol.validate_direction(
-              packet,
-              @protocol.PacketDirection::ClientToServer,
-            )
-            is Err(_) {
-            return ProtocolError
-          }
-          if resize_optional(packet_ticket, event_pool, packet_cost(packet))
-            is Err(e) {
-            return e
-          }
-          if bus is Some(bus) &&
-            control_packet(packet) &&
-            !bus.admission.admit_control(connection_id) {
-            return RateLimited
-          }
-          let event = PacketReceivedEvent::{
-            connection_id,
-            packet,
-            received_at_ms: @async.now(),
-          }
-          match (bus, packet_ticket) {
-            (Some(bus), Some(ticket)) => {
-              ticket.commit().unwrap()
-              if !bus.post_packet(event, ticket) {
-                return ResourceExhausted
-              }
-              moved = true
+          let is_connect = match packet {
+            V311(Connect(_)) => {
+              decode_phase = Established(V311)
+              true
             }
-            _ =>
-              events.put(Runtime(PacketReceived(event))) catch {
-                _ => return ServerShutdown
-              }
+            V5(Connect5(_)) => {
+              decode_phase = Established(V5)
+              true
+            }
+            _ => false
           }
-          if packet is Connect(_) && sink is Some(handshake) {
+          match packet {
+            V311(legacy) => {
+              if resize_optional(packet_ticket, event_pool, packet_cost(legacy))
+                is Err(e) {
+                return e
+              }
+              if bus is Some(bus) &&
+                control_packet(legacy) &&
+                !bus.admission.admit_control(connection_id) {
+                return RateLimited
+              }
+              let event = PacketReceivedEvent::{
+                connection_id,
+                packet: legacy,
+                received_at_ms: @async.now(),
+              }
+              match (bus, packet_ticket) {
+                (Some(bus), Some(ticket)) => {
+                  ticket.commit().unwrap()
+                  if !bus.post_packet(event, ticket) {
+                    return ResourceExhausted
+                  }
+                  moved = true
+                }
+                _ =>
+                  events.put(Runtime(PacketReceived(event))) catch {
+                    _ => return ServerShutdown
+                  }
+              }
+            }
+            V5(value) => {
+              if bus is Some(bus) &&
+                control_frame(frame) &&
+                !bus.admission.admit_control(connection_id) {
+                return RateLimited
+              }
+              let event = Mqtt5PacketReceivedEvent::{
+                connection_id,
+                packet: value,
+                received_at_ms: @async.now(),
+              }
+              match (bus, packet_ticket) {
+                (Some(bus), Some(ticket)) => {
+                  ticket.commit().unwrap()
+                  if !bus.post_v5_packet(event, ticket) {
+                    return ResourceExhausted
+                  }
+                  moved = true
+                }
+                _ =>
+                  events.put(Runtime(Mqtt5PacketReceived(event))) catch {
+                    _ => return ServerShutdown
+                  }
+              }
+            }
+          }
+          if is_connect && sink is Some(handshake) {
             if connection.is_websocket() {
               let mut resolved : Bool? = None
               while resolved is None {

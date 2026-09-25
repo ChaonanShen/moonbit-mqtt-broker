@@ -332,6 +332,14 @@ pub fn BrokerState::session_mode(
 }
 
 ///|
+pub fn BrokerState::session_retention(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> @session.Retention? {
+  self.sessions.get(client_id).map(value => value.retention())
+}
+
+///|
 pub fn BrokerState::session_attached(
   self : BrokerState,
   client_id : @session.ClientId,

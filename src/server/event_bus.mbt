@@ -319,6 +319,43 @@ async fn EventBus::post_packet(
 }
 
 ///|
+async fn EventBus::post_v5_packet(
+  self : EventBus,
+  event : Mqtt5PacketReceivedEvent,
+  ticket : @budget.Ticket,
+) -> Bool {
+  let slot = match self.slots.get(event.connection_id) {
+    Some(s) => s
+    None => return false
+  }
+  for ;; {
+    if self.closed || slot.terminal is Some(_) {
+      return false
+    }
+    if slot.pending_packets < self.config.max_runtime_events() &&
+      slot.pending_packets.to_int64() <
+      self.config
+      .broker_config()
+      .resources()
+      .get("max_runtime_events_per_connection") {
+      let accepted = self.data.try_put(
+        Accounted(RuntimeEvent::Mqtt5PacketReceived(event), ticket),
+      ) catch {
+        _ => false
+      }
+      if accepted {
+        slot.pending_packets += 1
+        self.signal()
+        return true
+      }
+    }
+    if !self.wait_space(slot) {
+      return false
+    }
+  }
+}
+
+///|
 fn EventBus::signal_space(self : EventBus) -> Unit {
   if self.waiting_writers == 0 {
     return
@@ -519,9 +556,13 @@ async fn EventBus::next(self : EventBus) -> DriverEvent? {
     if data is Some(event) {
       self.signal_space()
       self.control_batch = 0
-      if event is Accounted(PacketReceived(packet), _) {
-        if self.slots.get(packet.connection_id) is Some(slot) &&
-          !slot.registered {
+      let packet_connection = match event {
+        Accounted(PacketReceived(packet), _) => Some(packet.connection_id)
+        Accounted(Mqtt5PacketReceived(packet), _) => Some(packet.connection_id)
+        _ => None
+      }
+      if packet_connection is Some(connection_id) {
+        if self.slots.get(connection_id) is Some(slot) && !slot.registered {
           slot.registered = true
           self.deferred_data = Some(event)
           return Some(self.selected_other(RegisterTransport(slot.registration)))
@@ -547,8 +588,13 @@ async fn EventBus::next(self : EventBus) -> DriverEvent? {
 
 ///|
 fn EventBus::completed(self : EventBus, event : DriverEvent) -> Unit {
-  if event is Accounted(PacketReceived(packet), _) {
-    if self.slots.get(packet.connection_id) is Some(slot) {
+  let packet_connection = match event {
+    Accounted(PacketReceived(packet), _) => Some(packet.connection_id)
+    Accounted(Mqtt5PacketReceived(packet), _) => Some(packet.connection_id)
+    _ => None
+  }
+  if packet_connection is Some(connection_id) {
+    if self.slots.get(connection_id) is Some(slot) {
       slot.pending_packets -= 1
       ignore(slot.ready.try_put(())) catch {
         _ => ()
