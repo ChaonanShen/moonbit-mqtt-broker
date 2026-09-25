@@ -1,17 +1,17 @@
 # 兼容性和支持矩阵
 
-**中文** | [English](compatibility.md)
+**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.md)
 
 | 能力 | 当前状态 | 说明 |
 | --- | --- | --- |
 | Linux x86_64 Native 构建 | 支持 | 固定 Docker 和 CI 路径 |
-| 可选 loopback 管理 HTTP | 支持 | 匿名 live/ready、按角色查询/指标及有界 kick/delete Operation；热重载仍未实现 |
+| 可选 loopback 管理 HTTP | 支持 | 匿名 live/ready、按角色查询/指标及有界 kick/delete Operation；可选 config_admin 热更新 |
 | MQTT 3.1.1 CONNECT / CONNACK | 支持 | 完整 Clean/Persistent `session_present` 语义 |
 | TCP 拆包/粘包 framing | 支持 | 感知容量的 reader 和有界三态 decoder |
 | 相同 packet/receive 上限 | 支持 | 16/16 边界覆盖完整 CONNECT 加粘连 PINGREQ |
 | QoS 0/1/2 packet codec | 支持 | 完整 frame adapter；校验 Packet ID/DUP 组合 |
-| MQTT.js 5.15.2 互操作 | 0.2.0 支持 | QoS 0/1/2、retained/Will、Persistent Session 和跨进程重启 |
-| Mosquitto 2.0.18 互操作 | 0.2.0 支持 | QoS 0/1/2、retained 和 Persistent Session 离线重启投递 |
+| MQTT.js 5.15.2 互操作 | 支持 | QoS 0/1/2、retained/Will、Persistent Session 和跨进程重启 |
+| Mosquitto 2.0.18 互操作 | 支持 | QoS 0/1/2、retained 和 Persistent Session 离线重启投递 |
 | Aedes 1.1.1 参考矩阵 | 仅测试 | 比较规范化的公共行为；不是运行时依赖，也不声明插件兼容性 |
 | Topic 校验与路由 | 支持 | `+`、`#`、`$SYS`、重叠合并和确定性顺序 |
 | Keep Alive 和 PING | 支持 | 1.5 倍 deadline；零表示禁用空闲超时 |
@@ -28,7 +28,7 @@
 | Broker 重启后状态 | 设置 `--data-dir` 时支持 | 默认快照恢复最近 revision；显式 strict WAL 重放完整提交 LSN |
 | SIGTERM / SIGINT 退出 | 支持 | 抑制活动 Will；快照排空最终 revision，strict 排空已接纳 WAL 与 detach |
 | TLS listener | 可选支持 | 多入口共享 Broker；启动捕获私有 PEM 副本，握手有界 |
-| MQTT.js/Mosquitto TLS | 0.2.0 支持 | QoS 0/1/2、retained、Persistent Session 和重启恢复 |
+| MQTT.js/Mosquitto TLS | 支持 | QoS 0/1/2、retained、Persistent Session 和重启恢复 |
 | Argon2id 认证 | 可选支持 | 只接受编码哈希；默认允许匿名 |
 | 有界认证执行器 | 支持 | 原生 worker/队列上限、超时和取消安全清理 |
 | 资源与速率准入 | 支持，默认启用 | 逻辑字节预算及连接/认证/发布策略 |
@@ -42,6 +42,7 @@
 | MQTT 5 | 不支持 | 不在范围内 |
 | WebSocket / WSS | 可选支持 | MQTT 二进制帧、mqtt 子协议、Origin 允许列表与有界 Upgrade |
 | 共享订阅 / Bridge / 插件 / 集群 | 不支持 | 仅单机 Broker |
+| 在线配置热更新 | 可选支持 | 已核验 bundle；SIGHUP 或 config_admin；密码、ACL、TLS/WSS 和受支持的运行时字段；默认关闭 |
 | 严格本地 WAL | 显式可选支持 | 约定持久状态提交后 ACK；不确定写入时 fenced，不提供复制 |
 | 外部数据库 / 集群 / 端到端零丢失 | 不支持 | 仅单机存储与 MQTT 交换边界 |
 
@@ -73,7 +74,7 @@ Aedes 仅作为行为参考，Broker 不链接任何 Aedes 源码。
 
 TLS 使用固定的 `moonbitlang/async@0.20.6`、基于 OpenSSL 的 Native transport。
 每个 listener 可分别选择 TCP、TLS、WS、WSS，且共享同一 Broker 状态。
-不声明支持 mTLS、SNI 路由、证书热加载或 Windows TLS。该依赖目前将服务端 TLS 构造器标记为
+不声明支持 mTLS、SNI 路由或 Windows TLS。既有 TLS/WSS 证书材料可通过已核验的热更新 bundle 轮换。该依赖目前将服务端 TLS 构造器标记为
 experimental；本版本固定其精确版本，并在 CI 中验证启动、拒绝、互操作、并发、
 退出和重启行为。
 

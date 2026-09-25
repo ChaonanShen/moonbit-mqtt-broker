@@ -1,12 +1,12 @@
 # 架构
 
-**中文** | [English](architecture.md)
+**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/architecture.md)
 
 Broker 对所有可变 MQTT 状态采用单写入者运行时。连接任务拥有 socket 和字节
 buffer，不能直接修改 Session、订阅、保留消息或持久化状态。
 
 ```text
-TCP 或 TLS 连接
+TCP、TLS、WS 或 WSS 连接
   ├─ reader → 有界 frame decoder → 协议 adapter → runtime event queue
   ├─ writer ← 有界 outbound queue ← 有序 runtime action
   └─ closer → 连接 generation 和终止原因处理
@@ -63,8 +63,9 @@ state revision → debounce/max-delay → snapshot writer
 ```
 
 只有最近一次成功提交是持久的。系统在创建 listener 前校验完整文件并导入状态。
-此存储设计是本地快照，不是 WAL，也不提供逐 PUBACK 同步持久性。准确的失败契约
-见[本地持久化](persistence.zh_CN.md)。
+这是默认快照模式。可选 strict 模式使用本机 WAL，在对应确认前提交约定的
+持久状态；不确定写入会封锁后续持久变更。准确的失败契约
+见[本地持久化](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.zh_CN.md)。
 
 ## 安全和运维
 
@@ -88,8 +89,9 @@ state revision → debounce/max-delay → snapshot writer
 未知 PUBREC 无状态回复 PUBREL；现存交换收到错误阶段的确认会关闭连接。
 
 QoS 保证针对每段 MQTT 交换，降级为 QoS 1 的下游仍可能重复。
-PUBREC/PUBCOMP 不代表已 fsync；崩溃恢复仍以 latest-committed 快照为边界，
-不承诺端到端业务 exactly-once 或崩溃零丢失。
+快照模式的 PUBREC/PUBCOMP 不代表已 fsync，恢复以最近成功快照为边界；
+strict 模式先提交相应的持久状态 WAL 记录再确认。两种模式均不承诺端到端
+业务 exactly-once 或存储设备损坏后的数据完整性。
 
 ## 管理路径
 

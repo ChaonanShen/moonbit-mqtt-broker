@@ -1,6 +1,6 @@
 # 安全
 
-**中文** | [English](security.md)
+**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.md)
 
 身份认证和授权是可选的单机配置。本版本不提供逐用户修改 API；启用热更新后，
 可用已核验的 bundle 将密码库与 ACL 作为一个代际整体替换。
@@ -28,8 +28,8 @@ MQTT 3.1.1 本身不保护凭据传输，明文 MQTT 中的凭据可被网络观
 消息分步清理。若出站 QoS 1/2 在途载荷失去读取权限，整个会话会被
 驱逐，重连返回 `SessionPresent=false`，其中其他合法积压也会丢失。
 已写入 socket 的字节无法收回。回滚会形成新的代际，不恢复已驱逐会话。
-详见[热更新配置](configuration.zh_CN.md#在线配置热更新)和
-[持久化](persistence.zh_CN.md#热更新与恢复)。
+详见[热更新配置](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.zh_CN.md#在线配置热更新)和
+[持久化](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.zh_CN.md#热更新与恢复)。
 
 ## 原生依赖与可复现测试
 
@@ -97,11 +97,11 @@ Disk V1 会话迁移为 `legacy-anonymous`，且只能由匿名连接恢复；�
 
 ## 认证资源准入
 
-完整且需要密码校验的请求先消费一次全局/IP 认证 token，再预留输入和已验证 PHC 对应的保守工作费用。密码错误、未知用户名和后续资源不足不会退还已消费的 token。匿名路径不占 hash 任务额度，但仍受连接/传输限制。有界原生 pthread 执行器在 worker 运行时持有密码与 PHC 的 C 副本；路由主循环只保留无秘密身份元数据并消费固定大小结果。断开和超时只会取消激活资格，不会提前释放仍运行的任务。CONNECT 流水线通过一次性 reader gate 等到 CONNACK 入队后再恢复。支持的 PHC 上限为内存 65536 KiB、迭代 10、并行度 4。使用 `scripts/verify-auth-isolation-docker.sh` 验证隔离和饱和行为。详见[资源契约](resource-budgets.md)。
+完整且需要密码校验的请求先消费一次全局/IP 认证 token，再预留输入和已验证 PHC 对应的保守工作费用。密码错误、未知用户名和后续资源不足不会退还已消费的 token。匿名路径不占 hash 任务额度，但仍受连接/传输限制。有界原生 pthread 执行器在 worker 运行时持有密码与 PHC 的 C 副本；路由主循环只保留无秘密身份元数据并消费固定大小结果。断开和超时只会取消激活资格，不会提前释放仍运行的任务。CONNECT 流水线通过一次性 reader gate 等到 CONNACK 入队后再恢复。支持的 PHC 上限为内存 65536 KiB、迭代 10、并行度 4。使用 `scripts/verify-auth-isolation-docker.sh` 验证隔离和饱和行为。详见[资源契约](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md)。
 
 ## 管理 Bearer 令牌
 
-独立的[管理 API](management.zh_CN.md)使用互不隐含的 `metrics`、`read`、
+独立的[管理 API](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.zh_CN.md)使用互不隐含的 `metrics`、`read`、
 `operator` 和 `config_admin` 角色。其摘要文件只在启动时读取，与 MQTT
 PasswordDatabase
 及 ACL 无关。文件必须是 Broker 用户持有的私有普通文件。启用管理功能

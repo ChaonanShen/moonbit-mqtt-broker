@@ -95,7 +95,7 @@ if [[ "${live_ok}" -ne 1 ]]; then
   echo 'Prometheus live scrape did not reach up=1/good and up=0/bad' >&2
   exit 1
 fi
-query 'moonbit_mqtt_broker_build_info{job="management-good",version="0.2.0",target="native"}' \
+query 'moonbit_mqtt_broker_build_info{job="management-good",version="0.3.0",target="native"}' \
   >"${PROM_DIR}/sample.json"
 python3 - "${PROM_DIR}/sample.json" <<'PY'
 import json, sys

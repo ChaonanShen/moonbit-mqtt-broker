@@ -1,6 +1,6 @@
 # Local persistence: snapshot and strict WAL
 
-[中文](persistence.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.zh_CN.md) | **English**
 
 Persistence is `off` without `--data-dir PATH`. With a data directory, the
 compatible default remains `snapshot`; choose `--persistence-mode strict` (or
@@ -201,4 +201,4 @@ removing main; never edit files while a Broker holds the lock.
 
 ## Snapshot byte budgets
 
-Export, queuing, encoding and actual writes share snapshot-work admission. Replacing a queued request releases its lease; an active write keeps its lease until save completes. Import validates category/session/global bytes before record and payload allocation without changing V1/V2/V3. Budget shortage preserves dirty state with bounded diagnostics; an uncommitted final snapshot fails shutdown rather than truncating state or silently starting empty. File type is checked before size inspection, so FIFOs, directories and symlinks are not read as snapshots. See the [resource contract and observations](resource-budgets.md).
+Export, queuing, encoding and actual writes share snapshot-work admission. Replacing a queued request releases its lease; an active write keeps its lease until save completes. Import validates category/session/global bytes before record and payload allocation without changing V1/V2/V3. Budget shortage preserves dirty state with bounded diagnostics; an uncommitted final snapshot fails shutdown rather than truncating state or silently starting empty. File type is checked before size inspection, so FIFOs, directories and symlinks are not read as snapshots. See the [resource contract and observations](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md).

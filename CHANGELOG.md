@@ -4,6 +4,11 @@ All notable user-visible changes are documented here.
 
 ## [Unreleased]
 
+## [0.3.0]
+
+- Add multiple TCP, TLS, WS and WSS listeners sharing one Broker state, with bounded WebSocket upgrade and Origin policy.
+- Add loopback management detail, scoped kick/offline Session deletion, bounded audit and config-admin operations.
+- Add opt-in verified-bundle live reload through SIGHUP or config-admin, including password/ACL revocation and existing TLS/WSS material rotation.
 - Add opt-in strict local WAL durability with fsync-gated MQTT acknowledgements,
   QoS 1/2 and persistent Session recovery, bounded group commits, checkpoint
   rotation and fail-closed recovery/fencing. Snapshot remains the default with

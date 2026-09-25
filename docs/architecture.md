@@ -1,13 +1,13 @@
 # Architecture
 
-[中文](architecture.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/architecture.zh_CN.md) | **English**
 
 The broker uses a single-writer runtime for all mutable MQTT state. Connection
 tasks own sockets and byte buffers; they cannot mutate Sessions, subscriptions,
 retained messages, or persistence state directly.
 
 ```text
-TCP or TLS connection
+TCP, TLS, WS or WSS connection
   ├─ reader → bounded frame decoder → protocol adapter → runtime event queue
   ├─ writer ← bounded outbound queue ← ordered runtime actions
   └─ closer → connection generation and terminal-reason handling
@@ -70,9 +70,11 @@ state revision → debounce/max-delay → snapshot writer
 ```
 
 Only the latest successful commit is durable. Recovery validates the complete
-file and imports state before creating the listener. The storage design is a
-local snapshot, not a WAL or synchronous per-PUBACK durability mechanism. See
-[local persistence](persistence.md) for the exact failure contract.
+file and imports state before creating the listener. This is the default
+snapshot mode. Opt-in strict mode uses a local WAL to commit defined persistent
+state before related acknowledgements; uncertain writes fence further persistent
+mutations. See
+[local persistence](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.md) for the exact failure contract.
 
 ## Security and operations
 
@@ -101,8 +103,10 @@ with fixed header 0x62. Unknown PUBREC receives stateless PUBREL; confirmations
 for an existing but incompatible phase close the connection.
 
 The guarantee applies to each MQTT exchange. Downstream QoS 1 can still repeat.
-PUBREC/PUBCOMP do not imply fsync: crash recovery remains latest-committed
-snapshot recovery, without end-to-end exactly-once or zero-loss durability.
+In snapshot mode PUBREC/PUBCOMP do not imply fsync and recovery uses the latest
+committed snapshot. Strict mode commits the corresponding persistent-state WAL
+record before acknowledgement. Neither mode guarantees end-to-end exactly-once
+or survival of storage-device loss.
 
 ## Management path
 
