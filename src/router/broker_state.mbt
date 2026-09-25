@@ -886,6 +886,7 @@ fn BrokerState::prepare_deliveries(
   self : BrokerState,
   planned : Array[PlannedDelivery],
   deferred? : Bool = false,
+  expiry_delta? : Int64 = 0L,
 ) -> Result[PreparedDeliveries, RouterError] {
   let usage_updates : Map[@session.ClientId, ResourceUsage] = Map([])
   let copied : Map[@session.ClientId, Bool] = Map([])
@@ -928,6 +929,16 @@ fn BrokerState::prepare_deliveries(
       }
       DropResource(_) => ()
     }
+  }
+  let mut new_pending_expiry_bytes = 0L
+  for item in planned {
+    if item.destination == StagePending &&
+      item.candidate.metadata.expiry is Some(_) {
+      new_pending_expiry_bytes += 115L
+    }
+  }
+  if !self.expiry_index_fits(expiry_delta + new_pending_expiry_bytes) {
+    return Err(InvariantViolation("global expiry index capacity reached"))
   }
   let scratch = match self.reserve_scratch(scratch_bytes) {
     Ok(t) => t
@@ -1222,7 +1233,12 @@ fn BrokerState::apply_event(
         return Err(InvalidSessionState(request.client_id))
       }
       if session.retention() is @session.FiniteV5(_) &&
-        !self.session_expiry.can_set(request.client_id.value()) {
+        (
+          !self.session_expiry.can_set(request.client_id.value()) ||
+          !self.expiry_index_fits(
+            self.session_expiry.projected_set_delta(request.client_id.value()),
+          )
+        ) {
         return Err(InvariantViolation("session expiry index capacity reached"))
       }
       if session.detach_v5(request.now_mono_ms, request.now_wall_ms) is Err(_) {
@@ -1443,6 +1459,9 @@ pub fn BrokerState::check_invariants(
   if !self.subscriptions.check_invariants() {
     return Err(InvariantViolation("subscription index is inconsistent"))
   }
+  if self.expiry_index_bytes() > 8388608L {
+    return Err(InvariantViolation("global expiry index capacity exceeded"))
+  }
   if !self.session_expiry.check_invariants() {
     return Err(InvariantViolation("session expiry index is inconsistent"))
   }
@@ -1628,26 +1647,52 @@ fn BrokerState::publish_input(
     ) {
     return Err(InvariantViolation("retained expiry index capacity reached"))
   }
-  if input.retain {
-    let total = self.resources.retained_bytes -
-      self.retained.cost_at(input.topic) +
-      new_retained_cost
-    match self.resources.set_retained(total) {
-      Err(e) => return Err(e)
-      Ok(_) => ()
-    }
+  let retained_delta = if input.retain {
+    new_retained_cost - self.retained.cost_at(input.topic)
+  } else {
+    0L
   }
   let strict = input.origin is Client(_)
   let planned = match
     self.preflight_deliveries(
       self.delivery_candidates(input, metadata~, now_mono_ms~),
       strict,
+      retained_delta~,
     ) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
   let delivery_changed = self.planned_changes_snapshot(planned)
-  let prepared = match self.prepare_deliveries(planned) {
+  let expiry_delta = if input.retain {
+    self.retained.expiry_put_delta(
+      input.topic,
+      if input.payload.length() == 0 {
+        @session.MessageMetadata::empty()
+      } else {
+        metadata
+      },
+    )
+  } else {
+    0L
+  }
+  let mut pending_expiry_added = 0L
+  for item in planned {
+    if item.destination == StagePending &&
+      item.candidate.metadata.expiry is Some(_) {
+      pending_expiry_added += 115L
+    }
+  }
+  if !self.expiry_index_fits(expiry_delta + pending_expiry_added) {
+    return Err(InvariantViolation("global expiry index capacity reached"))
+  }
+  if input.retain {
+    let total = self.resources.retained_bytes + retained_delta
+    match self.resources.set_retained(total) {
+      Err(e) => return Err(e)
+      Ok(_) => ()
+    }
+  }
+  let prepared = match self.prepare_deliveries(planned, expiry_delta~) {
     Ok(value) => value
     Err(error) => return Err(error)
   }

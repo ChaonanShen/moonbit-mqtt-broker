@@ -282,6 +282,24 @@ fn RetainedStore::next_expired(
 }
 
 ///|
+fn RetainedStore::expiry_index_bytes(self : RetainedStore) -> Int64 {
+  self.expiry.used_bytes()
+}
+
+///|
+fn RetainedStore::expiry_put_delta(
+  self : RetainedStore,
+  topic : @topic.TopicName,
+  metadata : @session.MessageMetadata,
+) -> Int64 {
+  if metadata.expiry is Some(_) {
+    self.expiry.projected_set_delta(topic.value())
+  } else {
+    -self.expiry.get(topic.value()).map(entry => entry.cost_bytes).unwrap_or(0L)
+  }
+}
+
+///|
 fn RetainedStore::can_put(
   self : RetainedStore,
   topic : @topic.TopicName,

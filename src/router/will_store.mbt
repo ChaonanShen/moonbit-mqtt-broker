@@ -212,6 +212,9 @@ pub fn BrokerState::trigger_will(
     Err(_) => return false
   }
   if record.revision == 9223372036854775807L ||
+    !self.expiry_index_fits(
+      self.will_expiry.projected_set_delta(id.to_string()),
+    ) ||
     !self.will_expiry.set(id.to_string(), due.mono_due_ms, record.revision + 1L) {
     return false
   }
