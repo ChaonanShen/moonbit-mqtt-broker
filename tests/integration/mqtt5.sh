@@ -14,3 +14,4 @@ readonly BASE="${MQTT5_EVIDENCE_DIR:-${RELEASE_ARTIFACT_DIR:-$REPO_ROOT/.local/m
 mkdir -p "$BASE"
 MQTT5_EVIDENCE_DIR="$BASE" timeout 180 node tests/integration/mqtt5.mjs "$BROKER"
 MQTT5_EVIDENCE_DIR="$BASE" tests/integration/mqtt5_migration.sh --prepared
+MQTT5_EVIDENCE_DIR="$BASE" tests/integration/mqtt5_mosquitto.sh
