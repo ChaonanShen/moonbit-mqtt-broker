@@ -133,3 +133,83 @@ async test "strict driver holds CONNECT state until its WAL completion" {
     @fs.rmdir(path, recursive=true)
   }
 }
+
+///|
+async test "active checkpoint drains a held runtime event without requeue spin" {
+  let path = "_build/server-checkpoint-live"
+  if @fs.exists(path) {
+    @fs.rmdir(path, recursive=true)
+  }
+  let broker_config = @router.BrokerConfig::new(4, 16, 4).unwrap()
+  let broker = @router.BrokerState::new(broker_config)
+  let config = ServerConfig::new(4, 1024, 2048, 8, 32, 1000, 100, broker_config).unwrap()
+  let runtime = BrokerRuntime::new(config, broker)
+  let lock = @persistence.SnapshotStore::open(
+    @persistence.PersistenceConfig::new(path).unwrap(),
+  ).unwrap()
+  let store = @persistence.WalStore::bootstrap(lock, {
+    generation: 1L,
+    lsn: 0L,
+    identities: [],
+    policy: None,
+    snapshot: { version: 3, sessions: [], retained: [] },
+  }).unwrap()
+  let writer = @persistence.WalWriter::new(store)
+  let coordinator = CommitCoordinator::new(
+    writer,
+    broker.resource_ledger(),
+    33554432L,
+    1048576,
+    1L,
+    0L,
+  ).unwrap()
+  let driver = RouterDriver::new(runtime, strict=coordinator)
+  let large = Bytes::make(8388608, b'x')
+  assert_true(
+    coordinator.submit_checkpoint({
+      generation: 2L,
+      lsn: 0L,
+      identities: [],
+      policy: None,
+      snapshot: {
+        version: 3,
+        sessions: [],
+        retained: [{ topic: "large", payload: large, qos: 1 }],
+      },
+    }),
+  )
+  driver.strict_checkpoint_lsn = 0L
+  driver.strict_checkpoint_inflight = true
+  driver.strict_held.push_back((AuthenticationPollDue(1L), None))
+  @async.with_task_group() <| group => {
+    let task = group.spawn(() => writer.run(() => ()))
+    let mut active = false
+    for _ in 0..<1000 {
+      if coordinator.checkpoint_active() {
+        active = true
+        break
+      }
+      @async.sleep(1)
+    }
+    assert_true(active)
+    driver.handle(WalCompletionDue)
+    assert_eq(driver.strict_held.length(), 0)
+    let mut finished = false
+    for _ in 0..<5000 {
+      driver.handle(WalCompletionDue)
+      if !driver.strict_checkpoint_inflight {
+        finished = true
+        break
+      }
+      @async.sleep(1)
+    }
+    assert_true(finished)
+    assert_false(driver.strict_fenced)
+    writer.close_requests()
+    task.wait()
+    writer.close_store()
+  }
+  if @fs.exists(path) {
+    @fs.rmdir(path, recursive=true)
+  }
+}
