@@ -42,7 +42,7 @@ generation; it does not resurrect deleted Sessions or messages.
 
 The canonicalized data directory is mode `0700`. It contains only fixed names:
 
-- `broker.snapshot`: committed Disk V3 (readable legacy V1/V2), mode `0600`;
+- `broker.snapshot`: committed Disk V3 or V5 (readable legacy V1/V2), mode `0600`;
 - `broker.snapshot.tmp`: current uncommitted write, mode `0600`;
 - `broker.snapshot.lock`: exclusive process lock, mode `0600`.
 
@@ -81,14 +81,15 @@ Snapshot mode has no WAL and does not synchronize before PUBACK, PUBREC or PUBCO
 changes may be lost after `SIGKILL`, host failure, or power loss. Natural
 `--once` completion drains a final submitted revision. SIGTERM and SIGINT are
 converted into a normal service-stop request: the listener and connection tasks
-stop, active Wills are suppressed, and the newest in-memory revision is forced
+stop, legacy active Wills are suppressed while persistent MQTT 5 Wills
+become pending, and the newest in-memory revision is forced
 and drained before the process exits. The process-level shutdown test uses a
 60-second debounce, so the signal path must create the first snapshot.
 
 ## Strict WAL mode
 
-Strict mode uses the same exclusive `broker.snapshot.lock` and the Disk V3
-logical state, with a separate versioned checkpoint, `broker.manifest`, and
+Strict mode uses the same exclusive `broker.snapshot.lock` and either the legacy Disk V3
+or MQTT 5 schema-6 logical state, with a separate versioned checkpoint, `broker.manifest`, and
 numbered `wal-<id>.log` segments. A single writer appends a complete transaction
 frame and batch commit frame, then performs a full file `fsync`. The driver
 installs the prepared affected-key changes and releases network actions only
@@ -202,3 +203,27 @@ removing main; never edit files while a Broker holds the lock.
 ## Snapshot byte budgets
 
 Export, queuing, encoding and actual writes share snapshot-work admission. Replacing a queued request releases its lease; an active write keeps its lease until save completes. Import validates category/session/global bytes before record and payload allocation without changing V1/V2/V3. Budget shortage preserves dirty state with bounded diagnostics; an uncommitted final snapshot fails shutdown rather than truncating state or silently starting empty. File type is checked before size inspection, so FIFOs, directories and symlinks are not read as snapshots. See the [resource contract and observations](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md).
+
+## MQTT 5 storage migration
+
+On first MQTT 5-enabled startup, the broker converts an older snapshot or
+strict WAL authority to the V5 snapshot envelope and schema-6 WAL. The new
+model preserves Principal ownership, Session and Packet IDs, subscriptions,
+retained messages and queued QoS 1/2 state. V5 records add message properties,
+stable delivery identities, Session/Message Expiry clocks, subscription options
+and persistent armed/pending Wills. Strict mode commits these changes and
+policy reconciliation in revision-checked V5 deltas.
+
+The migration publishes exactly one new authoritative format. Older binaries
+reject the new envelope/manifest; they do not silently ignore V5 fields.
+Back up the data directory and matching security bundle before enabling
+MQTT 5. To roll back, restore that backup with the older executable. Do not
+point an older executable at the upgraded directory. The snapshot durability
+window and strict WAL fencing rules above still apply after migration.
+
+A temporary MQTT 5 Session does not retain its armed Will across a process
+crash. A persistent MQTT 5 Session stores armed and pending Will state in
+the selected persistence format. On strict recovery, an armed Will is first
+durably transitioned to pending before it can publish; a pending Will keeps
+its original due time across repeated restarts. Will publication and removal
+share one committed WAL transaction.

@@ -292,6 +292,7 @@ fn close_reason_name(reason : CloseReason) -> String {
     PolicyRevoked => "policy_revoked"
     SlowConsumer => "slow_consumer"
     EncodeFailure => "encode_failure"
+    PacketTooLarge => "packet_too_large"
     RateLimited => "rate_limited"
     ResourceExhausted => "resource_exhausted"
     ServerShutdown => "server_shutdown"

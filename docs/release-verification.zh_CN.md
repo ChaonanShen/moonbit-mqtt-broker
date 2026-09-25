@@ -462,3 +462,15 @@ WAL 批量大小、CPU/RSS、卷字节和带保留消息核验的重启时间。
 每个 strict 轮次生成第二代检查点，并保留测试卷供排查。`PERF_QUICK=1`
 只核对夹具，不能算正式测量。根据目标部署的磁盘与延迟预算审阅配对结果；
 项目不虚构通用 P99 阈值。
+
+## MQTT 5 候选验证
+
+累计 release 验证器以 prepared 模式运行 tests/integration/mqtt5.sh。
+独立运行 scripts/verify-mqtt5-docker.sh 时，格式、静态和单元检查只执行
+一次，随后运行 off/snapshot/strict 网络用例与 TCP/TLS/WS/WSS 互操作。
+脚本输出证据目录路径。四种隔离运行镜像均验证 MQTT 3.1.1 和 MQTT 5，
+Broker 镜像不安装客户端测试库。
+
+启用 V5 的数据目录采用 V5 快照或 schema 6 WAL 权威格式。发行证据需记录
+受测 SHA 及备份/回滚边界。MQTT 5 验证不替代既有 strict soak、故障注入
+与正式发布验收。

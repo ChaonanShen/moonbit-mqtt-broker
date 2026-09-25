@@ -366,3 +366,22 @@ pub fn BrokerState::will_counts(self : BrokerState) -> (Int, Int) {
   }
   (armed, pending)
 }
+
+///|
+pub fn BrokerState::cancel_wills_for_incarnation(
+  self : BrokerState,
+  client_id : @session.ClientId,
+  incarnation : Int64,
+) -> Int {
+  let ids : Array[Int64] = []
+  for id, record in self.wills {
+    if record.client_id == client_id &&
+      record.session_incarnation == incarnation {
+      ids.push(id)
+    }
+  }
+  for id in ids {
+    ignore(self.cancel_will(id))
+  }
+  ids.length()
+}

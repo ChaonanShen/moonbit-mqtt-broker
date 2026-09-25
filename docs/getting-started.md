@@ -2,7 +2,7 @@
 
 [中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/getting-started.zh_CN.md) | **English**
 
-This guide starts a local MQTT 3.1.1 broker, verifies publish/subscribe, and
+This guide starts a local MQTT 3.1.1 broker, shows how to enable MQTT 5, verifies publish/subscribe, and
 shows the safe path to persistence and authenticated TLS.
 
 ## Requirements
@@ -51,6 +51,21 @@ broker --config /etc/moonbit-mqtt-broker.toml
 
 Unknown, duplicate, malformed, or incorrectly typed settings fail before the
 listener opens. Command-line values override TOML values.
+
+## Enable MQTT 5
+
+Add --mqtt5-enabled true to the broker command, or set
+[protocol] mqtt5_enabled = true in TOML. MQTT 3.1.1 clients continue to
+work on the same listener. Shared subscriptions remain unavailable.
+
+~~~bash
+scripts/moon-docker.sh run --target native src/cmd/broker -- \
+  --listen 0.0.0.0:1883 --mqtt5-enabled true
+scripts/verify-mqtt5-docker.sh
+~~~
+
+See the [MQTT 5 support guide](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.md) before enabling it with existing
+persistent data.
 
 ## Enable restart persistence
 
@@ -119,6 +134,6 @@ clean directory.
 ## Operational boundaries
 
 This source is single-node and Linux x86_64 Native. It does not implement
-MQTT 5, clustering, bridges, plugins, external databases,
-WAL, or zero-loss durability. Review the [compatibility matrix](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.md)
+shared subscriptions, clustering, bridges, plugins, external databases,
+or zero-loss durability. MQTT 5 is opt-in; strict local WAL is available. Review the [compatibility matrix](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.md)
 before deployment.

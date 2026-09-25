@@ -177,3 +177,64 @@ test "offline delete releases inbound QoS2 and AwaitPubcomp metadata" {
   assert_eq(state.subscription_count(), 0)
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "C-T33 admin deletion removes the matching V5 Will in one delta" {
+  let state = BrokerState::new(BrokerConfig::new(8, 16, 8).unwrap())
+  let client = @session.ClientId::new("admin-will").unwrap()
+  let activation = state
+    .prepare_activation(
+      client,
+      @session.Persistent,
+      @security.Anonymous,
+      v5_resume=false,
+      v5_retention=@session.FiniteV5(30U),
+      now_mono_ms=@budget.monotonic_ms(),
+    )
+    .unwrap()
+  ignore(state.commit_activation(activation).unwrap())
+  let template : Mqtt5WillTemplate = {
+    topic: @topic.TopicName::new("admin/will").unwrap(),
+    payload: b"offline",
+    qos: @session.QoS1,
+    retain: false,
+    metadata: @session.MessageMetadata::empty(),
+    delay_seconds: 5U,
+    message_expiry_seconds: None,
+  }
+  let prepared = state
+    .prepare_mqtt5_will(client, @security.Anonymous, template, 8, 0L)
+    .unwrap()
+  let will_id = state.commit_prepared_will(prepared)
+  let now_mono_ms = @budget.monotonic_ms()
+  ignore(
+    state
+    .apply(
+      DetachSessionV5({ client_id: client, now_mono_ms, now_wall_ms: 1000L }),
+    )
+    .unwrap(),
+  )
+  assert_true(state.enable_management_index())
+  let identity = state
+    .management_index()
+    .unwrap()
+    .identity_for_client(client)
+    .unwrap()
+  let before = state.export_snapshot_v5(now_mono_ms, 1000L).unwrap()
+  let plan = state
+    .prepare_durable_admin_delete(
+      identity.handle,
+      identity.lifecycle_version,
+      1L,
+    )
+    .unwrap()
+  let delta = plan.delta_v5(now_mono_ms, 1000L).unwrap()
+  assert_eq(delta.will_deletes, [{ id: will_id, expected_revision: 1L }])
+  let accumulator = DurableAccumulatorV5::new(before)
+  assert_eq(accumulator.apply(delta), Ok(()))
+  state.begin_action_scope()
+  ignore(plan.commit().unwrap())
+  state.end_action_scope()
+  assert_eq(state.will_count(), 0)
+  assert_eq(state.session_count(), 0)
+}

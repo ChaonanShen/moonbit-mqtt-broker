@@ -17,6 +17,7 @@ pub struct DurableLifecyclePlan {
   mut admin_handle : Int64?
   mut admin_version : Int64?
   persistent : Bool
+  cancel_will_ids : Array[Int64]
   scratch : @budget.Ticket
   delta : DurableDelta
   action : BrokerAction
@@ -35,6 +36,7 @@ pub fn BrokerState::prepare_durable_lifecycle(
   generation : Int64,
   kind : DurableLifecycleKind,
   v5_retention_override? : @session.Retention,
+  cancel_wills? : Bool = false,
 ) -> Result[DurableLifecyclePlan, RouterError] {
   let old = match self.sessions.get(client_id) {
     Some(value) => value
@@ -54,6 +56,17 @@ pub fn BrokerState::prepare_durable_lifecycle(
     Err(error) => return Err(error)
   }
   let persistent = old.mode() == @session.SessionMode::Persistent
+  let cancel_will_ids : Array[Int64] = []
+  if cancel_wills &&
+    kind is Delete &&
+    self.session_incarnation(client_id) is Some(incarnation) {
+    for id, record in self.wills {
+      if record.client_id == client_id &&
+        record.session_incarnation == incarnation {
+        cancel_will_ids.push(id)
+      }
+    }
+  }
   let (candidate, action, delta) = match kind {
     DetachAt(detached_at_ms) => {
       if !old.is_attached() || detached_at_ms < 0L {
@@ -144,6 +157,7 @@ pub fn BrokerState::prepare_durable_lifecycle(
     admin_handle: None,
     admin_version: None,
     persistent,
+    cancel_will_ids,
     scratch,
     delta,
     action,
@@ -202,6 +216,11 @@ pub fn DurableLifecyclePlan::commit(
   if self.persistent {
     self.broker.mark_snapshot_dirty()
   }
+  for id in self.cancel_will_ids {
+    if !self.broker.cancel_will(id) {
+      return Err(InvariantViolation("admin Will cancellation failed"))
+    }
+  }
   self.finished = true
   self.scratch.release().unwrap()
   Ok([self.action])
@@ -249,8 +268,17 @@ pub fn DurableLifecyclePlan::delta_v5(
     }
     _ => ()
   }
+  let will_deletes : Array[Mqtt5WillDelete] = []
+  for id in self.cancel_will_ids {
+    let record = match self.broker.wills.get(id) {
+      Some(value) => value
+      None => return Err(InvariantViolation("admin Will disappeared"))
+    }
+    will_deletes.push({ id, expected_revision: record.revision })
+  }
   Ok({
     ..DurableDeltaV5::empty(),
+    will_deletes,
     new_clock_floor: if now_wall_ms > self.broker.clock_floor_wall_ms {
       Some(now_wall_ms)
     } else {

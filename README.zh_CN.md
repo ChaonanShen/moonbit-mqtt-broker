@@ -4,9 +4,9 @@
 
 [![CI](https://github.com/ChaonanShen/moonbit-mqtt-broker/actions/workflows/ci.yml/badge.svg)](https://github.com/ChaonanShen/moonbit-mqtt-broker/actions/workflows/ci.yml)
 
-一个使用 MoonBit 实现的轻量级、单机 MQTT 3.1.1 Broker。
+一个使用 MoonBit 实现的轻量级单机 Broker，支持 MQTT 3.1.1 与可选开启的 MQTT 5。
 
-`0.3.0` 面向 Linux x86_64 Native，适用于小型部署、
+当前源码面向 Linux x86_64 Native，适用于小型部署、
 本地开发、互操作测试和 MoonBit MQTT 应用。它支持 TCP、TLS、WS 或 WSS 客户端、
 QoS 0/1/2、通配符订阅、保留消息、Will、Keep Alive、持久会话、可选的重启
 持久化、身份认证、ACL、指标、结构化日志和 TOML 配置。
@@ -48,7 +48,7 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 
 | 范围 | 当前源码支持情况 |
 | --- | --- |
-| 协议 | 基于 TCP、TLS、WS 或 WSS 的 MQTT 3.1.1 |
+| 协议 | 基于 TCP、TLS、WS 或 WSS 的 MQTT 3.1.1 与可选 MQTT 5 |
 | 消息投递 | QoS 0/1/2 发布订阅；出站按阶段重放 PUBLISH/PUBREL |
 | Topic | `+`、`#` 过滤器，重叠订阅确定性合并，保留消息 |
 | 会话 | Clean/Persistent Session、Client ID 接管、有界离线 QoS 1/2 |
@@ -57,7 +57,9 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 | 安全 | 可选 Argon2id 密码、仅允许式 ACL、Principal 所有权会话 |
 | 运维 | TOML 配置、可选 SIGHUP/config_admin 热更新、字节预算与连接/认证/发布限流、`$SYS/broker/#` 指标、文本/JSON 日志 |
 
-MQTT 5、共享订阅、Bridge、插件、集群与外部数据库仍不在本版范围内。
+MQTT 5 默认关闭，开启后与 3.1.1 共用监听器及 Client ID 命名空间。
+共享订阅、Bridge、插件、集群与外部数据库仍不在本次范围内。
+详见 [MQTT 5 支持说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.zh_CN.md)。
 `--data-dir` 默认按最近成功快照恢复；显式 `--persistence-mode strict`
 对约定的持久状态增加本机 WAL 提交屏障，不等于复制或端到端投递保证。
 详细边界见[兼容性矩阵](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.zh_CN.md)和

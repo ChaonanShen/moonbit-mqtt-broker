@@ -178,3 +178,17 @@ terminal 事件只记录固定结果码和不透明 ID。环形表满时覆盖�
 请求及命令令牌桶独立于 MQTT 限速，队列/槽位固定；慢读取者直到真实写出
 或取消后才归还请求槽。管理监听器没有自身 TLS，需限制本机访问，转发时
 使用安全通道。
+
+## MQTT 5 观测字段
+
+连接详情增加 protocol（3.1.1 或 5）、对端 Receive Maximum、Maximum
+Packet Size、Topic Alias Maximum、可用发送额度与占用接收额度。会话详情
+增加 last_protocol、retention、有限到期秒数、剩余毫秒及 Will 数量；订阅
+详情增加 no_local、retain_as_published、retain_handling 和
+subscription_identifier。Int64 继续以十进制 JSON 字符串表示；UInt32
+Session Expiry 使用 JSON 数值。
+
+状态增加 connections_v311、connections_v5、will_armed、will_pending、
+rx_window_used、tx_window_used 和 alias_entries 聚合值。Prometheus
+只使用固定的 connections_by_version 标签 311/5，以及 Will、窗口和别名
+聚合 gauge。Client ID、Topic、消息属性、payload 与凭证不会进入指标标签。

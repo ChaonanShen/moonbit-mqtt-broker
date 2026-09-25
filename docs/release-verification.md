@@ -418,3 +418,17 @@ generation in each strict round and retains the test volumes for investigation.
 A `PERF_QUICK=1` run is only fixture validation. Compare paired rounds on the
 actual named storage and review latency and capacity against the target
 deployment's budget; no universal P99 target is asserted by this project.
+
+## MQTT 5 candidate checks
+
+The cumulative release verifier includes tests/integration/mqtt5.sh in
+prepared mode. The standalone scripts/verify-mqtt5-docker.sh command runs
+format, static and unit checks once, followed by off/snapshot/strict MQTT 5
+network cases and TCP/TLS/WS/WSS interoperability. It prints the evidence
+directory path. The four isolated runtime profiles exercise both MQTT 3.1.1
+and MQTT 5 without installing client libraries in the broker image.
+
+A V5-enabled data directory uses V5 snapshot or schema-6 WAL authority.
+The tested artifact SHA and the backup/rollback boundary must be recorded
+with the distribution evidence. MQTT 5 verification does not replace the
+existing strict soak, fault injection or release acceptance gates.

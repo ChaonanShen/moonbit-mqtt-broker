@@ -14,7 +14,7 @@ preferred_target = "native"
 
 source = "src"
 
-description = "A lightweight MQTT 3.1.1 broker implemented in MoonBit."
+description = "A lightweight MQTT 3.1.1 and opt-in MQTT 5 broker implemented in MoonBit."
 
 import {
   "moonbitlang/async@0.20.6",

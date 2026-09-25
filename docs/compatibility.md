@@ -39,9 +39,9 @@
 | Text/JSON structured logs | Supported | error/warn/info/debug with stable fields and secret/payload redaction |
 | TOML configuration | Supported | CLI > TOML > defaults; unknown/duplicate keys fatal; check/print modes |
 | QoS 2 | Supported | Method B inbound deduplication, bounded state, phase-aware reconnect and V3 recovery |
-| MQTT 5 | Unsupported | Out of scope |
+| MQTT 5 | Opt-in | Dual-version listeners; session expiry, message properties, subscription options, aliases, flow limits and Will Delay; see [MQTT 5](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.md) |
 | WebSocket / WSS | Supported, opt-in | Binary MQTT frames, mqtt subprotocol, Origin allowlist and bounded Upgrade |
-| Shared subscriptions / Bridge / plugins / cluster | Unsupported | Single-node Broker only |
+| Shared subscriptions / Bridge / plugins / cluster | Unsupported | MQTT 5 declares shared unavailable and returns SUBACK 9E for shared filters |
 | Live configuration reload | Supported, opt-in | Verified bundle; SIGHUP or config-admin; passwords, ACLs, TLS/WSS and supported runtime fields; disabled by default |
 | Strict local WAL | Supported, opt-in | Commit-before-ACK for defined persistent state; fenced on uncertain write, no replication |
 | External database / cluster / end-to-end zero-loss | Unsupported | Single-node storage and MQTT exchange boundary only |
@@ -52,6 +52,8 @@ the connection. A client-origin QoS 1/2 publication that exceeds Session
 inflight/pending resources is rejected atomically without PUBACK/PUBREC so the client
 can retry according to its Session lifecycle. QoS 1/2 Will/internal publication
 drops only saturated recipients and continues routing to healthy recipients.
+MQTT 5 instead returns reason-coded negative acknowledgements for eligible
+client publication failures.
 
 The receive-buffer limit applies to undecoded buffered bytes. Exact-limit
 packets, partial prefixes followed by sticky suffixes, and multiple pipelined
@@ -63,7 +65,8 @@ Unacknowledged outbound QoS 1/2 is retransmitted when a persistent Session is
 resumed. With persistence enabled, retained messages, persistent subscriptions,
 inflight/pending QoS 1/2, inbound QoS 2 IDs, original Packet IDs, and the next Packet ID survive a
 Broker restart. Clean Sessions, QoS 0 offline messages, connections, Keep Alive
-timers, and Wills that have not yet fired are not persisted.
+timers, and temporary-Session Wills that have not yet fired are not persisted.
+Persistent MQTT 5 armed and pending Wills follow the V5 snapshot/WAL boundary.
 
 Snapshot mode can lose debounce-window changes after a crash and restores the
 latest committed snapshot. Strict mode restores complete WAL commits before
