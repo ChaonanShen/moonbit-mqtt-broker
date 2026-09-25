@@ -883,25 +883,9 @@ fn RouterDriver::handle_runtime_event(
   self : RouterDriver,
   event : RuntimeEvent,
 ) -> Unit {
-  if event is Mqtt5PacketReceived(packet) {
-    if packet.packet is @protocol.PacketV5::Connect5(_) &&
-      self.runtime.connections.get(packet.connection_id)
-      is Some({ phase: AwaitConnect, .. }) {
-      if self.sinks.get(packet.connection_id) is Some(sink) &&
-        !sink.prepare_handshake(
-          self.runtime.config
-          .broker_config()
-          .resources()
-          .get("control_reserve_bytes"),
-          frame_bytes=5L,
-          scratch_bytes=10L,
-        ) {
-        self.dispatch(
-          self.transport_failed(packet.connection_id, ResourceExhausted),
-        )
-        return
-      }
-    }
+  if event is Mqtt5PacketReceived(packet) &&
+    !self.prepare_mqtt5_handshake(packet) {
+    return
   }
   if event is PacketReceived(packet) {
     if packet.packet is Connect(_) &&

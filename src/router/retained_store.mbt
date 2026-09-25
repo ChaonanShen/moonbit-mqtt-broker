@@ -92,7 +92,9 @@ pub fn RetainedStore::matching(
         matched = true
       }
     }
-    if matched {
+    if matched &&
+      !(message.metadata.expiry is Some(deadline) &&
+      deadline.remaining_at(@budget.monotonic_ms()) == 0L) {
       result.push({
         ..message,
         payload: copy_bytes(message.payload),
@@ -173,7 +175,9 @@ fn RetainedStore::matching_for_router(
 ) -> Array[RetainedMessage] {
   let result : Array[RetainedMessage] = []
   for _, message in self.messages {
-    if filters.any(filter => filter.matches(message.topic)) {
+    if filters.any(filter => filter.matches(message.topic)) &&
+      !(message.metadata.expiry is Some(deadline) &&
+      deadline.remaining_at(@budget.monotonic_ms()) == 0L) {
       result.push(message)
     }
   }

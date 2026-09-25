@@ -58,10 +58,12 @@ fn mqtt5_message_properties(
   }
   if metadata.expiry is Some(deadline) {
     let remaining = deadline.remaining_at(now_mono_ms)
-    let seconds = if remaining / 1000L > 4294967295L {
+    let rounded = remaining / 1000L +
+      (if remaining % 1000L == 0L { 0L } else { 1L })
+    let seconds = if rounded > 4294967295L {
       0xffffffffU
     } else {
-      (remaining / 1000L).to_int().reinterpret_as_uint()
+      rounded.to_int().reinterpret_as_uint()
     }
     properties.push({ id: 0x02, value: @protocol.FourByteValue(seconds) })
   }

@@ -81,7 +81,8 @@ pub async fn WalStore::recover_state_v5(
     }
     if checkpoint.generation != manifest.checkpoint_generation ||
       checkpoint.lsn != manifest.checkpoint_lsn ||
-      checkpoint.required_features != manifest.required_features {
+      (checkpoint.required_features & manifest.required_features) !=
+      checkpoint.required_features {
       raise wal_corrupt("v5-checkpoint-manifest-mismatch", 0)
     }
     let accumulator = @router.DurableAccumulatorV5::new(checkpoint.snapshot)

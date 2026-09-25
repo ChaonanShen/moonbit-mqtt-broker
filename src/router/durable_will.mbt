@@ -10,6 +10,7 @@ pub struct DurableWillPlan {
   broker : BrokerState
   id : Int64
   before : Mqtt5WillRecord
+  record_persisted : Bool
   after : Mqtt5WillRecord?
   publish : DurablePublishPlan?
   kind : DurableWillKind
@@ -45,6 +46,8 @@ pub fn BrokerState::prepare_durable_will_trigger(
     broker: self,
     id,
     before,
+    record_persisted: self.session_mode(before.client_id) ==
+    Some(@session.Persistent),
     after: Some({
       ..before,
       state: WillPending,
@@ -73,6 +76,8 @@ pub fn BrokerState::prepare_durable_will_cancel(
     broker: self,
     id,
     before,
+    record_persisted: before.state == WillPending ||
+    self.session_mode(before.client_id) == Some(@session.Persistent),
     after: None,
     publish: None,
     kind: Cancel,
@@ -124,7 +129,7 @@ pub fn BrokerState::prepare_durable_will_publish(
     retain: before.template.retain,
   }
   let publish = match
-    self.prepare_durable_publish(input, generations, metadata~) {
+    self.prepare_durable_publish(input, generations, metadata~, now_mono_ms~) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -132,6 +137,7 @@ pub fn BrokerState::prepare_durable_will_publish(
     broker: self,
     id,
     before,
+    record_persisted: true,
     after: None,
     publish: Some(publish),
     kind: Publish,
@@ -208,10 +214,14 @@ pub fn DurableWillPlan::delta_v5(
       Err(error) => return Err(error)
     }
     delta.will_puts.push({
-      expected_revision: self.before.revision,
+      expected_revision: if self.record_persisted {
+        self.before.revision
+      } else {
+        0L
+      },
       will: saved,
     })
-  } else {
+  } else if self.record_persisted {
     delta.will_deletes.push({
       id: self.id,
       expected_revision: self.before.revision,

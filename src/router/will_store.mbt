@@ -290,7 +290,7 @@ pub fn BrokerState::publish_due_will(
     qos: record.template.qos,
     retain: record.template.retain,
   }
-  let actions = self.publish_input(input, metadata~)
+  let actions = self.publish_input(input, metadata~, now_mono_ms~)
   match actions {
     Ok(value) => {
       ignore(self.cancel_will(id))

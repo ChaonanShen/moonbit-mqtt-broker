@@ -273,15 +273,21 @@ pub fn BrokerRuntime::prepare_strict_v5_connect(
   if !self.config.protocol_config().mqtt5_enabled {
     return StrictImmediate(self.reject_mqtt5_connect(event.connection_id, 0x84))
   }
-  let plan = match
-    normalize_mqtt5_connect(connect, self.config, client_id => {
-      self.broker_state.has_session(@session.ClientId::new(client_id).unwrap())
-    }) {
-    Ok(value) => value
-    Err(error) =>
-      return StrictImmediate(
-        self.reject_mqtt5_connect(event.connection_id, error.reason),
-      )
+  let plan = match self.v5_pending.get(event.connection_id) {
+    Some(value) => value
+    None =>
+      match
+        normalize_mqtt5_connect(connect, self.config, client_id => {
+          self.broker_state.has_session(
+            @session.ClientId::new(client_id).unwrap(),
+          )
+        }) {
+        Ok(value) => value
+        Err(error) =>
+          return StrictImmediate(
+            self.reject_mqtt5_connect(event.connection_id, error.reason),
+          )
+      }
   }
   self.v5_pending.set(event.connection_id, {
     ..plan,

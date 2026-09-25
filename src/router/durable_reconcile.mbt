@@ -44,14 +44,21 @@ pub fn DurableReconcilePlan::delta_v5(
   }
   match self.delta.change {
     DropSubscription(_) => candidate.subscription_changed()
-    DropPendingAt(_, _, _, _) =>
+    DropPendingAt(_, _, _, _) => {
+      let expected = candidate
+        .pending_item_reference(self.pending_index)
+        .unwrap()
+      let remaining = candidate.pending_without_item_for_policy(
+        self.pending_index,
+      )
       if !candidate.discard_pending_item_prepared(
           self.pending_index,
-          self.head.unwrap(),
-          self.remaining,
+          expected,
+          remaining,
         ) {
         return Err(InvariantViolation("V5 reconcile pending item changed"))
       }
+    }
     DropPendingHead(_, _, _) =>
       return Err(InvariantViolation("unreachable policy head conversion"))
   }

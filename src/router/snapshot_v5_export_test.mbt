@@ -30,12 +30,15 @@ test "C-T30 V5 snapshot export retains subscription and message metadata" {
       }),
     ),
   )
+  let base_mono_ms = @budget.monotonic_ms()
   let metadata : @session.MessageMetadata = {
     ..@session.MessageMetadata::empty(),
     content_type: Some("text/plain"),
     user_properties: [("k", "v")],
     publisher_client_id: Some(publisher),
-    expiry: Some(@session.Deadline::from_seconds(100L, 1000L, 10U).unwrap()),
+    expiry: Some(
+      @session.Deadline::from_seconds(base_mono_ms, 1000L, 10U).unwrap(),
+    ),
   }
   ignore(
     state
@@ -53,7 +56,7 @@ test "C-T30 V5 snapshot export retains subscription and message metadata" {
     )
     .unwrap(),
   )
-  let snapshot = state.export_snapshot_v5(1100L, 2000L).unwrap()
+  let snapshot = state.export_snapshot_v5(base_mono_ms + 1000L, 2000L).unwrap()
   assert_eq(snapshot.sessions.length(), 1)
   assert_eq(
     snapshot.sessions[0].subscriptions[0].subscription_identifier,
@@ -74,10 +77,12 @@ test "C-T30 V5 snapshot export retains subscription and message metadata" {
   let restored = BrokerState::from_snapshot_v5(
     BrokerConfig::new(8, 16, 8).unwrap(),
     snapshot,
-    2100L,
+    base_mono_ms + 2000L,
     3100L,
   ).unwrap()
-  let recovered = restored.export_snapshot_v5(2100L, 3100L).unwrap()
+  let recovered = restored
+    .export_snapshot_v5(base_mono_ms + 2000L, 3100L)
+    .unwrap()
   assert_eq(
     recovered.sessions[0].subscriptions[0].subscription_identifier,
     Some(7U),

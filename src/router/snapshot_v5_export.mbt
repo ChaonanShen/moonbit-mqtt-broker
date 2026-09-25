@@ -215,6 +215,10 @@ pub fn BrokerState::export_snapshot_v5(
   }
   let wills : Array[SnapshotWillV5] = []
   for _, record in self.wills {
+    if record.state == WillArmed &&
+      self.session_mode(record.client_id) != Some(@session.Persistent) {
+      continue
+    }
     let template_message = @session.SessionMessage::new(
       record.template.topic,
       record.template.payload,

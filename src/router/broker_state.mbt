@@ -635,8 +635,13 @@ fn BrokerState::delivery_candidates(
   self : BrokerState,
   input : PublishInput,
   metadata? : @session.MessageMetadata = @session.MessageMetadata::empty(),
+  now_mono_ms? : Int64 = @budget.monotonic_ms(),
 ) -> Array[DeliveryCandidate] {
   let candidates : Array[DeliveryCandidate] = []
+  if metadata.expiry is Some(deadline) &&
+    deadline.remaining_at(now_mono_ms) == 0L {
+    return candidates
+  }
   let publisher = match input.origin {
     Client(id) | Will(id) => Some(id)
     Internal => None
@@ -1475,7 +1480,15 @@ fn BrokerState::publish_input(
   self : BrokerState,
   input : PublishInput,
   metadata? : @session.MessageMetadata = @session.MessageMetadata::empty(),
+  now_mono_ms? : Int64 = @budget.monotonic_ms(),
 ) -> Result[Array[BrokerAction], RouterError] {
+  let expired = metadata.expiry is Some(deadline) &&
+    deadline.remaining_at(now_mono_ms) == 0L
+  let input = if expired && input.retain {
+    { ..input, payload: Bytes::from_array([]) }
+  } else {
+    input
+  }
   if input.retain &&
     input.payload.length() > 0 &&
     self.retained.peek(input.topic) is None &&
@@ -1518,7 +1531,7 @@ fn BrokerState::publish_input(
   let strict = input.origin is Client(_)
   let planned = match
     self.preflight_deliveries(
-      self.delivery_candidates(input, metadata~),
+      self.delivery_candidates(input, metadata~, now_mono_ms~),
       strict,
     ) {
     Ok(value) => value
