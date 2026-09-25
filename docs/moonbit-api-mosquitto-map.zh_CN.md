@@ -1,7 +1,7 @@
 # Mosquitto → MoonBit API 能力对照
 
 状态：设计清单，不代表下列新接口已存在。日期：2026-09-24。
-配套[执行计划](moonbit-api-plan.zh_CN.md)。项目基线 `cc00fd67db351d890434bccac168baa44b1f078f`。
+配套[执行计划](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/moonbit-api-plan.zh_CN.md)。项目基线 `cc00fd67db351d890434bccac168baa44b1f078f`。
 
 参考上游提交 `6aaba32614eb1160ddbfeafd616f9f67e7914a41` 的公开头文件，并辅以官方 API 文档。按能力族归并同步/异步、带长度和 v5 变体；本清单不声称逐符号二进制兼容。实施 M0 须把每个承诺签名展开进版本化 API 清单，列出参数、结果、错误、能力 ID 及测试。
 

@@ -1,6 +1,6 @@
 # 测试体系总览
 
-本文只说明测试类别、执行阶段与责任分工。具体命令、断言和发布门槛以[发布前测试与验收操作手册](release-verification.zh_CN.md)为准。项目的开发和用户手动测试都在远端唯一工作区 `/home/scn/moonbit-mqtt-broker` 进行；这里的“自行运行”不指在 Windows 建立源码副本。
+本文只说明测试类别、执行阶段与责任分工。具体命令、断言和发布门槛以[发布前测试与验收操作手册](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/release-verification.zh_CN.md)为准。项目的开发和用户手动测试都在远端唯一工作区 `/home/scn/moonbit-mqtt-broker` 进行；这里的“自行运行”不指在 Windows 建立源码副本。
 
 | 测试类别 | 开发过程中 | 功能开发结束后 | 主要执行位置 |
 | --- | --- | --- | --- |

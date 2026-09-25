@@ -1,6 +1,6 @@
 # Release verification runbook
 
-[中文](release-verification.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/release-verification.zh_CN.md) | **English**
 
 This is the project's release policy, not a universal Mooncakes requirement. Before publishing or submitting for acceptance, require a complete successful run of [the distribution verifier](../scripts/verify-distribution-docker.sh) for the exact candidate. A development test pass or an intermediate success message is insufficient.
 
@@ -60,7 +60,7 @@ docker run --rm --platform linux/amd64 --entrypoint bash \
   moonbit-mqtt-broker-dev tests/integration/argon2_environment.sh
 ```
 
-The environment regression independently checks the reference fixture before simulating a missing runtime in child processes. It does not rewrite expected hashes. Do not disable assertions, skip authentication tests or use snapshot updates to accept an unexplained result. See [security](security.md) for fixture generation.
+The environment regression independently checks the reference fixture before simulating a missing runtime in child processes. It does not rewrite expected hashes. Do not disable assertions, skip authentication tests or use snapshot updates to accept an unexplained result. See [security](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.md) for fixture generation.
 
 Prove high-risk boundaries when wiring them: WAL commit/recovery, revocation, native-task reap, protocol order, resource accounting and new library dependencies. Evidence may come from current-candidate CI; development-side runs are limited to implementation decisions and minimal failure reproductions. Missing evidence must not be called a pass.
 
@@ -203,10 +203,10 @@ The old formal result is invalidated by the changes below. Recommit and obtain a
 
 Every new native library needs a dependency/version declaration, installation instructions, real positive coverage, a missing-library case and appropriate inventory assertions. Expand the matrix before claiming another OS, architecture or toolchain.
 
-Release metadata for version 0.2.0 is deliberately checked across the manifest, CLI, system metrics, package filenames, CHANGELOG, documentation and affected tests:
+Release metadata for version 0.3.0 is deliberately checked across the manifest, CLI, system metrics, package filenames, CHANGELOG, documentation and affected tests:
 
 ```bash
-git grep -n 0\.2\.0 -- moon.mod src/cmd/broker scripts tests/integration README.md README.zh_CN.md CHANGELOG.md
+git grep -n 0\.3\.0 -- moon.mod src/cmd/broker scripts tests/integration README.md README.zh_CN.md CHANGELOG.md
 ```
 
 Do not blindly replace fixture values or third-party dependency versions. Version changes must precede verification, not follow it immediately before publishing.

@@ -1,6 +1,6 @@
 # Management API
 
-[中文](management.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.zh_CN.md) | **English**
 
 The optional listener is loopback HTTP/1.1 at `127.0.0.1:PORT`. Health,
 Prometheus, and status work when management is enabled. Detail queries and
@@ -46,8 +46,8 @@ The 32 MiB example is explicit; A-only deployments retain the 8 MiB default.
 The same parent quota charges request, cache, index, query, cursor, Operation,
 and audit reservations and remains subject to the ordinary Broker ledger.
 `--check-config` rejects invalid sizes, dependencies, or token files before
-binding. See [configuration](configuration.md) and
-[resource budgets](resource-budgets.md).
+binding. See [configuration](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.md) and
+[resource budgets](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md).
 
 ## Routes
 

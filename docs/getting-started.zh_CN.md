@@ -1,6 +1,6 @@
 # 入门指南
 
-**中文** | [English](getting-started.md)
+**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/getting-started.md)
 
 本指南介绍如何启动本地 MQTT 3.1.1 Broker、验证发布订阅，并进一步启用
 持久化和带身份认证的 TLS。
@@ -40,7 +40,7 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -i demo-pub \
 
 ## 使用配置文件
 
-将[配置文档](configuration.zh_CN.md)中的示例保存为本地 TOML 文件。
+将[配置文档](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.zh_CN.md)中的示例保存为本地 TOML 文件。
 启动前先验证配置：
 
 ```bash
@@ -66,7 +66,7 @@ scripts/moon-docker.sh run --target native src/cmd/broker -- \
 
 使用 SIGTERM 或 SIGINT 停止 Broker，以便写入最新快照。SIGKILL、宿主机故障
 或断电只能保留最近一次已经完成的快照。依赖重启恢复前请阅读
-[本地持久化](persistence.zh_CN.md)。
+[本地持久化](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.zh_CN.md)。
 
 ## 启用 TLS、密码和 ACL
 
@@ -100,7 +100,7 @@ broker --listen 0.0.0.0:8883 \
 ```
 
 MQTT 3.1.1 凭据在明文连接上可被观察到。启用密码认证时必须使用 TLS。
-文件和授权规则见[安全文档](security.zh_CN.md)。
+文件和授权规则见[安全文档](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.zh_CN.md)。
 
 ## 运行示例和测试
 
@@ -117,5 +117,5 @@ scripts/verify-release-docker.sh
 
 当前源码为单机 Linux x86_64 Native 实现，不支持 MQTT 5、
 集群、Bridge、插件、外部数据库、WAL 或零丢失持久化。部署前请查看
-[兼容性矩阵](compatibility.zh_CN.md)。
+[兼容性矩阵](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.zh_CN.md)。
 

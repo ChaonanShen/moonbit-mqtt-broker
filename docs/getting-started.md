@@ -1,6 +1,6 @@
 # Getting started
 
-[中文](getting-started.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/getting-started.zh_CN.md) | **English**
 
 This guide starts a local MQTT 3.1.1 broker, verifies publish/subscribe, and
 shows the safe path to persistence and authenticated TLS.
@@ -40,7 +40,7 @@ The subscriber should print `hello from MoonBit`.
 
 ## Use a configuration file
 
-Copy the example in [configuration](configuration.md) to a local TOML file.
+Copy the example in [configuration](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.md) to a local TOML file.
 Validate it before starting the broker:
 
 ```bash
@@ -66,7 +66,7 @@ scripts/moon-docker.sh run --target native src/cmd/broker -- \
 
 Stop with SIGTERM or SIGINT so the broker drains the newest snapshot. SIGKILL,
 host failure, and power loss retain only the latest completed snapshot. Read
-[local persistence](persistence.md) before relying on restart recovery.
+[local persistence](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.md) before relying on restart recovery.
 
 ## Enable TLS, passwords, and ACLs
 
@@ -101,7 +101,7 @@ broker --listen 0.0.0.0:8883 \
 ```
 
 MQTT 3.1.1 credentials are visible on plaintext connections. Use TLS whenever
-password authentication is enabled. See [security](security.md) for file and
+password authentication is enabled. See [security](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.md) for file and
 authorization rules.
 
 ## Run the examples and tests
@@ -120,5 +120,5 @@ clean directory.
 
 This source is single-node and Linux x86_64 Native. It does not implement
 MQTT 5, clustering, bridges, plugins, external databases,
-WAL, or zero-loss durability. Review the [compatibility matrix](compatibility.md)
+WAL, or zero-loss durability. Review the [compatibility matrix](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.md)
 before deployment.
