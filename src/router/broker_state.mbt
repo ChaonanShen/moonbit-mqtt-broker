@@ -18,6 +18,9 @@ pub struct BrokerState {
   priv mut pending_qos1_total : Int
   priv mut inbound_qos2_total : Int
   priv mut snapshot_revision : Int64
+  priv mut next_delivery_id : Int64
+  priv mut clock_floor_wall_ms : Int64
+  priv mut storage_v5 : Bool
   priv mut last_expiration_check_ms : Int64?
   priv mut time_regression_reported : Bool
 }
@@ -82,6 +85,9 @@ pub fn BrokerState::new(
     pending_qos1_total: 0,
     inbound_qos2_total: 0,
     snapshot_revision: 0L,
+    next_delivery_id: 1L,
+    clock_floor_wall_ms: 0L,
+    storage_v5: false,
     last_expiration_check_ms: None,
     time_regression_reported: false,
   }
@@ -527,6 +533,7 @@ fn BrokerState::expire_sessions(
   let candidates : Array[ExpirationCandidate] = []
   for client_id, session in self.sessions {
     if session.mode() != @session.SessionMode::Persistent ||
+      session.retention() != @session.LegacyBrokerPolicy ||
       session.is_attached() {
       continue
     }
@@ -812,6 +819,18 @@ fn delivery_with_metadata(
 }
 
 ///|
+fn BrokerState::reserve_delivery_id(
+  self : BrokerState,
+) -> Result[Int64, RouterError] {
+  if self.next_delivery_id < 1L || self.next_delivery_id == 9223372036854775807L {
+    return Err(InvariantViolation("delivery identity exhausted"))
+  }
+  let id = self.next_delivery_id
+  self.next_delivery_id += 1L
+  Ok(id)
+}
+
+///|
 fn BrokerState::prepare_deliveries(
   self : BrokerState,
   planned : Array[PlannedDelivery],
@@ -914,6 +933,10 @@ fn BrokerState::prepare_deliveries(
           StagePending => session.pending_count() + 1
           _ => self.config.max_pending_qos1_per_session()
         }
+        let delivery_id = match self.reserve_delivery_id() {
+          Ok(value) => value
+          Err(error) => return Err(error)
+        }
         let stage = match
           session.stage(
             @session.SessionMessage::new(
@@ -923,6 +946,7 @@ fn BrokerState::prepare_deliveries(
               qos=candidate.qos,
               metadata=candidate.metadata,
               subscription_identifiers=candidate.subscription_identifiers,
+              delivery_id~,
             ),
             self.session_limits(max_inflight~, max_pending~),
           ) {
@@ -1133,7 +1157,46 @@ fn BrokerState::apply_event(
       }
       Ok([SessionDetached(request.client_id)])
     }
+    DetachSessionV5(request) => {
+      let session = match self.sessions.get(request.client_id) {
+        Some(value) => value
+        None => return Err(SessionNotFound(request.client_id))
+      }
+      if !session.is_attached() {
+        return Err(InvalidSessionState(request.client_id))
+      }
+      if session.detach_v5(request.now_mono_ms, request.now_wall_ms) is Err(_) {
+        return Err(InvalidSessionState(request.client_id))
+      }
+      if self.admin_sessions is Some(index) {
+        index.bump(request.client_id)
+      }
+      if session.mode() == @session.Persistent {
+        self.mark_snapshot_dirty()
+      }
+      Ok([SessionDetached(request.client_id)])
+    }
+    UpdateV5Retention(request) => {
+      let session = match self.sessions.get(request.client_id) {
+        Some(value) => value
+        None => return Err(SessionNotFound(request.client_id))
+      }
+      if !session.is_attached() {
+        return Err(InvalidSessionState(request.client_id))
+      }
+      let previous = session.retention()
+      self.sessions.set(
+        request.client_id,
+        session.with_retention(request.retention),
+      )
+      if previous != request.retention {
+        self.mark_snapshot_dirty()
+      }
+      Ok([])
+    }
     ExpireSessions(now_ms) => self.expire_sessions(now_ms)
+    ExpireSessionsV5(request) =>
+      self.expire_sessions_v5(request.now_wall_ms, request.now_mono_ms)
     SubscribeV5(request) => self.subscribe_v5(request)
     Subscribe(request) => {
       let client_id = request.client_id
@@ -1279,10 +1342,12 @@ fn BrokerState::apply_event(
           .unwrap_or(@session.MessageMetadata::empty()),
       )
     Pubrel(request) => self.complete_qos2(request)
+    InboundPubrelV5(request) => self.complete_qos2_v5(request)
     Pubrec(request) => self.receive_pubrec(request)
     Pubcomp(request) =>
       self.ack_delivery(request.client_id, request.packet_id, pubcomp=true)
     Puback(request) => self.ack_delivery(request.client_id, request.packet_id)
+    OutboundAckV5(request) => self.apply_v5_outbound_ack(request)
   }
 }
 
@@ -1667,9 +1732,12 @@ pub fn BrokerState::apply(
   let settlement = if result is Err(_) ||
     event is RemoveSession(_) ||
     event is ExpireSessions(_) ||
+    event is ExpireSessionsV5(_) ||
     event is Puback(_) ||
+    event is OutboundAckV5(_) ||
     event is Pubrec(_) ||
     event is Pubrel(_) ||
+    event is InboundPubrelV5(_) ||
     event is Pubcomp(_) ||
     event is Unsubscribe(_) {
     self.settle_resources()
@@ -1683,13 +1751,26 @@ pub fn BrokerState::apply(
       match result {
         Err(e) => Err(e)
         Ok(actions) => {
-          if self.managed_bytes() < before_bytes ||
-            self.inflight_count() < before_inflight ||
-            event is AttachSession(_) {
+          if !(event is OutboundAckV5(_)) &&
+            (
+              self.managed_bytes() < before_bytes ||
+              self.inflight_count() < before_inflight ||
+              event is AttachSession(_)
+            ) {
             actions.append(self.resume_pending())
           }
           Ok(actions)
         }
       }
   }
+}
+
+///|
+pub fn BrokerState::enable_v5_storage(self : BrokerState) -> Unit {
+  self.storage_v5 = true
+}
+
+///|
+pub fn BrokerState::uses_v5_storage(self : BrokerState) -> Bool {
+  self.storage_v5
 }

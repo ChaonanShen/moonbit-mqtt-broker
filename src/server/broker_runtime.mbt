@@ -336,6 +336,7 @@ fn BrokerRuntime::reject_connect(
       } else {
         [
           SendMqtt5({
+            rx_permit: None,
             connection_id,
             packet: Connack5({
               session_present: false,
@@ -429,6 +430,7 @@ fn BrokerRuntime::map_broker_actions(
               self.v5_active.contains(send.connection_id) =>
               actions.push(
                 SendMqtt5({
+                  rx_permit: None,
                   connection_id: send.connection_id,
                   packet: Publish5({
                     topic: publish.topic,
@@ -450,6 +452,37 @@ fn BrokerRuntime::map_broker_actions(
           }
         }
       }
+      DeliveryAcknowledged(ack) =>
+        if self.active_by_client.get(ack.client_id) is Some(connection_id) &&
+          self.v5_active.contains(connection_id) {
+          actions.push(
+            ReleaseV5Credit({ connection_id, packet_id: ack.packet_id.value() }),
+          )
+        }
+      SendPubcompNotFound(ack) =>
+        if self.active_by_client.get(ack.client_id) is Some(connection_id) {
+          let packet_id = @protocol.PacketId::new(ack.packet_id.value()).unwrap()
+          actions.push(
+            SendMqtt5({
+              rx_permit: None,
+              connection_id,
+              packet: Pubcomp5({ packet_id, reason: 0x92, properties: [] }),
+              close_reason: None,
+            }),
+          )
+        }
+      SendPubrelNotFound(ack) =>
+        if self.active_by_client.get(ack.client_id) is Some(connection_id) {
+          let packet_id = @protocol.PacketId::new(ack.packet_id.value()).unwrap()
+          actions.push(
+            SendMqtt5({
+              rx_permit: None,
+              connection_id,
+              packet: Pubrel5({ packet_id, reason: 0x92, properties: [] }),
+              close_reason: None,
+            }),
+          )
+        }
       SendPubrec(ack) | SendPubrel(ack) | SendPubcomp(ack) =>
         if self.active_by_client.get(ack.client_id) is Some(connection_id) {
           let id = @protocol.PacketId::new(ack.packet_id.value()).unwrap()
@@ -515,6 +548,7 @@ fn BrokerRuntime::terminate(
     None => return []
     Some(meta) => meta
   }
+  let v5_plan = self.v5_active.get(connection_id)
   let will_ticket = self.will_tickets.get(connection_id)
   self.will_tickets.remove(connection_id)
   self.v5_pending.remove(connection_id)
@@ -561,18 +595,34 @@ fn BrokerRuntime::terminate(
         if !preserve_session {
           match self.broker_state.session_mode(client_id) {
             Some(Persistent) =>
-              ignore(
-                self.broker_state.apply(
-                  @router.BrokerEvent::DetachSessionAt({
-                    client_id,
-                    detached_at_ms: if observed_at_ms >= 0L {
-                      observed_at_ms
-                    } else {
-                      meta.last_control_at_ms
-                    },
-                  }),
-                ),
-              )
+              if v5_plan is Some(_) {
+                ignore(
+                  self.broker_state.apply(
+                    @router.DetachSessionV5({
+                      client_id,
+                      now_mono_ms: @budget.monotonic_ms(),
+                      now_wall_ms: if observed_at_ms >= 0L {
+                        observed_at_ms
+                      } else {
+                        @async.now()
+                      },
+                    }),
+                  ),
+                )
+              } else {
+                ignore(
+                  self.broker_state.apply(
+                    @router.DetachSessionAt({
+                      client_id,
+                      detached_at_ms: if observed_at_ms >= 0L {
+                        observed_at_ms
+                      } else {
+                        meta.last_control_at_ms
+                      },
+                    }),
+                  ),
+                )
+              }
             Some(Clean) =>
               ignore(
                 self.broker_state.apply(
@@ -993,9 +1043,11 @@ fn BrokerRuntime::finalize_connect(
   if v5_plan is Some(plan) {
     self.v5_pending.remove(connection_id)
     self.v5_active.set(connection_id, plan)
+    self.broker_state.enable_v5_storage()
     self.inbound_aliases.set(connection_id, Map([]))
     actions.push(
       SendMqtt5({
+        rx_permit: None,
         connection_id,
         packet: mqtt5_connack(plan, self.config, session_present),
         close_reason: None,
@@ -1412,7 +1464,15 @@ fn BrokerRuntime::check_deadlines(
     }
   }
   let actions : Array[RuntimeAction] = []
-  match self.broker_state.apply(@router.BrokerEvent::ExpireSessions(now_ms)) {
+  let expiry_event = if self.broker_state.uses_v5_storage() {
+    @router.BrokerEvent::ExpireSessionsV5({
+      now_wall_ms: now_ms,
+      now_mono_ms: @budget.monotonic_ms(),
+    })
+  } else {
+    @router.BrokerEvent::ExpireSessions(now_ms)
+  }
+  match self.broker_state.apply(expiry_event) {
     Ok(expiration_actions) =>
       actions.append(self.map_broker_actions(expiration_actions))
     Err(_) => ()

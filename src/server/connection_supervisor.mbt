@@ -181,10 +181,30 @@ async fn read_transport(
                 !bus.admission.admit_control(connection_id) {
                 return RateLimited
               }
+              let mut rx_permit : RxPermit? = None
+              let mut rx_error : Int? = None
+              if value is Publish5(publish) &&
+                publish.qos != @protocol.QoS0 &&
+                sink is Some(transport_sink) {
+                let qos = if publish.qos == @protocol.QoS2 { 2 } else { 1 }
+                match
+                  transport_sink.rx_ledger.reserve(
+                    publish.packet_id.unwrap().value(),
+                    qos,
+                  ) {
+                  RxNew(permit) | RxDuplicateQoS2(permit) =>
+                    rx_permit = Some(permit)
+                  RxPacketIdInUse => rx_error = Some(0x91)
+                  RxQuotaExceeded => rx_error = Some(0x93)
+                  RxInvalidPacketId => rx_error = Some(0x82)
+                }
+              }
               let event = Mqtt5PacketReceivedEvent::{
                 connection_id,
                 packet: value,
                 received_at_ms: @async.now(),
+                rx_permit,
+                rx_error,
               }
               match (bus, packet_ticket) {
                 (Some(bus), Some(ticket)) => {
@@ -302,7 +322,7 @@ async fn write_transport(
         return PeerEof
       }
       WriteFrame(frame) => {
-        let (ticket, authorization) = sink.take_owned_frame(frame)
+        let (ticket, authorization, rx_permit) = sink.take_owned_frame(frame)
         defer release_optional(ticket)
         if sink.ws_closing {
           continue
@@ -316,13 +336,16 @@ async fn write_transport(
         connection.write(frame, still_allowed?=gate) catch {
           PolicyWriteRevoked => return PolicyRevoked
           _ => return WriteFailure
+        }
+        if rx_permit is Some(permit) {
+          ignore(sink.rx_ledger.complete(permit))
         }
         if bus is Some(bus) && bus.needs_promotion {
           bus.post_tick(CheckDeadlines(@async.now()))
         }
       }
       WriteFrameThenClose(frame, reason) => {
-        let (ticket, authorization) = sink.take_owned_frame(frame)
+        let (ticket, authorization, rx_permit) = sink.take_owned_frame(frame)
         defer release_optional(ticket)
         if sink.ws_closing {
           continue
@@ -336,6 +359,9 @@ async fn write_transport(
         connection.write(frame, still_allowed?=gate) catch {
           PolicyWriteRevoked => return PolicyRevoked
           _ => return WriteFailure
+        }
+        if rx_permit is Some(permit) {
+          ignore(sink.rx_ledger.complete(permit))
         }
         return reason
       }
@@ -354,7 +380,10 @@ async fn supervise_transport(
   transport_name? : String = "",
   logger? : @observability.Logger = @observability.Logger::silent(),
 ) -> Unit {
-  let sink = TransportSink::new(config.max_outbound_queue())
+  let sink = TransportSink::new(
+    config.max_outbound_queue(),
+    receive_maximum=config.protocol_config().server_receive_maximum,
+  )
   connection.attach_sink(sink)
   let terminal = @async.Queue(kind=Blocking(1))
   let budget = match bus {

@@ -207,8 +207,16 @@ fn RouterDriver::submit_snapshot(
     .resources()
     .get("max_snapshot_work_bytes")
   let pool = ledger.pool(Snapshot, limit).unwrap()
+  let v5_storage = self.runtime.broker_state().uses_v5_storage()
   let cost = match self.runtime.broker_state().snapshot_work_cost() {
-    Ok(cost) => cost
+    Ok(cost) =>
+      if v5_storage {
+        @budget.checked_add(cost, self.runtime.broker_state().managed_bytes()).unwrap_or(
+          -1L,
+        )
+      } else {
+        cost
+      }
     Err(_) => {
       self.snapshot_deferred(state)
       return false
@@ -221,9 +229,25 @@ fn RouterDriver::submit_snapshot(
       return false
     }
   }
-  let snapshot = self.runtime.broker_state().export_snapshot()
-  ticket.commit().unwrap()
-  let submitted = state.sink.submit_accounted({ revision, snapshot }, ticket)
+  let submitted = if v5_storage {
+    let snapshot = match
+      self.runtime
+      .broker_state()
+      .export_snapshot_v5(@budget.monotonic_ms(), @async.now()) {
+      Ok(value) => value
+      Err(_) => {
+        ticket.release().unwrap()
+        self.snapshot_deferred(state)
+        return false
+      }
+    }
+    ticket.commit().unwrap()
+    state.sink.submit_v5_accounted(revision, snapshot, ticket)
+  } else {
+    let snapshot = self.runtime.broker_state().export_snapshot()
+    ticket.commit().unwrap()
+    state.sink.submit_accounted({ revision, snapshot }, ticket)
+  }
   if !submitted {
     ticket.release().unwrap()
   }
@@ -467,21 +491,23 @@ fn RouterDriver::dispatch(
     match action {
       SendPacket(send) =>
         if self.runtime.v5_active.contains(send.connection_id) {
-          if self.sinks.get(send.connection_id) is Some(sink) {
-            let packet = match legacy_packet_to_v5(send.packet) {
-              Some(value) => value
-              None => {
-                worklist.append(
-                  self.transport_failed(send.connection_id, EncodeFailure),
-                )
-                continue
-              }
-            }
-            if self.encode_v5_and_queue(sink, packet, None, send.connection_id)
-              is Err(reason) {
-              worklist.append(self.transport_failed(send.connection_id, reason))
+          let packet = match legacy_packet_to_v5(send.packet) {
+            Some(value) => value
+            None => {
+              worklist.append(
+                self.transport_failed(send.connection_id, EncodeFailure),
+              )
+              continue
             }
           }
+          worklist.push(
+            SendMqtt5({
+              rx_permit: None,
+              connection_id: send.connection_id,
+              packet,
+              close_reason: None,
+            }),
+          )
         } else if self.sinks.get(send.connection_id) is Some(sink) {
           match
             self.encode_and_queue(
@@ -522,17 +548,71 @@ fn RouterDriver::dispatch(
         }
       SendMqtt5(send) =>
         if self.sinks.get(send.connection_id) is Some(sink) {
+          if send.packet is @protocol.PacketV5::Connack5(connack) &&
+            connack.reason == 0 {
+            let peer = self.runtime.v5_active.get(send.connection_id).unwrap()
+            let local_limit = self.runtime.config
+              .broker_config()
+              .max_inflight_per_session()
+            sink.set_tx_window(
+              if peer.peer_receive_maximum < local_limit {
+                peer.peer_receive_maximum
+              } else {
+                local_limit
+              },
+            )
+          }
+          let mut reserved : TxLease? = None
+          if send.packet is @protocol.PacketV5::Publish5(publish) &&
+            publish.qos != @protocol.QoS0 {
+            let packet_id = publish.packet_id.unwrap().value()
+            match sink.tx_window.reserve(packet_id.to_int64()) {
+              TxReserved(value) => reserved = Some(value)
+              TxAlreadyReserved(_) => ()
+              TxWindowFull => {
+                if sink.deferred_v5.length() >=
+                  self.runtime.config.max_outbound_queue() {
+                  worklist.append(
+                    self.transport_failed(send.connection_id, SlowConsumer),
+                  )
+                } else {
+                  sink.deferred_v5.push_back(send)
+                }
+                continue
+              }
+              TxInvalidDelivery => {
+                worklist.append(
+                  self.transport_failed(send.connection_id, EncodeFailure),
+                )
+                continue
+              }
+            }
+          }
           let result = self.encode_v5_and_queue(
             sink,
             send.packet,
             send.close_reason,
             send.connection_id,
+            rx_permit?=send.rx_permit,
           )
+          if result is Err(_) && reserved is Some(value) {
+            ignore(sink.tx_window.terminal(value))
+          }
           if send.packet is @protocol.PacketV5::Connack5(connack) {
             sink.resolve_handshake(result is Ok(_) && connack.reason == 0)
           }
           if result is Err(reason) {
             worklist.append(self.transport_failed(send.connection_id, reason))
+          }
+        }
+      ReleaseV5Credit(release) =>
+        if self.sinks.get(release.connection_id) is Some(sink) {
+          if sink.tx_window.terminal_packet(release.packet_id) &&
+            sink.deferred_v5.length() > 0 {
+            match sink.deferred_v5.pop_front() {
+              Some(next) => worklist.push(SendMqtt5(next))
+              None => ()
+            }
           }
         }
       CloseTransport(close) =>
@@ -880,7 +960,12 @@ fn RouterDriver::encode_v5_and_queue(
   packet : @protocol.PacketV5,
   close : CloseReason?,
   connection_id : ConnectionId,
+  rx_permit? : RxPermit,
 ) -> Result[Unit, CloseReason] {
+  let rx_permit = match (packet, rx_permit) {
+    (Pubcomp5(ack), None) => sink.rx_ledger.permit(ack.packet_id.value())
+    _ => rx_permit
+  }
   let authorization : OutboundAuthorization? = match packet {
     Publish5(publish) => {
       let client_id = match self.runtime.connections.get(connection_id) {
@@ -946,7 +1031,7 @@ fn RouterDriver::encode_v5_and_queue(
         Err(_) => return Err(SlowConsumer)
       }
   }
-  if sink.enqueue_frame(frame, reservation, close, authorization?) {
+  if sink.enqueue_frame(frame, reservation, close, authorization?, rx_permit?) {
     Ok(())
   } else {
     Err(SlowConsumer)

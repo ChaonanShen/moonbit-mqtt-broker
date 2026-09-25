@@ -5,9 +5,15 @@ pub(all) struct SnapshotRequest {
 }
 
 ///|
+priv enum SnapshotValue {
+  SnapshotV3(@router.BrokerSnapshotV3)
+  SnapshotV5(@router.BrokerSnapshotV5)
+}
+
+///|
 priv struct SnapshotEnvelope {
   revision : Int64
-  snapshot : @router.BrokerSnapshotV3
+  snapshot : SnapshotValue
   ticket : @budget.Ticket?
 }
 
@@ -57,7 +63,7 @@ pub fn SnapshotSink::submit(
 ) -> Bool {
   self.submit_envelope({
     revision: request.revision,
-    snapshot: request.snapshot,
+    snapshot: SnapshotV3(request.snapshot),
     ticket: None,
   })
 }
@@ -71,7 +77,21 @@ pub fn SnapshotSink::submit_accounted(
 ) -> Bool {
   self.submit_envelope({
     revision: request.revision,
-    snapshot: request.snapshot,
+    snapshot: SnapshotV3(request.snapshot),
+    ticket: Some(ticket),
+  })
+}
+
+///|
+pub fn SnapshotSink::submit_v5_accounted(
+  self : SnapshotSink,
+  revision : Int64,
+  snapshot : @router.BrokerSnapshotV5,
+  ticket : @budget.Ticket,
+) -> Bool {
+  self.submit_envelope({
+    revision,
+    snapshot: SnapshotV5(snapshot),
     ticket: Some(ticket),
   })
 }
@@ -217,7 +237,13 @@ async fn SnapshotWriter::commit(
   request : SnapshotEnvelope,
 ) -> Bool {
   self.attempts = self.attempts + 1
-  match @async.protect_from_cancel(() => self.store.save(request.snapshot)) {
+  let saved = @async.protect_from_cancel(() => {
+    match request.snapshot {
+      SnapshotV3(value) => self.store.save(value)
+      SnapshotV5(value) => self.store.save_v5(value)
+    }
+  })
+  match saved {
     Ok(bytes) => {
       let recovered = self.degraded
       self.degraded = false

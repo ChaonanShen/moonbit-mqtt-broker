@@ -20,6 +20,7 @@ fn BrokerRuntime::reject_mqtt5_connect(
   self.connections.remove(connection_id)
   [
     SendMqtt5({
+      rx_permit: None,
       connection_id,
       packet: Connack5({ session_present: false, reason, properties: [] }),
       close_reason: Some(ConnectRejected),
@@ -85,6 +86,24 @@ fn BrokerRuntime::handle_mqtt5_packet(
     Some(value) => value
     None => return []
   }
+  if event.rx_error is Some(reason) {
+    if event.packet is Publish5(publish) && reason == 0x91 {
+      return self.mqtt5_publish_failure(
+        event.connection_id,
+        publish,
+        reason,
+        None,
+      )
+    }
+    return [
+      SendMqtt5({
+        rx_permit: None,
+        connection_id: event.connection_id,
+        packet: Disconnect5({ reason, properties: [] }),
+        close_reason: Some(ProtocolError),
+      }),
+    ]
+  }
   match (meta.phase, event.packet) {
     (AwaitConnect, Connect5(connect)) => {
       if !self.config.protocol_config().mqtt5_enabled {
@@ -101,7 +120,7 @@ fn BrokerRuntime::handle_mqtt5_packet(
           return self.reject_mqtt5_connect(event.connection_id, error.reason)
       }
       // The first runtime activation stage keeps unsupported state out of V3 storage.
-      if plan.will is Some(_) || plan.retention != @session.DropOnClose {
+      if plan.will is Some(_) {
         return self.reject_mqtt5_connect(event.connection_id, 0x83)
       }
       self.v5_pending.set(event.connection_id, {
@@ -138,6 +157,7 @@ fn BrokerRuntime::handle_mqtt5_packet(
         client_id,
         current.principal.unwrap(),
         packet,
+        event.rx_permit,
       )
     }
     (Active(client_id), Subscribe5(packet)) if self.v5_active.contains(
@@ -177,6 +197,38 @@ fn BrokerRuntime::handle_mqtt5_packet(
       })
       self.handle_v5_unsubscribe(event.connection_id, client_id, packet)
     }
+    (Active(client_id), Puback5(_) | Pubrec5(_) | Pubcomp5(_)) if self.v5_active.contains(
+        event.connection_id,
+      ) => {
+      if self.active_by_client.get(client_id) != Some(event.connection_id) {
+        return []
+      }
+      if !self.connection_credential_current(event.connection_id) {
+        return self.terminate(event.connection_id, PolicyRevoked)
+      }
+      let current = self.connections.get(event.connection_id).unwrap()
+      self.connections.set(event.connection_id, {
+        ..current,
+        last_control_at_ms: event.received_at_ms,
+      })
+      self.handle_v5_outbound_ack(event.connection_id, client_id, event.packet)
+    }
+    (Active(client_id), Pubrel5(packet)) if self.v5_active.contains(
+        event.connection_id,
+      ) => {
+      if self.active_by_client.get(client_id) != Some(event.connection_id) {
+        return []
+      }
+      if !self.connection_credential_current(event.connection_id) {
+        return self.terminate(event.connection_id, PolicyRevoked)
+      }
+      let current = self.connections.get(event.connection_id).unwrap()
+      self.connections.set(event.connection_id, {
+        ..current,
+        last_control_at_ms: event.received_at_ms,
+      })
+      self.handle_v5_pubrel(event.connection_id, client_id, packet)
+    }
     (Active(client_id), packet) if self.v5_active.contains(event.connection_id) &&
       mqtt5_legacy_input(packet) is Some(legacy) => {
       if self.active_by_client.get(client_id) != Some(event.connection_id) {
@@ -204,20 +256,45 @@ fn BrokerRuntime::handle_mqtt5_packet(
       })
       [
         SendMqtt5({
+          rx_permit: None,
           connection_id: event.connection_id,
           packet: Pingresp5,
           close_reason: None,
         }),
       ]
     }
-    (Active(_), Disconnect5(disconnect)) if self.v5_active.contains(
+    (Active(client_id), Disconnect5(disconnect)) if self.v5_active.contains(
         event.connection_id,
-      ) =>
+      ) => {
+      let initial = self.v5_active.get(event.connection_id).unwrap()
+      for property in disconnect.properties {
+        if property.id == 0x11 &&
+          property.value is @protocol.FourByteValue(seconds) {
+          if initial.retention == @session.DropOnClose && seconds != 0U {
+            return [
+              SendMqtt5({
+                rx_permit: None,
+                connection_id: event.connection_id,
+                packet: Disconnect5({ reason: 0x82, properties: [] }),
+                close_reason: Some(ProtocolError),
+              }),
+            ]
+          }
+          let retention = @session.retention_from_connect(seconds)
+          if self.broker_state.apply(
+              @router.UpdateV5Retention({ client_id, retention }),
+            )
+            is Err(_) {
+            return self.terminate(event.connection_id, ProtocolError)
+          }
+        }
+      }
       if disconnect.reason == 0 {
         self.terminate(event.connection_id, NormalDisconnect)
       } else {
         self.terminate(event.connection_id, PeerEof)
       }
+    }
     _ => self.terminate(event.connection_id, ProtocolError)
   }
 }

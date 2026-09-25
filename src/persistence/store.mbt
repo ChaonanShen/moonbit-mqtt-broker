@@ -290,13 +290,32 @@ pub async fn SnapshotStore::load_state(
       Ok(value) => value
       Err(error) => raise error
     }
-    let snapshot = match decode_snapshot(data, limits, workspace~) {
-      Ok(value) => value
-      Err(error) => raise error
-    }
-    match @router.BrokerState::from_snapshot(broker_config, snapshot, ledger~) {
-      Ok(state) => Ok(state)
-      Err(_) => Err(SnapshotImport("router rejected decoded snapshot"))
+    if data.length() >= 10 && data[8] == 0 && data[9] == 5 {
+      let snapshot = match decode_snapshot_v5(data, limits) {
+        Ok(value) => value
+        Err(error) => raise error
+      }
+      match
+        @router.BrokerState::from_snapshot_v5(
+          broker_config,
+          snapshot,
+          @budget.monotonic_ms(),
+          @async.now(),
+          ledger~,
+        ) {
+        Ok(state) => Ok(state)
+        Err(_) => Err(SnapshotImport("router rejected V5 snapshot"))
+      }
+    } else {
+      let snapshot = match decode_snapshot(data, limits, workspace~) {
+        Ok(value) => value
+        Err(error) => raise error
+      }
+      match
+        @router.BrokerState::from_snapshot(broker_config, snapshot, ledger~) {
+        Ok(state) => Ok(state)
+        Err(_) => Err(SnapshotImport("router rejected decoded snapshot"))
+      }
     }
   } catch {
     error => Err(error)
@@ -330,6 +349,31 @@ pub async fn SnapshotStore::save(
     Ok(value) => value
     Err(error) => return Err(error)
   }
+  self.save_encoded(encoded)
+}
+
+///|
+pub async fn SnapshotStore::save_v5(
+  self : SnapshotStore,
+  snapshot : @router.BrokerSnapshotV5,
+) -> Result[Int, PersistenceError] {
+  if self.closed {
+    return Err(FileSystem(operation="save-closed-store", path=self.data_dir))
+  }
+  let max_bytes = self.config.max_snapshot_bytes().to_int()
+  let encoded = match
+    encode_snapshot_v5(snapshot, max_snapshot_bytes=max_bytes) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  self.save_encoded(encoded)
+}
+
+///|
+async fn SnapshotStore::save_encoded(
+  self : SnapshotStore,
+  encoded : Bytes,
+) -> Result[Int, PersistenceError] {
   let mut renamed = false
   try {
     best_effort_remove(self.temp_path)

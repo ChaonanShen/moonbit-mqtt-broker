@@ -66,3 +66,12 @@ pub fn TxWindow::close(self : TxWindow) -> Unit {
   self.leases.clear()
   self.available = self.initial
 }
+
+///|
+pub fn TxWindow::terminal_packet(self : TxWindow, packet_id : Int) -> Bool {
+  let lease = match self.leases.get(packet_id.to_int64()) {
+    Some(value) => value
+    None => return false
+  }
+  self.terminal(lease)
+}
