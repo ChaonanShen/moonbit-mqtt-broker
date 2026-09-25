@@ -392,6 +392,11 @@ suberror PolicyWriteRevoked {
 } derive(Debug)
 
 ///|
+suberror PartialWriteInterrupted {
+  PartialWriteInterrupted
+} derive(Debug)
+
+///|
 async fn ConnectionTransport::write(
   self : ConnectionTransport,
   bytes : Bytes,
@@ -433,7 +438,7 @@ async fn ConnectionTransport::write(
         offset = end
         if stream.sink is Some(sink) {
           if sink.ws_closing {
-            break
+            raise PartialWriteInterrupted
           }
           for _ in 0..<2 {
             match sink.take_ws_control() {
@@ -446,7 +451,7 @@ async fn ConnectionTransport::write(
             }
           }
           if sink.ws_closing {
-            break
+            raise PartialWriteInterrupted
           }
         }
       }

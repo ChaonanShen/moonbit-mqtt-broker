@@ -208,3 +208,84 @@ test "C-T20 mailbox rejection keeps only the admitted offer budget" {
   bus.close()
   assert_eq(state.managed_bytes(), 0L)
 }
+
+///|
+async test "C-T24 partial WS MQTT write closes without installing alias" {
+  let (bus, state, _) = bus_fixture()
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  defer listener.close()
+  let client = @socket.Tcp::connect(listener.addr)
+  defer client.close()
+  let (socket, _) = listener.accept()
+  defer socket.close()
+  let stream_sink = TransportSink::new(2)
+  defer stream_sink.close()
+  stream_sink.ws_closing = true
+  let stream : WebSocketStream = {
+    raw: Plain(socket),
+    decoder: WebSocketDecoder::new(1024, 2048),
+    pending: b"",
+    pending_offset: 0,
+    deferred_data: [],
+    suffix: b"",
+    sink: Some(stream_sink),
+    receive_pool: None,
+    receive_ticket: None,
+    bus,
+    connection_id: ConnectionId::new(204L),
+  }
+  let writer_sink = TransportSink::new(2)
+  defer writer_sink.close()
+  writer_sink.set_writer_gate(_ => true)
+  let packet : @protocol.PacketV5 = @protocol.Publish5({
+    topic: "partial/alias",
+    payload: b"value",
+    qos: @protocol.QoS1,
+    packet_id: Some(@protocol.PacketId::new(1).unwrap()),
+    dup: false,
+    retain: false,
+    properties: [],
+  })
+  let owner : OutboundAuthorization = {
+    connection_id: ConnectionId::new(204L),
+    client_id: @session.ClientId::new("partial-client").unwrap(),
+    session_incarnation: Some(1L),
+    delivery_id: Some(1L),
+    packet_id: Some(@session.SessionPacketId::new(1).unwrap()),
+    topic: @topic.TopicName::new("partial/alias").unwrap(),
+  }
+  assert_eq(
+    writer_sink.offer_delivery(packet, owner, None, 1024, 2, 4096, None),
+    Ok(true),
+  )
+  let offer = writer_sink.take_delivery_offer(1L).unwrap()
+  assert_eq(
+    write_delivery_offer(
+      ConnectionTransport::WebSocket(stream),
+      writer_sink,
+      None,
+      offer,
+      1000,
+    ),
+    Some(WriteFailure),
+  )
+  assert_eq(writer_sink.outbound_aliases.length(), 0)
+  assert_eq(writer_sink.pending_outbound_aliases.length(), 0)
+  let mqtt = @protocol.encode_v5(
+    @protocol.Publish5({
+      topic: "partial/alias",
+      payload: b"value",
+      qos: @protocol.QoS1,
+      packet_id: Some(@protocol.PacketId::new(1).unwrap()),
+      dup: false,
+      retain: false,
+      properties: [{ id: 0x23, value: @protocol.TwoByteValue(1) }],
+    }),
+    @protocol.ServerToClient,
+    1024,
+  ).unwrap()
+  let first_frame = websocket_encode_frame(2, mqtt).unwrap()
+  assert_eq(client.read_exactly(first_frame.length()), first_frame)
+  bus.close()
+  assert_eq(state.managed_bytes(), 0L)
+}
