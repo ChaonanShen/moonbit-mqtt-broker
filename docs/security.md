@@ -1,6 +1,6 @@
 # Security
 
-[中文](security.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.zh_CN.md) | **English**
 
 Authentication and authorization are optional single-node configuration. There is
 no per-user mutation API; when reload is enabled, a verified bundle can replace
@@ -36,8 +36,8 @@ permission, the whole Session is evicted and a reconnect reports
 `SessionPresent=false`; its other queued messages are lost too. Bytes already
 written to a socket cannot be recalled. A rollback is another new generation
 and does not restore evicted Sessions. See
-[reload configuration](configuration.md#live-configuration-reload) and
-[durability](persistence.md#reload-and-recovery).
+[reload configuration](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.md#live-configuration-reload) and
+[durability](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.md#reload-and-recovery).
 
 ## Native runtime and reproducible tests
 
@@ -108,11 +108,11 @@ Client IDs, filters, and application payloads.
 
 ## Authentication resource admission
 
-A complete request requiring password verification consumes global/IP attempt tokens once before reserving input and conservative workspace costs for its validated PHC. Bad passwords, unknown users and later resource failure do not refund consumed tokens. Anonymous connections bypass hash admission but retain connection/transport caps. A bounded native pthread executor owns C copies of the password and PHC while workers run; the routing loop retains only secret-free identity metadata and consumes fixed-size results. Disconnect and timeout invalidate activation but do not free a running job early. CONNECT pipelining is held behind a one-shot reader gate until CONNACK is queued. The supported PHC envelope is at most 65536 KiB memory, 10 iterations and parallelism 4. Verify the isolation and saturation behavior with `scripts/verify-auth-isolation-docker.sh`. See the [resource contract](resource-budgets.md).
+A complete request requiring password verification consumes global/IP attempt tokens once before reserving input and conservative workspace costs for its validated PHC. Bad passwords, unknown users and later resource failure do not refund consumed tokens. Anonymous connections bypass hash admission but retain connection/transport caps. A bounded native pthread executor owns C copies of the password and PHC while workers run; the routing loop retains only secret-free identity metadata and consumes fixed-size results. Disconnect and timeout invalidate activation but do not free a running job early. CONNECT pipelining is held behind a one-shot reader gate until CONNACK is queued. The supported PHC envelope is at most 65536 KiB memory, 10 iterations and parallelism 4. Verify the isolation and saturation behavior with `scripts/verify-auth-isolation-docker.sh`. See the [resource contract](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md).
 
 ## Management bearer tokens
 
-The separate [management API](management.md) uses explicit `metrics`,
+The separate [management API](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.md) uses explicit `metrics`,
 `read`, `operator` and `config_admin` roles; none implies another. Its digest
 file is startup-only and is
 unrelated to the MQTT PasswordDatabase or ACL. It must be a private regular

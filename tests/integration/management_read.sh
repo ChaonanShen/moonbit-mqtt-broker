@@ -91,7 +91,7 @@ mosquitto_pub -h 127.0.0.1 -p "${mqtt_port}" -i management-smoke \
 curl -fsS --max-time 2 -H "Authorization: Bearer ${READ_TOKEN}" \
   "http://127.0.0.1:${admin_port}/v1/status" >"${WORK_DIR}/status"
 grep -qF '"api_version":"1"' "${WORK_DIR}/status"
-grep -qF '"version":"0.2.0"' "${WORK_DIR}/status"
+grep -qF '"version":"0.3.0"' "${WORK_DIR}/status"
 ! grep -qF "${WORK_DIR}/tokens" "${WORK_DIR}/status"
 ! grep -qF "${METRICS_TOKEN}" "${WORK_DIR}/broker.log"
 ! grep -qF "${READ_TOKEN}" "${WORK_DIR}/broker.log"

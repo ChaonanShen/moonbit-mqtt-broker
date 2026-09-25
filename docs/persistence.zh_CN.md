@@ -1,6 +1,6 @@
 # 本地持久化：快照与严格 WAL
 
-**中文** | [English](persistence.md)
+**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.md)
 
 不提供 `--data-dir PATH` 时为 `off`，不会创建持久化文件。提供数据目录但
 未指定模式时仍使用兼容的 `snapshot`；显式设置 `--persistence-mode strict`
@@ -161,6 +161,6 @@ epoch，V2 保留 owner 与 epoch。下一次状态变化或停机提交写 V3�
 
 ## 快照字节预算
 
-导出、排队、编码和实际写入共用 snapshot-work 预算；覆盖旧请求会归还其预算，正在写的请求持票至真实保存完成。恢复会在构造记录/复制 payload 前检查类别、会话和全局字节上限，且不改变 V1/V2/V3 格式。预算不足时保留 dirty 状态并产生受限诊断，最终未提交的快照导致关闭失败；不裁剪既有快照或静默空状态启动。文件类型在大小读取前检查，FIFO、目录和符号链接不作为快照读取。详见[资源契约与诊断指标](resource-budgets.md)。
+导出、排队、编码和实际写入共用 snapshot-work 预算；覆盖旧请求会归还其预算，正在写的请求持票至真实保存完成。恢复会在构造记录/复制 payload 前检查类别、会话和全局字节上限，且不改变 V1/V2/V3 格式。预算不足时保留 dirty 状态并产生受限诊断，最终未提交的快照导致关闭失败；不裁剪既有快照或静默空状态启动。文件类型在大小读取前检查，FIFO、目录和符号链接不作为快照读取。详见[资源契约与诊断指标](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md)。
 
 严格模式的 WAL 写入或同步结果不确定时会隔离业务准入；只读管理诊断仍可用。快照模式的失败重试策略不适用于严格模式。

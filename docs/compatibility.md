@@ -1,17 +1,17 @@
 # Compatibility and support matrix
 
-[中文](compatibility.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.zh_CN.md) | **English**
 
 | Capability | Current status | Notes |
 | --- | --- | --- |
 | Linux x86_64 Native build | Supported | Pinned Docker and CI path |
-| Optional loopback management HTTP | Supported | Anonymous live/ready; scoped Bearer metrics/status, bounded reads and kick/delete Operations; reload remains out of scope |
+| Optional loopback management HTTP | Supported | Anonymous live/ready; scoped Bearer metrics/status, bounded reads and kick/delete Operations; optional config-admin reload |
 | MQTT 3.1.1 CONNECT / CONNACK | Supported | Full clean/persistent `session_present` semantics |
 | TCP split/sticky packet framing | Supported | Capacity-aware reader plus bounded three-state decoder |
 | Equal packet/receive limits | Supported | 16/16 boundary covers complete CONNECT plus sticky PINGREQ |
 | Packet codec for QoS 0/1/2 families | Supported | Complete-frame adapter; Packet ID/DUP combinations gated |
-| MQTT.js 5.15.2 interoperability | Supported for 0.2.0 | QoS 0/1/2, retained/Will, persistent Session and multi-process restart |
-| Mosquitto 2.0.18 interoperability | Supported for 0.2.0 | QoS 0/1/2, retained and persistent offline restart delivery |
+| MQTT.js 5.15.2 interoperability | Supported | QoS 0/1/2, retained/Will, persistent Session and multi-process restart |
+| Mosquitto 2.0.18 interoperability | Supported | QoS 0/1/2, retained and persistent offline restart delivery |
 | Aedes 1.1.1 reference matrix | Test-only | Normalized common behavior; no runtime dependency or plugin compatibility claim |
 | Topic validation and PUBLISH/SUBSCRIBE routing | Supported | `+`, `#`, `$SYS`, overlap merge, deterministic order |
 | Keep Alive and PING | Supported | 1.5× deadline; zero disables idle timeout |
@@ -28,7 +28,7 @@
 | State across Broker restart | Supported when `--data-dir` is set | Snapshot defaults to latest committed revision; explicit strict WAL replays complete committed LSNs |
 | SIGTERM / SIGINT shutdown | Supported | Suppresses active Wills; snapshot drains final revision, strict drains accepted WAL and detach work |
 | TLS listener | Supported, opt-in | Shared multi-listener Broker; private startup PEM snapshot and bounded handshakes |
-| MQTT.js/Mosquitto over TLS | Supported for 0.2.0 | QoS 0/1/2, retained, persistent Session and restart recovery |
+| MQTT.js/Mosquitto over TLS | Supported | QoS 0/1/2, retained, persistent Session and restart recovery |
 | Argon2id authentication | Supported, opt-in | Encoded hashes only; anonymous allowed by default |
 | Bounded authentication executor | Supported | Native worker/queue limits, timeout and cancellation-safe cleanup |
 | Resource and rate admission | Supported, enabled by default | Logical byte budgets plus connection/authentication/publish policies |
@@ -42,6 +42,7 @@
 | MQTT 5 | Unsupported | Out of scope |
 | WebSocket / WSS | Supported, opt-in | Binary MQTT frames, mqtt subprotocol, Origin allowlist and bounded Upgrade |
 | Shared subscriptions / Bridge / plugins / cluster | Unsupported | Single-node Broker only |
+| Live configuration reload | Supported, opt-in | Verified bundle; SIGHUP or config-admin; passwords, ACLs, TLS/WSS and supported runtime fields; disabled by default |
 | Strict local WAL | Supported, opt-in | Commit-before-ACK for defined persistent state; fenced on uncertain write, no replication |
 | External database / cluster / end-to-end zero-loss | Unsupported | Single-node storage and MQTT exchange boundary only |
 
@@ -80,7 +81,7 @@ reference only, and no Aedes source is linked into the Broker.
 
 TLS uses the pinned `moonbitlang/async@0.20.6` OpenSSL-backed Native transport.
 Each listener selects TCP, TLS, WS or WSS; all entries share one Broker state.
-mTLS, SNI routing, certificate reload and Windows TLS are not claimed.
+mTLS, SNI routing and Windows TLS are not claimed. Existing TLS/WSS certificate material can rotate through a verified reload bundle.
 The dependency currently marks its server-side TLS constructors experimental;
 this release pins the exact version and validates startup, rejection,
 interoperability, concurrency, shutdown, and restart behavior in CI.

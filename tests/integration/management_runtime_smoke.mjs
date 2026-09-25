@@ -42,7 +42,7 @@ try {
   const metrics = await get('/metrics', token)
   assert.equal(metrics.status, 200)
   assert.match(metrics.headers['content-type'], /^text\/plain; version=0\.0\.4/)
-  assert.match(metrics.body, /moonbit_mqtt_broker_build_info\{version="0.2.0",target="native"\} 1/)
+  assert.match(metrics.body, /moonbit_mqtt_broker_build_info\{version="0.3.0",target="native"\} 1/)
   const status = await get('/v1/status', token)
   assert.equal(status.status, 200)
   assert.equal(JSON.parse(status.body).api_version, '1')

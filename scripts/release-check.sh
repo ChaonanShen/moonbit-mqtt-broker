@@ -4,7 +4,7 @@ set -euo pipefail
 readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-readonly EXPECTED_VERSION="${RELEASE_VERSION:-0.2.0}"
+readonly EXPECTED_VERSION="${RELEASE_VERSION:-0.3.0}"
 readonly EXPECTED_SHA="${RELEASE_SHA:-$(git rev-parse HEAD)}"
 readonly PACKAGE="${RELEASE_PACKAGE_PATH:-${REPO_ROOT}/_build/publish/ChaonanShen-moonbit-mqtt-broker-${EXPECTED_VERSION}.zip}"
 readonly EVIDENCE_DIR="${RELEASE_EVIDENCE_DIR:-}"

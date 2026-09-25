@@ -20,7 +20,7 @@
 
 “接口已提供”和“功能已实现”分别验收。未实现接口必须能编译、被引用、被调用、被识别；不能仅写在文档里，也不能返回假的成功结果。
 
-第一轮不以完成 MQTT 5、完整客户端、动态插件或 C 绑定为完成条件。它们均有明确入口和缺口，后续单独实现。C 内存函数、裸指针和重复的同步/异步变体按 MoonBit 类型与 async 模型归并，见[接口对照清单](moonbit-api-mosquitto-map.zh_CN.md)。
+第一轮不以完成 MQTT 5、完整客户端、动态插件或 C 绑定为完成条件。它们均有明确入口和缺口，后续单独实现。C 内存函数、裸指针和重复的同步/异步变体按 MoonBit 类型与 async 模型归并，见[接口对照清单](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/moonbit-api-mosquitto-map.zh_CN.md)。
 
 ## 2. 当前基础与新增工程
 
@@ -201,5 +201,5 @@ M2–M4 是主要风险所在，宜分成连贯候选批次交付。不能只有
 - [Broker 能力](https://github.com/eclipse-mosquitto/mosquitto/blob/6aaba32614eb1160ddbfeafd616f9f67e7914a41/include/mosquitto/broker.h)
 - [插件契约](https://github.com/eclipse-mosquitto/mosquitto/blob/6aaba32614eb1160ddbfeafd616f9f67e7914a41/include/mosquitto/broker_plugin.h)
 - [客户端 API](https://github.com/eclipse-mosquitto/mosquitto/blob/6aaba32614eb1160ddbfeafd616f9f67e7914a41/include/mosquitto/libmosquitto.h)
-- [项目架构](architecture.zh_CN.md)、[兼容性](compatibility.zh_CN.md)、[管理](management.zh_CN.md)、[持久化](persistence.zh_CN.md)
+- [项目架构](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/architecture.zh_CN.md)、[兼容性](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.zh_CN.md)、[管理](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.zh_CN.md)、[持久化](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.zh_CN.md)
 - 实施与 CI 交接：远端本地文档 `p1-ci-handoff.local.md`（不随发布包分发）。
