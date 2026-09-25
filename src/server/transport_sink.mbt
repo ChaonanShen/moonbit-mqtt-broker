@@ -2,6 +2,7 @@
 pub(all) enum OutboundCommand {
   WriteFrame(Bytes)
   WriteFrameThenClose(Bytes, CloseReason)
+  OfferDelivery(Int64)
   CloseAfterPending(CloseReason)
   WritePriorityWake
   WriteWsWake
@@ -14,6 +15,7 @@ pub(all) struct OutboundAuthorization {
   client_id : @session.ClientId
   session_incarnation : Int64?
   delivery_id : Int64?
+  packet_id : @session.SessionPacketId?
   topic : @topic.TopicName
 }
 
@@ -40,6 +42,29 @@ priv struct OwnedFrame {
 }
 
 ///|
+priv struct DeliveryOffer {
+  packet : @protocol.PacketV5
+  expiry_deadline : @session.Deadline?
+  authorization : OutboundAuthorization
+  peer_limit : Int
+  alias_limit : Int
+  alias_bytes : Int
+  close_reason : CloseReason?
+  ticket : @budget.Ticket?
+}
+
+///|
+priv struct WriteMailbox {
+  offers : Map[Int64, DeliveryOffer]
+  mut next_id : Int64
+}
+
+///|
+fn WriteMailbox::new() -> WriteMailbox {
+  { offers: Map([]), next_id: 1L }
+}
+
+///|
 pub struct TransportSink {
   priv mut handshake : (FrameReservation, @budget.Ticket)?
   rx_ledger : WireRxLedger
@@ -58,6 +83,7 @@ pub struct TransportSink {
   mut outbound_alias_bytes : Int
   priv mut budget : (@budget.Ledger, @budget.Pool, @budget.Pool)?
   priv mut owned : Array[OwnedFrame]
+  priv mailbox : WriteMailbox
   priv mut writer_gate : ((OutboundAuthorization) -> Bool)?
   priv mut handshake_resolved : Bool
   priv handshake_gate : @async.Queue[Bool]
@@ -92,6 +118,7 @@ pub fn TransportSink::new(
     outbound_alias_bytes: 0,
     budget: None,
     owned: [],
+    mailbox: WriteMailbox::new(),
     writer_gate: None,
     handshake_resolved: false,
     handshake_gate: @async.Queue(kind=Blocking(1)),
@@ -210,6 +237,10 @@ pub fn TransportSink::close(self : TransportSink) -> Unit {
     release_optional(frame.ticket)
   }
   self.owned = []
+  for _, offer in self.mailbox.offers {
+    release_optional(offer.ticket)
+  }
+  self.mailbox.offers.clear()
   self.writer_gate = None
   if !self.handshake_resolved {
     self.resolve_handshake(false)
@@ -364,6 +395,64 @@ fn TransportSink::enqueue_frame(
     })
   }
   accepted
+}
+
+///|
+fn TransportSink::offer_delivery(
+  self : TransportSink,
+  packet : @protocol.PacketV5,
+  authorization : OutboundAuthorization,
+  expiry_deadline : @session.Deadline?,
+  peer_limit : Int,
+  alias_limit : Int,
+  alias_bytes : Int,
+  close_reason : CloseReason?,
+) -> Result[Bool, CloseReason] {
+  if self.mailbox.next_id == 9223372036854775807L {
+    return Err(ResourceExhausted)
+  }
+  let measured = match
+    @protocol.encode_v5(packet, @protocol.ServerToClient, 268435460) {
+    Ok(value) => value.length().to_int64()
+    Err(_) => return Err(EncodeFailure)
+  }
+  let reservation = match
+    self.reserve_frame(measured + authorization.cost() + 128L, false) {
+    Ok(value) => value
+    Err(_) => return Err(SlowConsumer)
+  }
+  let id = self.mailbox.next_id
+  self.mailbox.next_id += 1L
+  let ticket = reservation.map(value => value.ticket)
+  if ticket is Some(value) {
+    value.commit().unwrap()
+  }
+  self.mailbox.offers.set(id, {
+    packet,
+    expiry_deadline,
+    authorization,
+    peer_limit,
+    alias_limit,
+    alias_bytes,
+    close_reason,
+    ticket,
+  })
+  if !(self.outbound.try_put(OfferDelivery(id)) catch { _ => false }) {
+    self.mailbox.offers.remove(id)
+    release_optional(ticket)
+    return Err(SlowConsumer)
+  }
+  Ok(true)
+}
+
+///|
+fn TransportSink::take_delivery_offer(
+  self : TransportSink,
+  id : Int64,
+) -> DeliveryOffer? {
+  let offer = self.mailbox.offers.get(id)
+  self.mailbox.offers.remove(id)
+  offer
 }
 
 ///|

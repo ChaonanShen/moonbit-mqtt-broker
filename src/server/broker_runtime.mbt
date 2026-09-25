@@ -220,6 +220,19 @@ pub fn BrokerRuntime::authorize_outbound(
     Some(expected) {
     return false
   }
+  if authorization.delivery_id is Some(expected) {
+    let packet_id = match authorization.packet_id {
+      Some(value) => value
+      None => return false
+    }
+    if self.broker_state.inflight_delivery_id(
+        authorization.client_id,
+        packet_id,
+      ) !=
+      Some(expected) {
+      return false
+    }
+  }
   let principal = match meta.principal {
     Some(value) => value
     None => return false

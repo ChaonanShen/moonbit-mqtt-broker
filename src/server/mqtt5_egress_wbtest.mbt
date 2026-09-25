@@ -59,6 +59,7 @@ async test "C-T21 expired fresh MQTT5 write reports not started" {
       client_id: @session.ClientId::new("expiry-writer").unwrap(),
       session_incarnation: Some(1L),
       delivery_id: Some(42L),
+      packet_id: Some(@session.SessionPacketId::new(7).unwrap()),
       topic: @topic.TopicName::new("expiry/write").unwrap(),
     }
     assert_true(
@@ -180,6 +181,21 @@ test "C-T21 write-not-started receipt releases staged QoS1 state" {
       @session.SessionPacketId::new(packet_id.value()).unwrap(),
     )
     .unwrap()
+  let authorization : OutboundAuthorization = {
+    connection_id,
+    client_id,
+    session_incarnation: state.policy_session_incarnation(client_id),
+    delivery_id: Some(live_delivery_id),
+    packet_id: Some(@session.SessionPacketId::new(packet_id.value()).unwrap()),
+    topic: @topic.TopicName::new("writer/a").unwrap(),
+  }
+  assert_true(runtime.authorize_outbound(authorization))
+  assert_false(
+    runtime.authorize_outbound({
+      ..authorization,
+      delivery_id: Some(live_delivery_id + 1L),
+    }),
+  )
   let stale = runtime.apply(
     WriteNotStarted({
       connection_id,

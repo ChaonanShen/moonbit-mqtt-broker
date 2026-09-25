@@ -154,7 +154,10 @@ fn BrokerRuntime::handle_write_not_started(
         negative: event.qos == @protocol.QoS2,
       }),
     ) {
-    Ok(actions) => self.map_broker_actions(actions)
+    Ok(actions) => {
+      self.metrics.record_dropped()
+      self.map_broker_actions(actions)
+    }
     Err(_) => self.terminate(event.connection_id, ProtocolError)
   }
 }

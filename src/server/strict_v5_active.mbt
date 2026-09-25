@@ -574,5 +574,8 @@ pub fn BrokerRuntime::prepare_strict_write_not_started(
     Ok(value) => value
     Err(_) => return StrictClose(event.connection_id, ProtocolError)
   }
-  StrictPrepared(Ack(plan), actions => self.map_broker_actions(actions))
+  StrictPrepared(Ack(plan), actions => {
+    self.metrics.record_dropped()
+    self.map_broker_actions(actions)
+  })
 }

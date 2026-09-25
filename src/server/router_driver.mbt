@@ -1041,6 +1041,9 @@ fn RouterDriver::encode_v5_and_queue(
             @session.SessionPacketId::new(packet_id.value()).unwrap(),
           )
         }),
+        packet_id: publish.packet_id.map(packet_id => {
+          @session.SessionPacketId::new(packet_id.value()).unwrap()
+        }),
         topic,
       }
       if !self.runtime.authorize_outbound(value) {
@@ -1054,6 +1057,31 @@ fn RouterDriver::encode_v5_and_queue(
     .get(connection_id)
     .map(plan => plan.peer_max_packet_bytes)
     .unwrap_or(self.runtime.config.max_packet_size())
+  if packet is Publish5(publish) &&
+    publish.qos != @protocol.QoS0 &&
+    rx_permit is None &&
+    authorization is Some(owner) {
+    let alias_limit = self.runtime.v5_active
+      .get(connection_id)
+      .map(plan => {
+        if plan.peer_topic_alias_maximum <
+          self.runtime.config.protocol_config().topic_alias_maximum {
+          plan.peer_topic_alias_maximum
+        } else {
+          self.runtime.config.protocol_config().topic_alias_maximum
+        }
+      })
+      .unwrap_or(0)
+    return sink.offer_delivery(
+      packet,
+      owner,
+      expiry_deadline,
+      peer_limit,
+      alias_limit,
+      self.runtime.config.protocol_config().max_alias_bytes_per_connection,
+      close,
+    )
+  }
   let mut outgoing = packet
   let mut alias_proposal = AliasNone
   if packet is Publish5(publish) &&
@@ -1197,6 +1225,7 @@ fn RouterDriver::encode_and_queue(
             .broker_state()
             .policy_session_incarnation(client_id),
             delivery_id: None,
+            packet_id: None,
             topic,
           }
           if !self.runtime.authorize_outbound(value) {
