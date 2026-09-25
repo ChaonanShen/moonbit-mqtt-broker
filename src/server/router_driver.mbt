@@ -983,11 +983,16 @@ fn RouterDriver::skip_oversized_fresh_publish(
     Some(value) => value
     None => return false
   }
+  let delivery_id = match owner.delivery_id {
+    Some(value) if value > 0L => value
+    _ => return false
+  }
   let event : WriteNotStartedEvent = {
     connection_id,
     client_id: owner.client_id,
     session_incarnation: owner.session_incarnation,
     packet_id: publish.packet_id.unwrap(),
+    delivery_id,
     qos: publish.qos,
   }
   if self.strict is Some(_) {
@@ -1028,6 +1033,14 @@ fn RouterDriver::encode_v5_and_queue(
         session_incarnation: self.runtime
         .broker_state()
         .policy_session_incarnation(client_id),
+        delivery_id: publish.packet_id.bind(packet_id => {
+          self.runtime
+          .broker_state()
+          .inflight_delivery_id(
+            client_id,
+            @session.SessionPacketId::new(packet_id.value()).unwrap(),
+          )
+        }),
         topic,
       }
       if !self.runtime.authorize_outbound(value) {
@@ -1183,6 +1196,7 @@ fn RouterDriver::encode_and_queue(
             session_incarnation: self.runtime
             .broker_state()
             .policy_session_incarnation(client_id),
+            delivery_id: None,
             topic,
           }
           if !self.runtime.authorize_outbound(value) {

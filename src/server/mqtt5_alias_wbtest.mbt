@@ -6,9 +6,9 @@ test "C-T22 cancelled alias definition cannot be reused" {
   assert_eq(sink.propose_outbound_alias("sensors/a", 4, 4096), AliasNone)
   sink.outbound_alias_cancel(first)
   let second = sink.propose_outbound_alias("sensors/a", 4, 4096)
-  assert_eq(second, AliasDefine(2, "sensors/a"))
+  assert_eq(second, AliasDefine(1, "sensors/a"))
   sink.outbound_alias_written(second)
-  assert_eq(sink.propose_outbound_alias("sensors/a", 4, 4096), AliasReuse(2))
+  assert_eq(sink.propose_outbound_alias("sensors/a", 4, 4096), AliasReuse(1))
   sink.close()
 }
 
@@ -75,4 +75,23 @@ test "C-T27 alias byte quota is shared across inbound and outbound tables" {
     Err({ reason: 0x97 }),
   )
   assert_eq(runtime.inbound_aliases.get(connection_id).unwrap().length(), 0)
+}
+
+///|
+test "C-T22 out-of-order alias cancellation reuses smallest free identity once" {
+  let sink = TransportSink::new(8)
+  let first = sink.propose_outbound_alias("alias/a", 4, 4096)
+  let second = sink.propose_outbound_alias("alias/b", 4, 4096)
+  assert_eq(first, AliasDefine(1, "alias/a"))
+  assert_eq(second, AliasDefine(2, "alias/b"))
+  sink.outbound_alias_cancel(first)
+  sink.outbound_alias_cancel(first)
+  assert_eq(
+    sink.propose_outbound_alias("alias/c", 4, 4096),
+    AliasDefine(1, "alias/c"),
+  )
+  sink.outbound_alias_written(second)
+  assert_eq(sink.propose_outbound_alias("alias/b", 4, 4096), AliasReuse(2))
+  assert_eq(sink.free_outbound_aliases.length(), 0)
+  sink.close()
 }

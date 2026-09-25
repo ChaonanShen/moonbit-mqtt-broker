@@ -550,7 +550,12 @@ pub fn BrokerRuntime::prepare_strict_write_not_started(
 ) -> StrictPacketPlan {
   if self.active_by_client.get(event.client_id) != Some(event.connection_id) ||
     self.broker_state.policy_session_incarnation(event.client_id) !=
-    event.session_incarnation {
+    event.session_incarnation ||
+    self.broker_state.inflight_delivery_id(
+      event.client_id,
+      @session.SessionPacketId::new(event.packet_id.value()).unwrap(),
+    ) !=
+    Some(event.delivery_id) {
     return StrictImmediate([])
   }
   let kind = if event.qos == @protocol.QoS2 {

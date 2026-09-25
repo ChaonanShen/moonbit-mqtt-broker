@@ -23,7 +23,13 @@ fn TransportSink::propose_outbound_alias(
       return AliasNone
     }
   }
-  if self.next_outbound_alias > maximum || self.next_outbound_alias > 65535 {
+  let mut selected = self.next_outbound_alias
+  for free in self.free_outbound_aliases {
+    if free < selected {
+      selected = free
+    }
+  }
+  if selected > maximum || selected > 65535 {
     return AliasNone
   }
   let bytes = 64 + @utf8.encode(topic).length()
@@ -43,10 +49,18 @@ fn TransportSink::propose_outbound_alias(
     max_bytes - inbound_bytes - self.outbound_alias_bytes - pending_bytes {
     return AliasNone
   }
-  let id = self.next_outbound_alias
-  self.next_outbound_alias += 1
-  self.pending_outbound_aliases.set(id, topic)
-  AliasDefine(id, topic)
+  if selected == self.next_outbound_alias {
+    self.next_outbound_alias += 1
+  } else {
+    for index in 0..<self.free_outbound_aliases.length() {
+      if self.free_outbound_aliases[index] == selected {
+        ignore(self.free_outbound_aliases.remove(index))
+        break
+      }
+    }
+  }
+  self.pending_outbound_aliases.set(selected, topic)
+  AliasDefine(selected, topic)
 }
 
 ///|
@@ -74,7 +88,9 @@ fn TransportSink::outbound_alias_cancel(
   self : TransportSink,
   proposal : OutboundAliasProposal,
 ) -> Unit {
-  if proposal is AliasDefine(id, _) {
+  if proposal is AliasDefine(id, topic) &&
+    self.pending_outbound_aliases.get(id) == Some(topic) {
     self.pending_outbound_aliases.remove(id)
+    self.free_outbound_aliases.push(id)
   }
 }

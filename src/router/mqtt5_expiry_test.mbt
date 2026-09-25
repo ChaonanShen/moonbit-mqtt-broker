@@ -55,6 +55,7 @@ test "C-T10 MQTT5 finite session is logically absent before GC" {
     .unwrap()
   assert_true(actions.any(action => action is SessionExpired(_)))
   assert_false(state.has_session(id))
+  assert_eq(state.check_invariants(), Ok(()))
 }
 
 ///|
@@ -99,4 +100,5 @@ test "C-T10 MQTT5 expiry work limit bounds one maintenance turn" {
     .unwrap()
   assert_eq(second.filter(action => action is SessionExpired(_)).length(), 1)
   assert_eq(state.session_count(), 0)
+  assert_eq(state.check_invariants(), Ok(()))
 }

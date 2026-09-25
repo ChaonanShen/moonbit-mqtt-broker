@@ -255,6 +255,16 @@ pub fn BrokerState::from_snapshot_v5(
       Ok(value) => value
       Err(_) => return Err(InvalidState("invalid restored V5 session"))
     }
+    if restored.retention() is @session.FiniteV5(_) &&
+      !restored.is_attached() &&
+      restored.expiry_deadline() is Some(deadline) &&
+      !state.session_expiry.set(
+        client_id.value(),
+        deadline.mono_due_ms,
+        session.incarnation,
+      ) {
+      return Err(LimitExceeded("restored session expiry index"))
+    }
     state.sessions.set(client_id, restored)
     state.session_incarnations.set(client_id, session.incarnation)
     for item in session.subscriptions {

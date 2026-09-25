@@ -58,6 +58,7 @@ async test "C-T21 expired fresh MQTT5 write reports not started" {
       connection_id: id,
       client_id: @session.ClientId::new("expiry-writer").unwrap(),
       session_incarnation: Some(1L),
+      delivery_id: Some(42L),
       topic: @topic.TopicName::new("expiry/write").unwrap(),
     }
     assert_true(
@@ -78,6 +79,7 @@ async test "C-T21 expired fresh MQTT5 write reports not started" {
       Some(Accounted(WriteNotStarted(event), ticket)) => {
         assert_eq(event.connection_id, id)
         assert_eq(event.packet_id, packet_id)
+        assert_eq(event.delivery_id, 42L)
         assert_eq(event.qos, @protocol.QoS1)
         ticket.release().unwrap()
       }
@@ -172,12 +174,31 @@ test "C-T21 write-not-started receipt releases staged QoS1 state" {
     _ => fail("expected staged MQTT5 PUBLISH")
   }
   assert_eq(state.inflight_count(), 1)
+  let live_delivery_id = state
+    .inflight_delivery_id(
+      client_id,
+      @session.SessionPacketId::new(packet_id.value()).unwrap(),
+    )
+    .unwrap()
+  let stale = runtime.apply(
+    WriteNotStarted({
+      connection_id,
+      client_id,
+      session_incarnation: state.policy_session_incarnation(client_id),
+      packet_id,
+      delivery_id: live_delivery_id + 1L,
+      qos: @protocol.QoS1,
+    }),
+  )
+  assert_eq(stale, [])
+  assert_eq(state.inflight_count(), 1)
   let actions = runtime.apply(
     WriteNotStarted({
       connection_id,
       client_id,
       session_incarnation: state.policy_session_incarnation(client_id),
       packet_id,
+      delivery_id: live_delivery_id,
       qos: @protocol.QoS1,
     }),
   )

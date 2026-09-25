@@ -382,6 +382,7 @@ pub fn DurableActivationPlan::commit(
     self.broker.replace_policy_session(self.client_id)
   }
   self.broker.sessions.set(self.client_id, self.candidate)
+  ignore(self.broker.session_expiry.remove(self.client_id.value()))
   if self.broker.admin_sessions is Some(index) {
     if old is None {
       index.register(self.client_id)

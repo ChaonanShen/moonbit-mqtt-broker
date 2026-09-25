@@ -28,3 +28,37 @@ test "durable expiry initializes recovered timestamp then deletes on committed d
   assert_false(state.has_session(client))
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "C-T10 strict finite Session expiry uses indexed identity" {
+  let state = BrokerState::new(BrokerConfig::new(4, 16, 4).unwrap())
+  state.enable_v5_storage()
+  let client = @session.ClientId::new("finite-strict-index").unwrap()
+  let activation = state
+    .prepare_activation(
+      client,
+      @session.Persistent,
+      @security.Anonymous,
+      v5_retention=@session.FiniteV5(1U),
+      now_mono_ms=@budget.monotonic_ms(),
+    )
+    .unwrap()
+  ignore(state.commit_activation(activation).unwrap())
+  let now = @budget.monotonic_ms()
+  ignore(
+    state
+    .apply(
+      DetachSessionV5({
+        client_id: client,
+        now_mono_ms: now - 1000L,
+        now_wall_ms: 1000L,
+      }),
+    )
+    .unwrap(),
+  )
+  assert_eq(state.next_durable_expiration(2000L), Some((client, Delete)))
+  let plan = state.prepare_durable_lifecycle(client, 1L, Delete).unwrap()
+  assert_eq(plan.commit(), Ok([SessionRemoved(client)]))
+  assert_eq(state.next_durable_expiration(2000L), None)
+  assert_eq(state.check_invariants(), Ok(()))
+}

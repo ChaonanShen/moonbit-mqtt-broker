@@ -7,6 +7,7 @@ pub struct BrokerState {
   config : BrokerConfig
   priv mut security_policy : @security.SecurityPolicy?
   priv sessions : Map[@session.ClientId, @session.ClientSession]
+  priv session_expiry : @session.ExpiryScheduler
   priv mut policy_slots : @slot_index.SlotIndex?
   priv mut policy_incarnations : Map[@session.ClientId, Int64]?
   priv mut next_policy_incarnation : Int64
@@ -81,6 +82,10 @@ pub fn BrokerState::new(
     promotion_cursor: 0,
     resources: RouterResources::new(config.resources, ledger?),
     sessions: Map([]),
+    session_expiry: @session.ExpiryScheduler::new(
+      config.max_sessions(),
+      8388608L,
+    ),
     policy_slots: None,
     policy_incarnations: None,
     next_policy_incarnation: 1L,
@@ -397,6 +402,25 @@ pub fn BrokerState::session_inflight_count(
 }
 
 ///|
+pub fn BrokerState::inflight_delivery_id(
+  self : BrokerState,
+  client_id : @session.ClientId,
+  packet_id : @session.SessionPacketId,
+) -> Int64? {
+  let session = match self.sessions.get(client_id) {
+    Some(value) => value
+    None => return None
+  }
+  for index in 0..<session.inflight_count() {
+    let item = session.inflight_item_reference(index).unwrap()
+    if item.packet_id == packet_id {
+      return Some(item.delivery_id)
+    }
+  }
+  None
+}
+
+///|
 pub fn BrokerState::session_pending_count(
   self : BrokerState,
   client_id : @session.ClientId,
@@ -514,6 +538,7 @@ fn BrokerState::remove_session(
   }
   ignore(self.subscriptions.remove_all(client_id))
   self.sessions.remove(client_id)
+  ignore(self.session_expiry.remove(client_id.value()))
   self.session_incarnations.remove(client_id)
   self.untrack_policy_session(client_id)
   if self.admin_sessions is Some(index) {
@@ -1018,7 +1043,11 @@ fn BrokerState::attach_session(
     Some(value) => value
     None => return Err(SessionNotFound(client_id))
   }
-  if session.is_attached() {
+  if session.is_attached() ||
+    (
+      session.retention() is @session.FiniteV5(_) &&
+      session.logically_expired(@budget.monotonic_ms())
+    ) {
     return Err(InvalidSessionState(client_id))
   }
   let before_inflight = session.inflight_count()
@@ -1036,6 +1065,7 @@ fn BrokerState::attach_session(
     Ok(value) => value
     Err(error) => return Err(SessionFailure(error))
   }
+  ignore(self.session_expiry.remove(client_id.value()))
   self.inflight_total = self.inflight_total +
     (session.inflight_count() - before_inflight)
   self.pending_qos1_total = self.pending_qos1_total -
@@ -1191,8 +1221,21 @@ fn BrokerState::apply_event(
       if !session.is_attached() {
         return Err(InvalidSessionState(request.client_id))
       }
+      if session.retention() is @session.FiniteV5(_) &&
+        !self.session_expiry.can_set(request.client_id.value()) {
+        return Err(InvariantViolation("session expiry index capacity reached"))
+      }
       if session.detach_v5(request.now_mono_ms, request.now_wall_ms) is Err(_) {
         return Err(InvalidSessionState(request.client_id))
+      }
+      if session.expiry_deadline() is Some(deadline) {
+        if !self.session_expiry.set(
+            request.client_id.value(),
+            deadline.mono_due_ms,
+            self.session_incarnation(request.client_id).unwrap(),
+          ) {
+          abort("session expiry index changed after preflight")
+        }
       }
       if self.admin_sessions is Some(index) {
         index.bump(request.client_id)
@@ -1399,6 +1442,28 @@ pub fn BrokerState::check_invariants(
 ) -> Result[Unit, RouterError] {
   if !self.subscriptions.check_invariants() {
     return Err(InvariantViolation("subscription index is inconsistent"))
+  }
+  if !self.session_expiry.check_invariants() {
+    return Err(InvariantViolation("session expiry index is inconsistent"))
+  }
+  let mut indexed_sessions = 0
+  for id, session in self.sessions {
+    if session.retention() is @session.FiniteV5(_) && !session.is_attached() {
+      indexed_sessions += 1
+      let due = match session.expiry_deadline() {
+        Some(value) => value
+        None => return Err(InvariantViolation("finite session has no deadline"))
+      }
+      match self.session_expiry.get(id.value()) {
+        Some(entry) if entry.due_mono_ms == due.mono_due_ms &&
+          self.session_incarnation(id) == Some(entry.revision) => ()
+        _ =>
+          return Err(InvariantViolation("session expiry index is inconsistent"))
+      }
+    }
+  }
+  if self.session_expiry.length() != indexed_sessions {
+    return Err(InvariantViolation("session expiry index has stale entry"))
   }
   if !self.retained.expiry_index_valid() {
     return Err(InvariantViolation("retained expiry index is inconsistent"))

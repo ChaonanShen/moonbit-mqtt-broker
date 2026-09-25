@@ -11,6 +11,7 @@ pub struct ClientSession {
   allocator : PacketIdAllocator
   mut inflight : Array[OutboundInflight]
   mut pending : Array[SessionMessage]
+  priv pending_expiry : ExpiryScheduler
   mut inbound_qos2 : Array[SessionPacketId]
   owner : @security.Principal
   mut detached_at_ms : Int64?
@@ -40,6 +41,7 @@ pub fn ClientSession::new(
     allocator: PacketIdAllocator::new().unwrap(),
     inflight: [],
     pending: [],
+    pending_expiry: ExpiryScheduler::new(65535, 8388608L),
     inbound_qos2: [],
     owner,
     policy_revision: 1L,
@@ -115,8 +117,16 @@ pub fn ClientSession::restore(
     inflight_cost = @budget.checked_add(inflight_cost, item.cost()).unwrap()
   }
   let mut pending_cost = 0L
+  let pending_expiry = ExpiryScheduler::new(65535, 8388608L)
   for item in stored_pending {
     pending_cost = @budget.checked_add(pending_cost, item.cost()).unwrap()
+    if item.delivery_id > 0L && item.metadata.expiry is Some(deadline) {
+      let key = item.delivery_id.to_string()
+      if pending_expiry.get(key) is Some(_) ||
+        !pending_expiry.set(key, deadline.mono_due_ms, item.delivery_id) {
+        return Err(SessionInvariantViolation("restored pending expiry index"))
+      }
+    }
   }
   Ok({
     inflight_cost,
@@ -130,6 +140,7 @@ pub fn ClientSession::restore(
     allocator,
     inflight: stored_inflight,
     pending: stored_pending,
+    pending_expiry,
     inbound_qos2: inbound_qos2.copy(),
     owner,
     policy_revision: 1L,
@@ -277,6 +288,11 @@ pub fn ClientSession::stage(
   if message.qos == QoS0 {
     return Err(SessionInvariantViolation("queued message must use QoS 1 or 2"))
   }
+  if self.last_protocol == 5 &&
+    message.metadata.expiry is Some(_) &&
+    message.delivery_id < 1L {
+    return Err(SessionInvariantViolation("expiring V5 delivery lacks identity"))
+  }
   let cost = message.cost()
   if cost > limits.max_inflight_bytes ||
     cost > limits.max_state_bytes - self.state_bytes() {
@@ -289,6 +305,13 @@ pub fn ClientSession::stage(
     self.stage_inflight(message).map(delivery => SendNow(delivery))
   } else if self.pending.length() < limits.max_pending &&
     cost <= limits.max_pending_bytes - self.pending_bytes() {
+    if message.delivery_id > 0L && message.metadata.expiry is Some(deadline) {
+      let key = message.delivery_id.to_string()
+      if self.pending_expiry.get(key) is Some(_) ||
+        !self.pending_expiry.set(key, deadline.mono_due_ms, message.delivery_id) {
+        return Err(ByteLimitReached)
+      }
+    }
     self.pending.push(message.copy())
     self.pending_cost += cost
     self.bump_policy_revision()
@@ -315,6 +338,9 @@ fn ClientSession::promote_pending(
     if message.metadata.expiry is Some(deadline) &&
       deadline.remaining_at(@budget.monotonic_ms()) == 0L {
       self.pending = remaining
+      if message.delivery_id > 0L {
+        ignore(self.pending_expiry.remove(message.delivery_id.to_string()))
+      }
       self.pending_cost -= message.cost()
       self.bump_policy_revision()
       continue
@@ -325,6 +351,9 @@ fn ClientSession::promote_pending(
     match self.stage_inflight(message) {
       Ok(delivery) => {
         self.pending = remaining
+        if message.delivery_id > 0L {
+          ignore(self.pending_expiry.remove(message.delivery_id.to_string()))
+        }
         self.pending_cost -= message.cost()
         deliveries.push(delivery)
       }
@@ -486,10 +515,25 @@ pub fn ClientSession::check_invariants(
     }
     seen_inbound.set(id, true)
   }
+  if !self.pending_expiry.check_invariants() {
+    return Err(SessionInvariantViolation("pending expiry heap invalid"))
+  }
+  let mut indexed_pending = 0
   for message in self.pending {
     if message.qos == QoS0 {
       return Err(SessionInvariantViolation("pending QoS 0"))
     }
+    if message.delivery_id > 0L && message.metadata.expiry is Some(deadline) {
+      indexed_pending += 1
+      match self.pending_expiry.get(message.delivery_id.to_string()) {
+        Some(entry) if entry.due_mono_ms == deadline.mono_due_ms &&
+          entry.revision == message.delivery_id => ()
+        _ => return Err(SessionInvariantViolation("pending expiry missing"))
+      }
+    }
+  }
+  if self.pending_expiry.length() != indexed_pending {
+    return Err(SessionInvariantViolation("pending expiry stale entry"))
   }
   for index in 0..<self.inflight.length() {
     let item = self.inflight[index]
@@ -648,6 +692,7 @@ pub fn ClientSession::copy(self : ClientSession) -> ClientSession {
     allocator: PacketIdAllocator::new(next=self.allocator.next()).unwrap(),
     inflight: self.inflight(),
     pending: self.pending(),
+    pending_expiry: self.pending_expiry.copy(),
     inbound_qos2: self.inbound_qos2.copy(),
   }
 }
@@ -710,6 +755,31 @@ pub fn ClientSession::pending_head_reference(
 }
 
 ///|
+pub fn ClientSession::next_expired_pending_id(
+  self : ClientSession,
+  now_mono_ms : Int64,
+) -> Int64? {
+  self.pending_expiry.peek_due(now_mono_ms).map(entry => entry.revision)
+}
+
+///|
+pub fn ClientSession::next_expired_pending_item(
+  self : ClientSession,
+  now_mono_ms : Int64,
+) -> (Int, Int64)? {
+  let entry = match self.pending_expiry.peek_due(now_mono_ms) {
+    Some(value) => value
+    None => return None
+  }
+  for index in 0..<self.pending.length() {
+    if self.pending[index].delivery_id == entry.revision {
+      return Some((index, entry.due_mono_ms))
+    }
+  }
+  None
+}
+
+///|
 pub fn ClientSession::pending_item_reference(
   self : ClientSession,
   index : Int,
@@ -766,6 +836,9 @@ pub fn ClientSession::discard_pending_item_prepared(
     return false
   }
   self.pending = remaining
+  if expected.delivery_id > 0L {
+    ignore(self.pending_expiry.remove(expected.delivery_id.to_string()))
+  }
   self.pending_cost -= expected.cost()
   self.bump_policy_revision()
   true
@@ -878,6 +951,13 @@ pub fn ClientSession::restore_v5(
   if retention is FiniteV5(_) && expiry_deadline is None {
     return Err(SessionInvariantViolation("finite V5 session lacks deadline"))
   }
+  for message in pending {
+    if message.metadata.expiry is Some(_) && message.delivery_id < 1L {
+      return Err(
+        SessionInvariantViolation("restored expiring delivery lacks identity"),
+      )
+    }
+  }
   let restored = match
     ClientSession::restore(
       client_id,
@@ -930,6 +1010,10 @@ pub fn ClientSession::materialize_delivery_ids(
     if item.delivery_id == 0L {
       if next == 9223372036854775807L {
         return Err(SessionInvariantViolation("delivery identity exhausted"))
+      }
+      if item.metadata.expiry is Some(deadline) &&
+        !self.pending_expiry.set(next.to_string(), deadline.mono_due_ms, next) {
+        return Err(SessionInvariantViolation("pending expiry index full"))
       }
       self.pending[index] = { ..item, delivery_id: next }
       next += 1L
