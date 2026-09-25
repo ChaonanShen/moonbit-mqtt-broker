@@ -47,7 +47,8 @@ pub fn BrokerRuntime::normalize_mqtt5_publish(
           previous.map(value => 64L + @budget.utf8_bytes(value)).unwrap_or(0L) +
           64L +
           @budget.utf8_bytes(packet.topic)
-        if adjusted >
+        if adjusted +
+          self.outbound_alias_bytes.get(connection_id).unwrap_or(0).to_int64() >
           self.config.protocol_config().max_alias_bytes_per_connection.to_int64() {
           return Err({ reason: 0x97 })
         }

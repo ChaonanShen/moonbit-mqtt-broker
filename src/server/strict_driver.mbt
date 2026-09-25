@@ -573,7 +573,9 @@ fn RouterDriver::handle_strict_runtime_event(
           }
         }
       }
-      if !coordinator.has_pending() && !self.strict_fenced {
+      if !coordinator.has_pending() &&
+        !self.strict_fenced &&
+        @budget.monotonic_ms() >= self.runtime.will_retry_after_mono_ms {
         match
           self.runtime.broker_state().next_due_will(@budget.monotonic_ms()) {
           None => ()
@@ -596,6 +598,12 @@ fn RouterDriver::handle_strict_runtime_event(
                     }),
                   ),
                 )
+              Err(@router.ByteResourceLimit(_))
+              | Err(@router.QoS1ResourceLimit(_, _))
+              | Err(@router.RetainedLimitReached(_))
+              | Err(@router.InboundQoS2ResourceLimit(_)) =>
+                self.runtime.will_retry_after_mono_ms = @budget.monotonic_ms() +
+                  1000L
               Err(_) => self.strict_fence("due-will-publish")
             }
         }

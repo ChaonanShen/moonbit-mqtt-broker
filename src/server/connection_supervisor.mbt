@@ -137,10 +137,25 @@ async fn read_transport(
               b.events
             }
           })
+          let protocol_config = config.protocol_config()
+          let limits : @protocol.DecodeLimits = {
+            max_packet_bytes: config.max_packet_size(),
+            max_property_bytes: protocol_config.max_property_bytes,
+            max_user_properties: protocol_config.max_user_properties,
+            max_subscription_entries: protocol_config.max_subscription_entries,
+          }
           let v5_frame = decode_phase == Established(@protocol.V5) ||
             (decode_phase == FirstConnect && recognized_mqtt5_connect(frame))
           let decode_cost = if v5_frame {
-            decode_cost_bound_v5(frame, config.protocol_config())
+            match
+              @protocol.scan_v5_frame_shape(
+                frame,
+                @protocol.ClientToServer,
+                limits,
+              ) {
+              Ok(shape) => shape.logical_cost()
+              Err(_) => decode_cost_bound_v5(frame, protocol_config)
+            }
           } else {
             decode_cost_bound(frame)
           }
@@ -150,13 +165,6 @@ async fn read_transport(
           }
           let mut moved = false
           defer (if !moved { release_optional(packet_ticket) })
-          let protocol_config = config.protocol_config()
-          let limits : @protocol.DecodeLimits = {
-            max_packet_bytes: config.max_packet_size(),
-            max_property_bytes: protocol_config.max_property_bytes,
-            max_user_properties: protocol_config.max_user_properties,
-            max_subscription_entries: protocol_config.max_subscription_entries,
-          }
           let packet = match
             @protocol.decode_wire(
               frame,

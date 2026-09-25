@@ -23,7 +23,9 @@ pub struct BrokerRuntime {
   v5_pending : Map[ConnectionId, PreparedMqtt5Connect]
   v5_active : Map[ConnectionId, PreparedMqtt5Connect]
   inbound_aliases : Map[ConnectionId, Map[Int, String]]
+  outbound_alias_bytes : Map[ConnectionId, Int]
   v5_will_ids : Map[ConnectionId, Int64]
+  mut will_retry_after_mono_ms : Int64
   active_by_client : Map[@session.ClientId, ConnectionId]
   mut security : @security.SecurityPolicy
   mut policy_epoch : Int64
@@ -64,7 +66,9 @@ pub fn BrokerRuntime::new(
     v5_pending: Map([]),
     v5_active: Map([]),
     inbound_aliases: Map([]),
+    outbound_alias_bytes: Map([]),
     v5_will_ids: Map([]),
+    will_retry_after_mono_ms: 0L,
     security,
     policy_epoch: initial_policy_epoch,
     retired_security: Map([]),
@@ -570,6 +574,7 @@ fn BrokerRuntime::terminate(
   self.v5_pending.remove(connection_id)
   self.v5_active.remove(connection_id)
   self.inbound_aliases.remove(connection_id)
+  self.outbound_alias_bytes.remove(connection_id)
   defer release_optional(will_ticket)
   self.connections.remove(connection_id)
   if meta.phase is Active(_) {
@@ -1583,6 +1588,9 @@ fn BrokerRuntime::check_deadlines(
     }
   }
   for _ in 0..<self.config.protocol_config().max_expiry_work_per_turn {
+    if now_mono_ms < self.will_retry_after_mono_ms {
+      break
+    }
     let will_id = match self.broker_state.next_due_will(now_mono_ms) {
       Some(value) => value
       None => break
@@ -1591,8 +1599,14 @@ fn BrokerRuntime::check_deadlines(
       self.broker_state.apply(
         @router.PublishDueWill({ id: will_id, now_mono_ms, now_wall_ms: now_ms }),
       ) {
-      Ok(published) => actions.append(self.map_broker_actions(published))
-      Err(_) => break
+      Ok(published) => {
+        self.will_retry_after_mono_ms = 0L
+        actions.append(self.map_broker_actions(published))
+      }
+      Err(_) => {
+        self.will_retry_after_mono_ms = now_mono_ms + 1000L
+        break
+      }
     }
   }
   actions.append(self.map_broker_actions(self.broker_state.resume_pending()))

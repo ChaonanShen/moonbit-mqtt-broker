@@ -11,6 +11,7 @@ fn BrokerRuntime::finish_strict_transport_close(
   self.v5_active.remove(event.connection_id)
   self.v5_pending.remove(event.connection_id)
   self.inbound_aliases.remove(event.connection_id)
+  self.outbound_alias_bytes.remove(event.connection_id)
   self.v5_will_ids.remove(event.connection_id)
   if meta.phase is Active(_) {
     self.release_policy_epoch(meta.policy_epoch)

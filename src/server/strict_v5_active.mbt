@@ -239,6 +239,16 @@ fn BrokerRuntime::prepare_strict_v5_subscribe(
     ) {
     return StrictClose(connection_id, ProtocolError)
   }
+  if !self.mqtt5_ack_fits(
+      connection_id,
+      Suback5({
+        packet_id: packet.packet_id,
+        properties: [],
+        reasons: Array::make(packet.subscriptions.length(), 0x80),
+      }),
+    ) {
+    return StrictImmediate(mqtt5_packet_too_large_reply(connection_id))
+  }
   let mut subscription_id : Int? = None
   for property in packet.properties {
     if property.id == 0x0b && property.value is @protocol.VariableValue(value) {
@@ -369,6 +379,16 @@ fn BrokerRuntime::prepare_strict_v5_unsubscribe(
   packet : @protocol.UnsubscribeV5,
   generations : Map[@session.ClientId, Int64],
 ) -> StrictPacketPlan {
+  if !self.mqtt5_ack_fits(
+      connection_id,
+      Unsuback5({
+        packet_id: packet.packet_id,
+        properties: [],
+        reasons: Array::make(packet.topic_filters.length(), 0x11),
+      }),
+    ) {
+    return StrictImmediate(mqtt5_packet_too_large_reply(connection_id))
+  }
   let filters : Array[@topic.TopicFilter] = []
   for text in packet.topic_filters {
     let filter = match @topic.TopicFilter::new(text) {

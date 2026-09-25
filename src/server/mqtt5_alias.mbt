@@ -31,7 +31,16 @@ fn TransportSink::propose_outbound_alias(
   for _, value in self.pending_outbound_aliases {
     pending_bytes += 64 + @utf8.encode(value).length()
   }
-  if bytes > max_bytes - self.outbound_alias_bytes - pending_bytes {
+  let mut inbound_bytes = 0
+  if self.shared_inbound_aliases is Some(all) &&
+    self.alias_connection_id is Some(connection_id) &&
+    all.get(connection_id) is Some(table) {
+    for _, value in table {
+      inbound_bytes += 64 + @utf8.encode(value).length()
+    }
+  }
+  if bytes >
+    max_bytes - inbound_bytes - self.outbound_alias_bytes - pending_bytes {
     return AliasNone
   }
   let id = self.next_outbound_alias
@@ -51,6 +60,10 @@ fn TransportSink::outbound_alias_written(
         self.pending_outbound_aliases.remove(id)
         self.outbound_aliases.set(topic, id)
         self.outbound_alias_bytes += 64 + @utf8.encode(topic).length()
+        if self.shared_outbound_alias_bytes is Some(usage) &&
+          self.alias_connection_id is Some(connection_id) {
+          usage.set(connection_id, self.outbound_alias_bytes)
+        }
       }
     _ => ()
   }
