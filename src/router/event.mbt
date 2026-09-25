@@ -122,6 +122,7 @@ pub(all) struct DetachSessionV5Request {
 pub(all) struct ExpireSessionsV5Request {
   now_wall_ms : Int64
   now_mono_ms : Int64
+  max_work : Int
 } derive(Eq, Debug)
 
 ///|

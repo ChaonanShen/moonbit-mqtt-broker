@@ -176,6 +176,7 @@ pub fn BrokerState::cancel_will(self : BrokerState, id : Int64) -> Bool {
     None => return false
   }
   self.wills.remove(id)
+  ignore(self.will_expiry.remove(id.to_string()))
   if self.active_will_by_client.get(record.client_id) == Some(id) {
     self.active_will_by_client.remove(record.client_id)
   }
@@ -210,6 +211,10 @@ pub fn BrokerState::trigger_will(
     Ok(value) => value
     Err(_) => return false
   }
+  if record.revision == 9223372036854775807L ||
+    !self.will_expiry.set(id.to_string(), due.mono_due_ms, record.revision + 1L) {
+    return false
+  }
   self.wills.set(id, {
     ..record,
     state: WillPending,
@@ -229,24 +234,16 @@ pub fn BrokerState::next_due_will(
   self : BrokerState,
   now_mono_ms : Int64,
 ) -> Int64? {
-  let mut due_id : Int64? = None
-  let mut due_time = 9223372036854775807L
-  for id, record in self.wills {
-    if record.state == WillPending &&
-      record.due is Some(deadline) &&
-      deadline.remaining_at(now_mono_ms) == 0L &&
-      (
-        deadline.mono_due_ms < due_time ||
-        (
-          deadline.mono_due_ms == due_time &&
-          (due_id is None || id < due_id.unwrap())
-        )
-      ) {
-      due_id = Some(id)
-      due_time = deadline.mono_due_ms
-    }
+  let entry = match self.will_expiry.peek_due(now_mono_ms) {
+    Some(value) => value
+    None => return None
   }
-  due_id
+  let id = @string.parse_int64(entry.key) catch { _ => return None }
+  match self.wills.get(id) {
+    Some(record) if record.state == WillPending &&
+      record.revision == entry.revision => Some(id)
+    _ => None
+  }
 }
 
 ///|

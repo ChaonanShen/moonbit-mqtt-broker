@@ -4,11 +4,18 @@ pub struct RetainedStore {
   priv messages : Map[@topic.TopicName, RetainedMessage]
   priv revisions : Map[@topic.TopicName, Int64]
   priv mut next_revision : Int64
+  priv expiry : @session.ExpiryScheduler
 }
 
 ///|
 pub fn RetainedStore::new() -> RetainedStore {
-  { bytes: 0L, messages: Map([]), revisions: Map([]), next_revision: 1L }
+  {
+    bytes: 0L,
+    messages: Map([]),
+    revisions: Map([]),
+    next_revision: 1L,
+    expiry: @session.ExpiryScheduler::new(65535, 8388608L),
+  }
 }
 
 ///|
@@ -26,11 +33,15 @@ pub fn RetainedStore::put(
   max_count : Int,
   metadata? : @session.MessageMetadata = @session.MessageMetadata::empty(),
 ) -> Bool {
-  if self.messages.get(topic) is None && self.messages.length() >= max_count {
+  if !self.can_put(topic, max_count, metadata) {
     return false
   }
-  if self.next_revision == 9223372036854775807L {
-    return false
+  if metadata.expiry is Some(deadline) {
+    if !self.expiry.set(topic.value(), deadline.mono_due_ms, self.next_revision) {
+      return false
+    }
+  } else {
+    ignore(self.expiry.remove(topic.value()))
   }
   self.bytes = self.bytes -
     self.cost_at(topic) +
@@ -55,6 +66,7 @@ pub fn RetainedStore::remove(
   self.bytes -= self.cost_at(topic)
   self.messages.remove(topic)
   self.revisions.remove(topic)
+  ignore(self.expiry.remove(topic.value()))
 }
 
 ///|
@@ -224,6 +236,11 @@ fn RetainedStore::restore_revision(
     return false
   }
   self.revisions.set(topic, revision)
+  if self.messages.get(topic) is Some(message) &&
+    message.metadata.expiry is Some(deadline) &&
+    !self.expiry.set(topic.value(), deadline.mono_due_ms, revision) {
+    return false
+  }
   if revision >= self.next_revision {
     self.next_revision = revision + 1L
   }
@@ -245,4 +262,55 @@ fn RetainedStore::ensure_next_revision(
   }
   self.next_revision = floor
   true
+}
+
+///|
+fn RetainedStore::next_expired(
+  self : RetainedStore,
+  now_mono_ms : Int64,
+) -> @topic.TopicName? {
+  let entry = match self.expiry.peek_due(now_mono_ms) {
+    Some(value) => value
+    None => return None
+  }
+  let topic = @topic.TopicName::new(entry.key).unwrap()
+  if self.revisions.get(topic) == Some(entry.revision) {
+    Some(topic)
+  } else {
+    None
+  }
+}
+
+///|
+fn RetainedStore::can_put(
+  self : RetainedStore,
+  topic : @topic.TopicName,
+  max_count : Int,
+  metadata : @session.MessageMetadata,
+) -> Bool {
+  (self.messages.get(topic) is Some(_) || self.messages.length() < max_count) &&
+  self.next_revision < 9223372036854775807L &&
+  (metadata.expiry is None || self.expiry.can_set(topic.value()))
+}
+
+///|
+fn RetainedStore::expiry_index_valid(self : RetainedStore) -> Bool {
+  if !self.expiry.check_invariants() {
+    return false
+  }
+  let mut expected = 0
+  for topic, message in self.messages {
+    if message.metadata.expiry is Some(deadline) {
+      expected += 1
+      let entry = match self.expiry.get(topic.value()) {
+        Some(value) => value
+        None => return false
+      }
+      if entry.due_mono_ms != deadline.mono_due_ms ||
+        self.revisions.get(topic) != Some(entry.revision) {
+        return false
+      }
+    }
+  }
+  self.expiry.length() == expected
 }

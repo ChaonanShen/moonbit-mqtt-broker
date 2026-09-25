@@ -45,8 +45,58 @@ test "C-T10 MQTT5 finite session is logically absent before GC" {
   assert_false(expired.session_present())
   state.cancel_activation(expired).unwrap()
   let actions = state
-    .apply(ExpireSessionsV5({ now_wall_ms: 12000L, now_mono_ms: 3000L }))
+    .apply(
+      ExpireSessionsV5({
+        now_wall_ms: 12000L,
+        now_mono_ms: 3000L,
+        max_work: 128,
+      }),
+    )
     .unwrap()
   assert_true(actions.any(action => action is SessionExpired(_)))
   assert_false(state.has_session(id))
+}
+
+///|
+test "C-T10 MQTT5 expiry work limit bounds one maintenance turn" {
+  let state = BrokerState::new(BrokerConfig::new(8, 16, 8).unwrap())
+  for value in ["expiry-a", "expiry-b"] {
+    let id = @session.ClientId::new(value).unwrap()
+    let fresh = state
+      .prepare_activation(
+        id,
+        @session.Persistent,
+        @security.Anonymous,
+        v5_resume=false,
+        v5_retention=@session.FiniteV5(1U),
+        now_mono_ms=100L,
+      )
+      .unwrap()
+    ignore(state.commit_activation(fresh).unwrap())
+    ignore(
+      state
+      .apply(
+        DetachSessionV5({
+          client_id: id,
+          now_mono_ms: 1000L,
+          now_wall_ms: 10000L,
+        }),
+      )
+      .unwrap(),
+    )
+  }
+  let first = state
+    .apply(
+      ExpireSessionsV5({ now_wall_ms: 11000L, now_mono_ms: 2000L, max_work: 1 }),
+    )
+    .unwrap()
+  assert_eq(first.filter(action => action is SessionExpired(_)).length(), 1)
+  assert_eq(state.session_count(), 1)
+  let second = state
+    .apply(
+      ExpireSessionsV5({ now_wall_ms: 11000L, now_mono_ms: 2000L, max_work: 1 }),
+    )
+    .unwrap()
+  assert_eq(second.filter(action => action is SessionExpired(_)).length(), 1)
+  assert_eq(state.session_count(), 0)
 }

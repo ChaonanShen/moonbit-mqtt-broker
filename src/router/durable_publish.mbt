@@ -115,6 +115,15 @@ pub fn BrokerState::prepare_durable_publish(
   } else {
     0L
   }
+  if input.retain &&
+    input.payload.length() > 0 &&
+    !self.retained.can_put(
+      input.topic,
+      self.config.max_retained_messages(),
+      metadata,
+    ) {
+    return Err(InvariantViolation("retained expiry index capacity reached"))
+  }
   let strict = input.origin is Client(_)
   let planned = match
     self.preflight_deliveries(
@@ -279,15 +288,15 @@ pub fn DurablePublishPlan::commit(
         index.remove_retained(self.input.topic)
       }
     } else {
-      ignore(
-        self.broker.retained.put(
+      if !self.broker.retained.put(
           self.input.topic,
           self.input.payload,
           self.input.qos,
           self.broker.config.max_retained_messages(),
           metadata=self.metadata,
-        ),
-      )
+        ) {
+        abort("retained durable commit violated prepared capacity")
+      }
       if previous is None && self.broker.admin_sessions is Some(index) {
         index.register_retained(self.input.topic)
       }

@@ -1565,30 +1565,44 @@ fn BrokerRuntime::check_deadlines(
     @router.BrokerEvent::ExpireSessionsV5({
       now_wall_ms: now_ms,
       now_mono_ms: @budget.monotonic_ms(),
+      max_work: self.config.protocol_config().max_expiry_work_per_turn,
     })
   } else {
     @router.BrokerEvent::ExpireSessions(now_ms)
   }
+  let mut remaining = self.config.protocol_config().max_expiry_work_per_turn
   match self.broker_state.apply(expiry_event) {
-    Ok(expiration_actions) =>
+    Ok(expiration_actions) => {
+      for action in expiration_actions {
+        if action is @router.SessionExpired(_) {
+          remaining -= 1
+        }
+      }
       actions.append(self.map_broker_actions(expiration_actions))
+    }
     Err(_) => ()
   }
   let now_mono_ms = @budget.monotonic_ms()
-  for _ in 0..<self.config.protocol_config().max_expiry_work_per_turn {
+  for _ in 0..<remaining {
+    if remaining <= 0 {
+      break
+    }
     match self.broker_state.expire_one_pending_v5(now_mono_ms) {
-      Ok(true) => ()
+      Ok(true) => remaining -= 1
       Ok(false) | Err(_) => break
     }
   }
-  for _ in 0..<self.config.protocol_config().max_expiry_work_per_turn {
+  for _ in 0..<remaining {
+    if remaining <= 0 {
+      break
+    }
     match self.broker_state.expire_one_retained_v5(now_mono_ms) {
-      Ok(true) => ()
+      Ok(true) => remaining -= 1
       Ok(false) | Err(_) => break
     }
   }
-  for _ in 0..<self.config.protocol_config().max_expiry_work_per_turn {
-    if now_mono_ms < self.will_retry_after_mono_ms {
+  for _ in 0..<remaining {
+    if remaining <= 0 || now_mono_ms < self.will_retry_after_mono_ms {
       break
     }
     let will_id = match self.broker_state.next_due_will(now_mono_ms) {
@@ -1600,6 +1614,7 @@ fn BrokerRuntime::check_deadlines(
         @router.PublishDueWill({ id: will_id, now_mono_ms, now_wall_ms: now_ms }),
       ) {
       Ok(published) => {
+        remaining -= 1
         self.will_retry_after_mono_ms = 0L
         actions.append(self.map_broker_actions(published))
       }

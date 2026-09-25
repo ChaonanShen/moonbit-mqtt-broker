@@ -22,6 +22,7 @@ pub struct BrokerState {
   priv mut clock_floor_wall_ms : Int64
   priv mut storage_v5 : Bool
   priv wills : Map[Int64, Mqtt5WillRecord]
+  priv will_expiry : @session.ExpiryScheduler
   priv will_tickets : Map[Int64, @budget.Ticket]
   priv active_will_by_client : Map[@session.ClientId, Int64]
   priv mut next_will_id : Int64
@@ -95,6 +96,7 @@ pub fn BrokerState::new(
     clock_floor_wall_ms: 0L,
     storage_v5: false,
     wills: Map([]),
+    will_expiry: @session.ExpiryScheduler::new(65535, 8388608L),
     will_tickets: Map([]),
     active_will_by_client: Map([]),
     next_will_id: 1L,
@@ -527,6 +529,7 @@ fn BrokerState::remove_session(
 fn BrokerState::expire_sessions(
   self : BrokerState,
   now_ms : Int64,
+  max_items? : Int = self.config.max_session_expirations_per_tick(),
 ) -> Result[Array[BrokerAction], RouterError] {
   let expiry_ms = match self.config.persistent_session_expiry_ms() {
     None => return Ok([])
@@ -571,7 +574,10 @@ fn BrokerState::expire_sessions(
     }
   })
   let actions : Array[BrokerAction] = []
-  let limit = self.config.max_session_expirations_per_tick()
+  let limit = @cmp.minimum(
+    max_items,
+    self.config.max_session_expirations_per_tick(),
+  )
   for index in 0..<@cmp.minimum(limit, candidates.length()) {
     let client_id = candidates[index].client_id
     match self.remove_session(client_id) {
@@ -1222,7 +1228,11 @@ fn BrokerState::apply_event(
         request.now_wall_ms,
       )
     ExpireSessionsV5(request) =>
-      self.expire_sessions_v5(request.now_wall_ms, request.now_mono_ms)
+      self.expire_sessions_v5(
+        request.now_wall_ms,
+        request.now_mono_ms,
+        request.max_work,
+      )
     SubscribeV5(request) => self.subscribe_v5(request)
     Subscribe(request) => {
       let client_id = request.client_id
@@ -1390,6 +1400,30 @@ pub fn BrokerState::check_invariants(
   if !self.subscriptions.check_invariants() {
     return Err(InvariantViolation("subscription index is inconsistent"))
   }
+  if !self.retained.expiry_index_valid() {
+    return Err(InvariantViolation("retained expiry index is inconsistent"))
+  }
+  if !self.will_expiry.check_invariants() {
+    return Err(InvariantViolation("Will expiry index is inconsistent"))
+  }
+  let mut indexed_wills = 0
+  for id, record in self.wills {
+    if record.state == WillPending {
+      indexed_wills += 1
+      let due = match record.due {
+        Some(value) => value
+        None => return Err(InvariantViolation("pending Will has no deadline"))
+      }
+      match self.will_expiry.get(id.to_string()) {
+        Some(entry) if entry.due_mono_ms == due.mono_due_ms &&
+          entry.revision == record.revision => ()
+        _ => return Err(InvariantViolation("Will expiry index is inconsistent"))
+      }
+    }
+  }
+  if self.will_expiry.length() != indexed_wills {
+    return Err(InvariantViolation("Will expiry index has stale entry"))
+  }
   if self.sessions.length() > self.config.max_sessions() {
     return Err(InvariantViolation("session limit exceeded"))
   }
@@ -1520,6 +1554,15 @@ fn BrokerState::publish_input(
     Err(e) => return Err(e)
   }
   defer scratch.release().unwrap()
+  if input.retain &&
+    input.payload.length() > 0 &&
+    !self.retained.can_put(
+      input.topic,
+      self.config.max_retained_messages(),
+      metadata,
+    ) {
+    return Err(InvariantViolation("retained expiry index capacity reached"))
+  }
   if input.retain {
     let total = self.resources.retained_bytes -
       self.retained.cost_at(input.topic) +
@@ -1560,15 +1603,15 @@ fn BrokerState::publish_input(
           qos: input.qos,
           metadata,
         })
-      ignore(
-        self.retained.put(
+      if !self.retained.put(
           input.topic,
           input.payload,
           input.qos,
           self.config.max_retained_messages(),
           metadata~,
-        ),
-      )
+        ) {
+        abort("retained commit violated prepared capacity")
+      }
       if previous is None && self.admin_sessions is Some(index) {
         index.register_retained(input.topic)
       }

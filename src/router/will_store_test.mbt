@@ -89,3 +89,28 @@ test "C-T36 V5 pending Will restart keeps original deadline" {
     1500L,
   )
 }
+
+///|
+test "C-T32 Will expiry index removes cancelled pending identity" {
+  let state = BrokerState::new(BrokerConfig::new(8, 16, 8).unwrap())
+  let client = @session.ClientId::new("will-index-cancel").unwrap()
+  ignore(state.apply(CreateSession(client)))
+  let template : Mqtt5WillTemplate = {
+    topic: @topic.TopicName::new("will/index").unwrap(),
+    payload: b"offline",
+    qos: @session.QoS1,
+    retain: false,
+    metadata: @session.MessageMetadata::empty(),
+    delay_seconds: 1U,
+    message_expiry_seconds: None,
+  }
+  let prepared = state
+    .prepare_mqtt5_will(client, @security.Anonymous, template, 4, 0L)
+    .unwrap()
+  let id = state.commit_prepared_will(prepared)
+  assert_true(state.trigger_will(id, 1000L, 1000L, @session.InfiniteV5))
+  assert_eq(state.next_due_will(2000L), Some(id))
+  assert_true(state.cancel_will(id))
+  assert_eq(state.next_due_will(3000L), None)
+  assert_eq(state.check_invariants(), Ok(()))
+}
