@@ -8,6 +8,9 @@ pub(all) suberror WireError {
   LegacyCodec(CodecError)
   WireInvalidFlags(Int)
   WireInvalidPacketId(Int)
+  WireInvalidProtocolName(Int)
+  WireInvalidProtocolLevel(Int)
+  WireUnsupportedQoS(Int)
 } derive(Eq, Debug)
 
 ///|
