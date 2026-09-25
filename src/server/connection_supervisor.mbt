@@ -421,6 +421,16 @@ async fn write_transport(
     control_burst = 0
     match command {
       WritePriorityWake => ()
+      OfferDelivery(id) => {
+        let offer = match sink.take_delivery_offer(id) {
+          Some(value) => value
+          None => return WriteFailure
+        }
+        match write_delivery_offer(connection, sink, bus, offer, timeout_ms) {
+          Some(reason) => return reason
+          None => ()
+        }
+      }
       CloseAfterPending(reason) => return reason
       WriteWsWake => sink.ws_wake_pending = false
       WriteWsClose(frame) => {
