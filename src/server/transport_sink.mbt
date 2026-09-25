@@ -31,6 +31,7 @@ priv struct OwnedFrame {
   ticket : @budget.Ticket?
   authorization : OutboundAuthorization?
   rx_permit : RxPermit?
+  alias_proposal : OutboundAliasProposal
 }
 
 ///|
@@ -39,6 +40,10 @@ pub struct TransportSink {
   rx_ledger : WireRxLedger
   mut tx_window : TxWindow
   deferred_v5 : @deque.Deque[SendMqtt5Action]
+  outbound_aliases : Map[String, Int]
+  pending_outbound_aliases : Map[Int, String]
+  mut next_outbound_alias : Int
+  mut outbound_alias_bytes : Int
   priv mut budget : (@budget.Ledger, @budget.Pool, @budget.Pool)?
   priv mut owned : Array[OwnedFrame]
   priv mut writer_gate : ((OutboundAuthorization) -> Bool)?
@@ -62,6 +67,10 @@ pub fn TransportSink::new(
     rx_ledger: WireRxLedger::new(receive_maximum),
     tx_window: TxWindow::new(65535),
     deferred_v5: @deque.Deque([]),
+    outbound_aliases: Map([]),
+    pending_outbound_aliases: Map([]),
+    next_outbound_alias: 1,
+    outbound_alias_bytes: 0,
     budget: None,
     owned: [],
     writer_gate: None,
@@ -141,6 +150,8 @@ pub fn TransportSink::close(self : TransportSink) -> Unit {
   self.rx_ledger.close()
   self.tx_window.close()
   self.deferred_v5.clear()
+  self.outbound_aliases.clear()
+  self.pending_outbound_aliases.clear()
 }
 
 ///|
@@ -204,6 +215,7 @@ fn TransportSink::enqueue_frame(
   close : CloseReason?,
   authorization? : OutboundAuthorization,
   rx_permit? : RxPermit,
+  alias_proposal? : OutboundAliasProposal = AliasNone,
 ) -> Bool {
   let command = match close {
     None => WriteFrame(frame)
@@ -225,7 +237,7 @@ fn TransportSink::enqueue_frame(
     None => None
   }
   if accepted {
-    self.owned.push({ frame, ticket, authorization, rx_permit })
+    self.owned.push({ frame, ticket, authorization, rx_permit, alias_proposal })
   }
   accepted
 }
@@ -253,6 +265,7 @@ fn TransportSink::enqueue_ws_control(
         ticket: Some(r.ticket),
         authorization: None,
         rx_permit: None,
+        alias_proposal: AliasNone,
       })
     } else {
       r.ticket.release().unwrap()
@@ -279,6 +292,7 @@ fn TransportSink::enqueue_ws_close(self : TransportSink, frame : Bytes) -> Bool 
         ticket: Some(r.ticket),
         authorization: None,
         rx_permit: None,
+        alias_proposal: AliasNone,
       })
     } else {
       r.ticket.release().unwrap()
@@ -305,7 +319,7 @@ fn TransportSink::take_ws_control(self : TransportSink) -> Bytes? {
 fn TransportSink::take_owned_frame(
   self : TransportSink,
   frame : Bytes,
-) -> (@budget.Ticket?, OutboundAuthorization?, RxPermit?) {
+) -> (@budget.Ticket?, OutboundAuthorization?, RxPermit?, OutboundAliasProposal) {
   for index in 0..<self.owned.length() {
     if physical_equal(self.owned[index].frame, frame) {
       let owned = self.owned[index]
@@ -316,10 +330,15 @@ fn TransportSink::take_owned_frame(
         }
       }
       self.owned = remaining
-      return (owned.ticket, owned.authorization, owned.rx_permit)
+      return (
+        owned.ticket,
+        owned.authorization,
+        owned.rx_permit,
+        owned.alias_proposal,
+      )
     }
   }
-  (None, None, None)
+  (None, None, None, AliasNone)
 }
 
 ///|
