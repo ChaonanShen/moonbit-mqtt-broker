@@ -1,6 +1,7 @@
 ///|
 pub fn BrokerState::next_durable_promotion(
   self : BrokerState,
+  can_send? : (@session.ClientId) -> Bool = _ => true,
 ) -> @session.ClientId? {
   if self.inflight_total >= self.config.max_inflight_total() {
     return None
@@ -18,6 +19,7 @@ pub fn BrokerState::next_durable_promotion(
     let id = ids[index]
     let session = self.sessions.get(id).unwrap()
     if session.is_attached() &&
+      can_send(id) &&
       session.pending_count() > 0 &&
       session.inflight_count() < self.config.max_inflight_per_session() {
       if !self.pending_head_authorized(session) {

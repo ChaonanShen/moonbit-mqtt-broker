@@ -4,6 +4,11 @@ pub(all) struct AdminSessionView {
   lifecycle_version : Int64
   client_id : String
   mode : String
+  last_protocol : Int
+  retention : String
+  session_expiry_seconds : UInt?
+  session_expiry_remaining_ms : Int64?
+  will_count : Int
   attached : Bool
   owner : String
   detached_at_ms : Int64?
@@ -21,6 +26,10 @@ pub(all) struct AdminSessionView {
 pub(all) struct AdminSubscriptionView {
   filter : String
   qos : String
+  no_local : Bool
+  retain_as_published : Bool
+  retain_handling : Int
+  subscription_identifier : Int?
 } derive(Eq, Debug)
 
 ///|
@@ -62,6 +71,20 @@ pub fn BrokerState::admin_session_view(
     Some(value) => value.usage
     None => return None
   }
+  let (retention, session_expiry_seconds) = match session.retention() {
+    @session.DropOnClose => ("drop_on_close", None)
+    @session.LegacyBrokerPolicy => ("legacy_broker_policy", None)
+    @session.FiniteV5(seconds) => ("finite_v5", Some(seconds))
+    @session.InfiniteV5 => ("infinite_v5", Some(0xffffffffU))
+  }
+  let mut will_count = 0
+  for _, will in self.wills {
+    if will.client_id == identity.client_id &&
+      self.session_incarnation(identity.client_id) ==
+      Some(will.session_incarnation) {
+      will_count += 1
+    }
+  }
   Some({
     handle,
     lifecycle_version: identity.lifecycle_version,
@@ -72,6 +95,13 @@ pub fn BrokerState::admin_session_view(
       "clean"
     },
     attached: session.is_attached(),
+    last_protocol: session.last_protocol(),
+    retention,
+    session_expiry_seconds,
+    session_expiry_remaining_ms: session
+    .expiry_deadline()
+    .map(value => value.remaining_at(@budget.monotonic_ms())),
+    will_count,
     owner: session.owner().storage_value(),
     detached_at_ms: session.detached_at_ms(),
     subscription_count: self.subscriptions.subscription_count_for(
@@ -100,8 +130,16 @@ pub fn BrokerState::admin_subscription_view(
     Some(value) => value
     None => return None
   }
-  match self.subscriptions.qos(row.client_id, row.filter) {
-    Some(qos) => Some({ filter: row.filter.value(), qos: admin_qos_name(qos) })
+  match self.subscriptions.binding(row.client_id, row.filter) {
+    Some(binding) =>
+      Some({
+        filter: row.filter.value(),
+        qos: admin_qos_name(binding.qos),
+        no_local: binding.no_local,
+        retain_as_published: binding.retain_as_published,
+        retain_handling: binding.retain_handling,
+        subscription_identifier: binding.subscription_identifier,
+      })
     None => None
   }
 }

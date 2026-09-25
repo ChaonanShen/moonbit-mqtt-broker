@@ -13,6 +13,7 @@ pub(all) struct SendPacketThenCloseAction {
 
 ///|
 pub(all) struct SendMqtt5Action {
+  expiry_deadline : @session.Deadline?
   connection_id : ConnectionId
   rx_permit : RxPermit?
   packet : @protocol.PacketV5

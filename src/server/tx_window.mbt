@@ -31,6 +31,11 @@ pub fn TxWindow::available(self : TxWindow) -> Int {
 }
 
 ///|
+pub fn TxWindow::used(self : TxWindow) -> Int {
+  self.initial - self.available
+}
+
+///|
 pub fn TxWindow::reserve(
   self : TxWindow,
   delivery_id : Int64,

@@ -200,6 +200,51 @@ pub fn render_prometheus(
     sample.connections_active.to_string(),
     false,
   )
+  let by_version = add_family(
+    lines, "connections_by_version", "Active MQTT connections by protocol version",
+    "gauge",
+  )
+  lines.push(
+    by_version + "{version=\"311\"} " + sample.connections_v311.to_string(),
+  )
+  lines.push(
+    by_version + "{version=\"5\"} " + sample.connections_v5.to_string(),
+  )
+  add_scalar(
+    lines,
+    "will_armed",
+    "Armed MQTT5 Wills",
+    sample.will_armed.to_string(),
+    false,
+  )
+  add_scalar(
+    lines,
+    "will_pending",
+    "Triggered MQTT5 Wills awaiting publication",
+    sample.will_pending.to_string(),
+    false,
+  )
+  add_scalar(
+    lines,
+    "rx_window_used",
+    "Occupied MQTT5 receive permits",
+    sample.rx_window_used.to_string(),
+    false,
+  )
+  add_scalar(
+    lines,
+    "tx_window_used",
+    "Occupied MQTT5 transmit permits",
+    sample.tx_window_used.to_string(),
+    false,
+  )
+  add_scalar(
+    lines,
+    "alias_entries",
+    "MQTT5 topic alias mappings",
+    sample.alias_entries.to_string(),
+    false,
+  )
   add_scalar(
     lines,
     "sessions",
@@ -569,6 +614,13 @@ pub fn worst_case_response_bytes() -> Int {
     driver_progress_monotonic_ms: 0L,
     connections_registered: max,
     connections_active: max,
+    connections_v311: max,
+    connections_v5: max,
+    will_armed: max,
+    will_pending: max,
+    rx_window_used: max,
+    tx_window_used: max,
+    alias_entries: max,
     auth_tasks_outstanding: max,
     sessions_total: max,
     subscriptions_total: max,

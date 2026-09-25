@@ -17,6 +17,7 @@ pub fn BrokerRuntime::prepare_strict_v5_active_packet(
   if event.rx_error is Some(reason) {
     return StrictImmediate([
       SendMqtt5({
+        expiry_deadline: None,
         rx_permit: None,
         connection_id: event.connection_id,
         packet: Disconnect5({ reason, properties: [] }),
@@ -35,6 +36,7 @@ pub fn BrokerRuntime::prepare_strict_v5_active_packet(
     Pingreq5 =>
       StrictImmediate([
         SendMqtt5({
+          expiry_deadline: None,
           rx_permit: None,
           connection_id: event.connection_id,
           packet: Pingresp5,
@@ -101,6 +103,7 @@ pub fn BrokerRuntime::prepare_strict_v5_active_packet(
         None =>
           StrictImmediate([
             SendMqtt5({
+              expiry_deadline: None,
               rx_permit: None,
               connection_id: event.connection_id,
               packet: Disconnect5({ reason: 0x83, properties: [] }),
@@ -151,6 +154,7 @@ fn BrokerRuntime::prepare_strict_v5_publish(
   if duplicate {
     return StrictImmediate([
       SendMqtt5({
+        expiry_deadline: None,
         rx_permit: None,
         connection_id,
         packet: Pubrec5({
@@ -204,6 +208,7 @@ fn BrokerRuntime::prepare_strict_v5_publish(
     if packet.qos == @protocol.QoS1 {
       actions.push(
         SendMqtt5({
+          expiry_deadline: None,
           rx_permit,
           connection_id,
           packet: Puback5({
@@ -247,6 +252,7 @@ fn BrokerRuntime::prepare_strict_v5_subscribe(
     if item.no_local && item.topic_filter.has_prefix("$share/") {
       return StrictImmediate([
         SendMqtt5({
+          expiry_deadline: None,
           rx_permit: None,
           connection_id,
           packet: Disconnect5({ reason: 0x82, properties: [] }),
@@ -280,6 +286,7 @@ fn BrokerRuntime::prepare_strict_v5_subscribe(
   if entries.is_empty() {
     return StrictImmediate([
       SendMqtt5({
+        expiry_deadline: None,
         rx_permit: None,
         connection_id,
         packet: Suback5({
@@ -303,6 +310,7 @@ fn BrokerRuntime::prepare_strict_v5_subscribe(
     Err(_) =>
       return StrictImmediate([
         SendMqtt5({
+          expiry_deadline: None,
           rx_permit: None,
           connection_id,
           packet: Suback5({
@@ -341,6 +349,7 @@ fn BrokerRuntime::prepare_strict_v5_subscribe(
     }
     let actions : Array[RuntimeAction] = [
       SendMqtt5({
+        expiry_deadline: None,
         rx_permit: None,
         connection_id,
         packet: Suback5({ packet_id: packet.packet_id, properties: [], reasons }),
@@ -383,6 +392,7 @@ fn BrokerRuntime::prepare_strict_v5_unsubscribe(
     }
     [
       SendMqtt5({
+        expiry_deadline: None,
         rx_permit: None,
         connection_id,
         packet: Unsuback5({
@@ -427,6 +437,7 @@ fn BrokerRuntime::prepare_strict_v5_outbound_ack(
     Err(_) =>
       return StrictImmediate([
         SendMqtt5({
+          expiry_deadline: None,
           rx_permit: None,
           connection_id,
           packet: Disconnect5({ reason: 0x82, properties: [] }),
@@ -481,6 +492,7 @@ fn BrokerRuntime::prepare_strict_v5_disconnect(
         Err(_) =>
           return StrictImmediate([
             SendMqtt5({
+              expiry_deadline: None,
               rx_permit: None,
               connection_id,
               packet: Disconnect5({ reason: 0x82, properties: [] }),
@@ -508,4 +520,34 @@ fn BrokerRuntime::prepare_strict_v5_disconnect(
       )
     None => self.prepare_strict_termination(closed, generations)
   }
+}
+
+///|
+pub fn BrokerRuntime::prepare_strict_write_not_started(
+  self : BrokerRuntime,
+  event : WriteNotStartedEvent,
+  generations : Map[@session.ClientId, Int64],
+) -> StrictPacketPlan {
+  if self.active_by_client.get(event.client_id) != Some(event.connection_id) ||
+    self.broker_state.policy_session_incarnation(event.client_id) !=
+    event.session_incarnation {
+    return StrictImmediate([])
+  }
+  let kind = if event.qos == @protocol.QoS2 {
+    @router.V5OutboundPubrecNegative
+  } else {
+    @router.V5OutboundPuback
+  }
+  let generation = generations.get(event.client_id).unwrap_or(1L)
+  let plan = match
+    self.broker_state.prepare_durable_ack(
+      event.client_id,
+      @session.SessionPacketId::new(event.packet_id.value()).unwrap(),
+      kind,
+      generation,
+    ) {
+    Ok(value) => value
+    Err(_) => return StrictClose(event.connection_id, ProtocolError)
+  }
+  StrictPrepared(Ack(plan), actions => self.map_broker_actions(actions))
 }

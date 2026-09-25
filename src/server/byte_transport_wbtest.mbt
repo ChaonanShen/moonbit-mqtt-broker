@@ -329,3 +329,32 @@ async test "partial TCP publish stops before the next chunk when policy changes"
   }
   assert_eq(received, 16384)
 }
+
+///|
+test "C-T04 MQTT5 decode reservation keeps large payload within connection budget" {
+  let protocol = @config.ProtocolConfig::new(mqtt5_enabled=true).unwrap()
+  let large_bytes = Array::make(1048576, b'x')
+  large_bytes[0] = 0x30
+  let frame = Bytes::from_array(large_bytes)
+  let charged = decode_cost_bound_v5(frame, protocol)
+  assert_true(charged >= frame.length().to_int64())
+  assert_true(charged < 2097152L)
+  let small_bytes = Array::make(64, b'x')
+  small_bytes[0] = 0x30
+  let small = Bytes::from_array(small_bytes)
+  assert_true(decode_cost_bound_v5(small, protocol) > small.length().to_int64())
+}
+
+///|
+async test "C-T20 MQTT control frames overtake queued data with bounded fairness" {
+  let sink = TransportSink::new(2)
+  defer sink.close()
+  assert_true(sink.enqueue_frame(b"data-one", None, None))
+  assert_true(sink.enqueue_frame(b"data-two", None, None))
+  assert_true(sink.enqueue_frame(b"ack-one", None, None, priority=true))
+  assert_true(sink.enqueue_frame(b"ack-two", None, None, priority=true))
+  assert_eq(sink.next_outbound_command(false), (WriteFrame(b"ack-one"), true))
+  assert_eq(sink.next_outbound_command(false), (WriteFrame(b"ack-two"), true))
+  assert_eq(sink.next_outbound_command(true), (WriteFrame(b"data-one"), false))
+  assert_eq(sink.next_outbound_command(false), (WriteFrame(b"data-two"), false))
+}

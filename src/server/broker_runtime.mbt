@@ -338,6 +338,7 @@ fn BrokerRuntime::reject_connect(
       } else {
         [
           SendMqtt5({
+            expiry_deadline: None,
             rx_permit: None,
             connection_id,
             packet: Connack5({
@@ -432,6 +433,7 @@ fn BrokerRuntime::map_broker_actions(
               self.v5_active.contains(send.connection_id) =>
               actions.push(
                 SendMqtt5({
+                  expiry_deadline: item.metadata.expiry,
                   rx_permit: None,
                   connection_id: send.connection_id,
                   packet: Publish5({
@@ -466,6 +468,7 @@ fn BrokerRuntime::map_broker_actions(
           let packet_id = @protocol.PacketId::new(ack.packet_id.value()).unwrap()
           actions.push(
             SendMqtt5({
+              expiry_deadline: None,
               rx_permit: None,
               connection_id,
               packet: Pubcomp5({ packet_id, reason: 0x92, properties: [] }),
@@ -478,6 +481,7 @@ fn BrokerRuntime::map_broker_actions(
           let packet_id = @protocol.PacketId::new(ack.packet_id.value()).unwrap()
           actions.push(
             SendMqtt5({
+              expiry_deadline: None,
               rx_permit: None,
               connection_id,
               packet: Pubrel5({ packet_id, reason: 0x92, properties: [] }),
@@ -1058,7 +1062,21 @@ fn BrokerRuntime::finalize_connect(
   }
   if old_v5_will_id is Some(id) {
     if session_present {
-      ignore(self.broker_state.cancel_will(id))
+      if self.broker_state.will_effective_delay_zero(
+          id,
+          old_v5_retention.unwrap_or(@session.DropOnClose),
+        ) {
+        ignore(
+          self.broker_state.trigger_will(
+            id,
+            @budget.monotonic_ms(),
+            received_at_ms,
+            old_v5_retention.unwrap_or(@session.DropOnClose),
+          ),
+        )
+      } else {
+        ignore(self.broker_state.cancel_will(id))
+      }
     } else {
       ignore(
         self.broker_state.trigger_will(
@@ -1119,6 +1137,7 @@ fn BrokerRuntime::finalize_connect(
     self.inbound_aliases.set(connection_id, Map([]))
     actions.push(
       SendMqtt5({
+        expiry_deadline: None,
         rx_permit: None,
         connection_id,
         packet: mqtt5_connack(plan, self.config, session_present),
@@ -1575,6 +1594,7 @@ fn BrokerRuntime::check_deadlines(
       Err(_) => break
     }
   }
+  actions.append(self.map_broker_actions(self.broker_state.resume_pending()))
   for pair in expired {
     let (connection_id, reason) = pair
     actions.append(self.terminate(connection_id, reason))
@@ -1846,6 +1866,7 @@ pub fn BrokerRuntime::apply(
       self.authentication_submit_failed(request_id)
     PacketReceived(packet) => self.handle_packet(packet)
     Mqtt5PacketReceived(packet) => self.handle_mqtt5_packet(packet)
+    WriteNotStarted(skipped) => self.handle_write_not_started(skipped)
     TransportClosed(closed) =>
       self.terminate(
         closed.connection_id,

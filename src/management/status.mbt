@@ -72,6 +72,13 @@ pub fn encode_status(
   let mqtt : Map[String, Json] = Map([
     ("connections_registered", json_decimal(sample.connections_registered)),
     ("connections_active", json_decimal(sample.connections_active)),
+    ("connections_v311", json_decimal(sample.connections_v311)),
+    ("connections_v5", json_decimal(sample.connections_v5)),
+    ("will_armed", json_decimal(sample.will_armed)),
+    ("will_pending", json_decimal(sample.will_pending)),
+    ("rx_window_used", json_decimal(sample.rx_window_used)),
+    ("tx_window_used", json_decimal(sample.tx_window_used)),
+    ("alias_entries", json_decimal(sample.alias_entries)),
     ("auth_tasks_outstanding", json_decimal(sample.auth_tasks_outstanding)),
     ("sessions", json_decimal(sample.sessions_total)),
     ("subscriptions", json_decimal(sample.subscriptions_total)),

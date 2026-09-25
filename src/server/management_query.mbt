@@ -4,6 +4,12 @@ pub(all) struct ManagementConnectionView {
   phase : String
   client_id : String?
   principal : String?
+  protocol : String
+  peer_receive_maximum : Int?
+  peer_max_packet_bytes : Int?
+  peer_topic_alias_maximum : Int?
+  tx_available : Int?
+  rx_inflight : Int?
   closing : Bool
 } derive(Eq, Debug)
 
@@ -80,11 +86,34 @@ pub fn RouterDriver::management_connection_view(
     Authenticating(_) => ("authenticating", None)
     Active(client_id) => ("active", Some(client_id.value()))
   }
+  let v5 = match self.runtime.v5_active.get(connection_id) {
+    Some(value) => Some(value)
+    None => self.runtime.v5_pending.get(connection_id)
+  }
+  let sink = self.sinks.get(connection_id)
   Some({
     connection_id: id,
     phase,
     client_id,
     principal: meta.principal.map(value => value.storage_value()),
+    protocol: if v5 is Some(_) {
+      "5"
+    } else {
+      "3.1.1"
+    },
+    peer_receive_maximum: v5.map(value => value.peer_receive_maximum),
+    peer_max_packet_bytes: v5.map(value => value.peer_max_packet_bytes),
+    peer_topic_alias_maximum: v5.map(value => value.peer_topic_alias_maximum),
+    tx_available: if v5 is Some(_) {
+      sink.map(value => value.tx_window.available())
+    } else {
+      None
+    },
+    rx_inflight: if v5 is Some(_) {
+      sink.map(value => value.rx_ledger.count())
+    } else {
+      None
+    },
     closing: self.management_closing.contains(connection_id),
   })
 }
@@ -100,6 +129,38 @@ fn management_query_error(
 }
 
 ///|
+fn management_optional_int_json(value : Int?) -> Json {
+  match value {
+    Some(number) => number.to_json()
+    None => @json.to_json(())
+  }
+}
+
+///|
+fn management_optional_uint_json(value : UInt?) -> Json {
+  match value {
+    Some(number) => number.to_json()
+    None => @json.to_json(())
+  }
+}
+
+///|
+fn management_subscription_json(view : @router.AdminSubscriptionView) -> Json {
+  let fields : Map[String, Json] = Map([
+    ("filter", view.filter.to_json()),
+    ("qos", view.qos.to_json()),
+    ("no_local", view.no_local.to_json()),
+    ("retain_as_published", view.retain_as_published.to_json()),
+    ("retain_handling", view.retain_handling.to_json()),
+    (
+      "subscription_identifier",
+      management_optional_int_json(view.subscription_identifier),
+    ),
+  ])
+  fields.to_json()
+}
+
+///|
 fn management_session_json(
   view : @router.AdminSessionView,
   boot_id : String,
@@ -108,6 +169,17 @@ fn management_session_json(
     ("handle", view.handle.to_string().to_json()),
     ("client_id", view.client_id.to_json()),
     ("mode", view.mode.to_json()),
+    ("last_protocol", view.last_protocol.to_json()),
+    ("retention", view.retention.to_json()),
+    (
+      "session_expiry_seconds",
+      management_optional_uint_json(view.session_expiry_seconds),
+    ),
+    (
+      "session_expiry_remaining_ms",
+      @management.optional_decimal_json(view.session_expiry_remaining_ms),
+    ),
+    ("will_count", view.will_count.to_json()),
     ("attached", view.attached.to_json()),
     ("lifecycle_version", view.lifecycle_version.to_string().to_json()),
     ("owner", view.owner.to_json()),
@@ -139,6 +211,21 @@ fn management_connection_json(
     ("phase", view.phase.to_json()),
     ("client_id", @management.optional_string_json(view.client_id)),
     ("principal", @management.optional_string_json(view.principal)),
+    ("protocol", view.protocol.to_json()),
+    (
+      "peer_receive_maximum",
+      management_optional_int_json(view.peer_receive_maximum),
+    ),
+    (
+      "peer_max_packet_bytes",
+      management_optional_int_json(view.peer_max_packet_bytes),
+    ),
+    (
+      "peer_topic_alias_maximum",
+      management_optional_int_json(view.peer_topic_alias_maximum),
+    ),
+    ("tx_available", management_optional_int_json(view.tx_available)),
+    ("rx_inflight", management_optional_int_json(view.rx_inflight)),
     ("closing", view.closing.to_json()),
     (
       "connection_etag",
@@ -225,11 +312,12 @@ fn management_row_key_too_large(
         Some(value) => value
         None => return false
       }
-      let blank : Map[String, Json] = Map([
-        ("filter", "".to_json()),
-        ("qos", "".to_json()),
-      ])
-      @utf8.encode(blank.to_json().stringify()).length() -
+      let blank : @router.AdminSubscriptionView = {
+        ..view,
+        filter: "",
+        qos: "",
+      }
+      @utf8.encode(management_subscription_json(blank).stringify()).length() -
       4 +
       management_json_string_bytes(view.filter) +
       management_json_string_bytes(view.qos)
@@ -749,15 +837,7 @@ fn RouterDriver::management_query_result(
         .map(view => management_session_json(view, boot_id))
       }
       @management.Subscriptions =>
-        state
-        .admin_subscription_view(key)
-        .map(view => {
-          let fields : Map[String, Json] = Map([
-            ("filter", view.filter.to_json()),
-            ("qos", view.qos.to_json()),
-          ])
-          fields.to_json()
-        })
+        state.admin_subscription_view(key).map(management_subscription_json)
       @management.Retained =>
         state
         .admin_retained_view(key)

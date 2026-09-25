@@ -145,6 +145,9 @@ async test "typed query reads session detail and bounded page from driver" {
   assert_eq(result.status, @http_transport.Ok)
   assert_true(body.contains("\"client_id\":\"detail-client\""))
   assert_true(body.contains("\"lifecycle_version\":\"1\""))
+  assert_true(body.contains("\"last_protocol\":4"))
+  assert_true(body.contains("\"retention\":\"legacy_broker_policy\""))
+  assert_true(body.contains("\"will_count\":0"))
   mailbox.release(ticket)
   let list : @management.QuerySpec = {
     kind: @management.Sessions,
@@ -247,4 +250,49 @@ async test "oversized escaped retained row returns finite 422 without cursor" {
   assert_true(@utf8.decode(result.body).contains("result_too_large"))
   assert_eq(management.cursor_table.unwrap().live_count(), 0)
   management.close()
+}
+
+///|
+test "C-T38 management connection view exposes bounded MQTT5 negotiation" {
+  let base = ServerConfig::default()
+  let config : ServerConfig = {
+    ..base,
+    protocol_config: @config.ProtocolConfig::new(mqtt5_enabled=true).unwrap(),
+  }
+  let state = @router.BrokerState::new(config.broker_config())
+  let driver = RouterDriver::new(BrokerRuntime::new(config, state))
+  assert_true(driver.enable_management_connection_index(4))
+  let id = ConnectionId::new(55L)
+  let sink = TransportSink::new(4)
+  management_query_register(driver, id, sink)
+  driver.handle(
+    Runtime(
+      Mqtt5PacketReceived({
+        connection_id: id,
+        packet: @protocol.Connect5({
+          client_id: "managed-v5",
+          username: None,
+          password: None,
+          keep_alive: 10,
+          clean_start: true,
+          properties: [{ id: 0x21, value: @protocol.TwoByteValue(3) }],
+          will: None,
+        }),
+        received_at_ms: 1L,
+        rx_permit: None,
+        rx_error: None,
+      }),
+    ),
+  )
+  let view = driver.management_connection_view(55L).unwrap()
+  assert_eq(view.protocol, "5")
+  assert_eq(view.peer_receive_maximum, Some(3))
+  assert_eq(view.tx_available, Some(3))
+  assert_eq(view.rx_inflight, Some(0))
+  let json = management_connection_json(
+    view, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  ).stringify()
+  assert_true(json.contains("\"protocol\":\"5\""))
+  assert_true(json.contains("\"peer_receive_maximum\":3"))
+  sink.close()
 }

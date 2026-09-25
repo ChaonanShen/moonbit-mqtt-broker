@@ -47,6 +47,48 @@ fn legacy_packet_to_v5(packet : @protocol.Packet) -> @protocol.PacketV5? {
 }
 
 ///|
+fn mqtt5_remaining_expiry_seconds(
+  deadline : @session.Deadline,
+  now_mono_ms : Int64,
+) -> UInt {
+  let remaining = deadline.remaining_at(now_mono_ms)
+  let rounded = remaining / 1000L +
+    (if remaining % 1000L == 0L { 0L } else { 1L })
+  if rounded > 4294967295L {
+    0xffffffffU
+  } else {
+    rounded.to_int().reinterpret_as_uint()
+  }
+}
+
+///|
+fn mqtt5_refresh_expiry_packet(
+  packet : @protocol.PacketV5,
+  deadline : @session.Deadline,
+  now_mono_ms : Int64,
+) -> @protocol.PacketV5 {
+  match packet {
+    Publish5(publish) => {
+      let properties : Array[@protocol.Property] = []
+      for property in publish.properties {
+        if property.id == 0x02 {
+          properties.push({
+            id: 0x02,
+            value: @protocol.FourByteValue(
+              mqtt5_remaining_expiry_seconds(deadline, now_mono_ms),
+            ),
+          })
+        } else {
+          properties.push(property)
+        }
+      }
+      Publish5({ ..publish, properties, })
+    }
+    _ => packet
+  }
+}
+
+///|
 fn mqtt5_message_properties(
   metadata : @session.MessageMetadata,
   now_mono_ms : Int64,
@@ -57,15 +99,12 @@ fn mqtt5_message_properties(
     properties.push({ id: 0x01, value: @protocol.ByteValue(value) })
   }
   if metadata.expiry is Some(deadline) {
-    let remaining = deadline.remaining_at(now_mono_ms)
-    let rounded = remaining / 1000L +
-      (if remaining % 1000L == 0L { 0L } else { 1L })
-    let seconds = if rounded > 4294967295L {
-      0xffffffffU
-    } else {
-      rounded.to_int().reinterpret_as_uint()
-    }
-    properties.push({ id: 0x02, value: @protocol.FourByteValue(seconds) })
+    properties.push({
+      id: 0x02,
+      value: @protocol.FourByteValue(
+        mqtt5_remaining_expiry_seconds(deadline, now_mono_ms),
+      ),
+    })
   }
   if metadata.content_type is Some(value) {
     properties.push({ id: 0x03, value: @protocol.StringValue(value) })
@@ -84,4 +123,33 @@ fn mqtt5_message_properties(
     properties.push({ id: 0x26, value: @protocol.StringPair(key, value) })
   }
   properties
+}
+
+///|
+fn BrokerRuntime::handle_write_not_started(
+  self : BrokerRuntime,
+  event : WriteNotStartedEvent,
+) -> Array[RuntimeAction] {
+  if self.active_by_client.get(event.client_id) != Some(event.connection_id) ||
+    self.broker_state.policy_session_incarnation(event.client_id) !=
+    event.session_incarnation {
+    return []
+  }
+  let kind = if event.qos == @protocol.QoS2 {
+    @session.V5Pubrec
+  } else {
+    @session.V5Puback
+  }
+  match
+    self.broker_state.apply(
+      @router.OutboundAckV5({
+        client_id: event.client_id,
+        packet_id: @session.SessionPacketId::new(event.packet_id.value()).unwrap(),
+        kind,
+        negative: event.qos == @protocol.QoS2,
+      }),
+    ) {
+    Ok(actions) => self.map_broker_actions(actions)
+    Err(_) => self.terminate(event.connection_id, ProtocolError)
+  }
 }

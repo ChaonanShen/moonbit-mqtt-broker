@@ -9,6 +9,13 @@ fn sample_observation() -> ObservationSnapshot {
     driver_progress_monotonic_ms: 1000L,
     connections_registered: 0L,
     connections_active: 0L,
+    connections_v311: 0L,
+    connections_v5: 0L,
+    will_armed: 0L,
+    will_pending: 0L,
+    rx_window_used: 0L,
+    tx_window_used: 0L,
+    alias_entries: 0L,
     auth_tasks_outstanding: 0L,
     sessions_total: 0L,
     subscriptions_total: 0L,
@@ -265,6 +272,9 @@ test "Prometheus text has fixed metrics, units and nonzero ages" {
   let sample = {
     ..sample_observation(),
     messages_sent: 9223372036854775807L,
+    connections_v311: 2L,
+    connections_v5: 1L,
+    will_pending: 3L,
     resources: [
       {
         name: "auth_request",
@@ -300,6 +310,17 @@ test "Prometheus text has fixed metrics, units and nonzero ages" {
   assert_true(
     value.contains("moonbit_mqtt_broker_snapshot_state{state=\"healthy\"} 1"),
   )
+  assert_true(
+    value.contains(
+      "moonbit_mqtt_broker_connections_by_version{version=\"311\"} 2",
+    ),
+  )
+  assert_true(
+    value.contains(
+      "moonbit_mqtt_broker_connections_by_version{version=\"5\"} 1",
+    ),
+  )
+  assert_true(value.contains("moonbit_mqtt_broker_will_pending 3"))
   assert_true(
     value.contains(
       "moonbit_mqtt_broker_management_rejected_total{reason=\"auth\"} 1",

@@ -502,6 +502,7 @@ fn RouterDriver::dispatch(
           }
           worklist.push(
             SendMqtt5({
+              expiry_deadline: None,
               rx_permit: None,
               connection_id: send.connection_id,
               packet,
@@ -594,6 +595,7 @@ fn RouterDriver::dispatch(
             send.close_reason,
             send.connection_id,
             rx_permit?=send.rx_permit,
+            expiry_deadline?=send.expiry_deadline,
           )
           if result is Err(_) && reserved is Some(value) {
             ignore(sink.tx_window.terminal(value))
@@ -620,7 +622,11 @@ fn RouterDriver::dispatch(
           None => ()
           Some(sink) => {
             sink.resolve_handshake(false)
-            sink.try_close(close.reason)
+            if close.reason == NormalDisconnect {
+              sink.try_close_after_pending(close.reason)
+            } else {
+              sink.try_close(close.reason)
+            }
           }
         }
       StartAuthentication(start) => {
@@ -945,6 +951,7 @@ fn RouterDriver::encode_v5_and_queue(
   close : CloseReason?,
   connection_id : ConnectionId,
   rx_permit? : RxPermit,
+  expiry_deadline? : @session.Deadline,
 ) -> Result[Unit, CloseReason] {
   let rx_permit = match (packet, rx_permit) {
     (Pubcomp5(ack), None) => sink.rx_ledger.permit(ack.packet_id.value())
@@ -1032,8 +1039,14 @@ fn RouterDriver::encode_v5_and_queue(
       }
     }
   }
+  let logical_cost = if expiry_deadline is Some(_) {
+    frame.length().to_int64() * 2L + 128L
+  } else {
+    0L
+  }
   let charged = frame.length().to_int64() +
-    authorization.map(value => value.cost()).unwrap_or(0L)
+    authorization.map(value => value.cost()).unwrap_or(0L) +
+    logical_cost
   let prepared = if packet is @protocol.PacketV5::Connack5(_) {
     let value = sink.handshake
     sink.handshake = None
@@ -1070,6 +1083,9 @@ fn RouterDriver::encode_v5_and_queue(
       authorization?,
       rx_permit?,
       alias_proposal~,
+      logical_v5?=if expiry_deadline is Some(_) { Some(outgoing) } else { None },
+      expiry_deadline?,
+      priority=!(packet is Publish5(_)),
     ) {
     Ok(())
   } else {

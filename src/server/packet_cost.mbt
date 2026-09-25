@@ -44,6 +44,40 @@ fn decode_cost_bound(frame : Bytes) -> Int64 {
 }
 
 ///|
+/// Bounds MQTT 5 decoding without multiplying a large PUBLISH payload by
+/// the maximum per-property object cost. The protocol decoder still enforces
+/// the configured property and subscription counts before materialization.
+fn decode_cost_bound_v5(
+  frame : Bytes,
+  protocol : @config.ProtocolConfig,
+) -> Int64 {
+  let size = frame.length().to_int64()
+  let kind = frame[0].to_int() >> 4
+  let property_bytes = if size < protocol.max_property_bytes.to_int64() {
+    size
+  } else {
+    protocol.max_property_bytes.to_int64()
+  }
+  let max_properties = (protocol.max_user_properties + 27).to_int64()
+  let property_count = if size / 3L < max_properties {
+    size / 3L
+  } else {
+    max_properties
+  }
+  let entries = if kind == 8 || kind == 10 {
+    let maximum = protocol.max_subscription_entries.to_int64()
+    if size / 3L < maximum {
+      size / 3L
+    } else {
+      maximum
+    }
+  } else {
+    0L
+  }
+  size + property_bytes + property_count * 160L + entries * 80L + 512L
+}
+
+///|
 /// Conservative complete wire size, computed without encoding or copying.
 fn wire_cost_bound(packet : @protocol.Packet) -> Int64 {
   match packet {
