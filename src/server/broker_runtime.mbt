@@ -1543,6 +1543,12 @@ fn BrokerRuntime::handle_packet(
 }
 
 ///|
+/// A single oversized expiry still advances; it consumes the whole turn.
+fn expiry_work_fits(used_bytes : Int64, item_bytes : Int64) -> Bool {
+  used_bytes == 0L || item_bytes <= 262144L - used_bytes
+}
+
+///|
 fn BrokerRuntime::check_deadlines(
   self : BrokerRuntime,
   now_ms : Int64,
@@ -1584,11 +1590,13 @@ fn BrokerRuntime::check_deadlines(
     @router.BrokerEvent::ExpireSessions(now_ms)
   }
   let mut remaining = self.config.protocol_config().max_expiry_work_per_turn
+  let mut expiry_work_bytes = 0L
   match self.broker_state.apply(expiry_event) {
     Ok(expiration_actions) => {
       for action in expiration_actions {
         if action is @router.SessionExpired(_) {
           remaining -= 1
+          expiry_work_bytes = 262144L
         }
       }
       actions.append(self.map_broker_actions(expiration_actions))
@@ -1597,25 +1605,54 @@ fn BrokerRuntime::check_deadlines(
   }
   let now_mono_ms = @budget.monotonic_ms()
   for _ in 0..<remaining {
-    if remaining <= 0 {
+    if remaining <= 0 || expiry_work_bytes >= 262144L {
+      break
+    }
+    let cost = match self.broker_state.next_expired_pending_cost(now_mono_ms) {
+      Some(value) => value
+      None => break
+    }
+    if !expiry_work_fits(expiry_work_bytes, cost) {
       break
     }
     match self.broker_state.expire_one_pending_v5(now_mono_ms) {
-      Ok(true) => remaining -= 1
+      Ok(true) => {
+        remaining -= 1
+        expiry_work_bytes += cost
+      }
       Ok(false) | Err(_) => break
     }
   }
   for _ in 0..<remaining {
-    if remaining <= 0 {
+    if remaining <= 0 || expiry_work_bytes >= 262144L {
+      break
+    }
+    let cost = match self.broker_state.next_expired_retained_cost(now_mono_ms) {
+      Some(value) => value
+      None => break
+    }
+    if !expiry_work_fits(expiry_work_bytes, cost) {
       break
     }
     match self.broker_state.expire_one_retained_v5(now_mono_ms) {
-      Ok(true) => remaining -= 1
+      Ok(true) => {
+        remaining -= 1
+        expiry_work_bytes += cost
+      }
       Ok(false) | Err(_) => break
     }
   }
   for _ in 0..<remaining {
-    if remaining <= 0 || now_mono_ms < self.will_retry_after_mono_ms {
+    if remaining <= 0 ||
+      expiry_work_bytes >= 262144L ||
+      now_mono_ms < self.will_retry_after_mono_ms {
+      break
+    }
+    let cost = match self.broker_state.next_due_will_cost(now_mono_ms) {
+      Some(value) => value
+      None => break
+    }
+    if !expiry_work_fits(expiry_work_bytes, cost) {
       break
     }
     let will_id = match self.broker_state.next_due_will(now_mono_ms) {
@@ -1628,6 +1665,7 @@ fn BrokerRuntime::check_deadlines(
       ) {
       Ok(published) => {
         remaining -= 1
+        expiry_work_bytes += cost
         self.will_retry_after_mono_ms = 0L
         actions.append(self.map_broker_actions(published))
       }

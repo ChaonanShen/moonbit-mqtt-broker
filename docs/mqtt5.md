@@ -59,7 +59,9 @@ Protocol settings require a restart. Their CLI forms use the --mqtt5-
 prefix; --help and --print-effective-config show the complete effective
 configuration. When MQTT 5 is enabled, server_receive_maximum must not
 exceed the per-Session inbound QoS 2 limit, and max_delayed_wills must not
-exceed the combined Session and connection capacity.
+exceed the combined Session and connection capacity. Expiry cleanup is
+limited by max_expiry_work_per_turn and 256 KiB of estimated work per turn;
+one larger object may use a turn by itself so cleanup cannot stall.
 
 ## Persistence and upgrades
 

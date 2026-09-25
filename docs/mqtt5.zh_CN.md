@@ -54,7 +54,9 @@ data_dir = "/var/lib/moonbit-mqtt-broker"
 协议参数修改后须重启。对应 CLI 参数以 --mqtt5- 开头；--help 和
 --print-effective-config 可显示完整生效配置。启用 MQTT 5 时，
 server_receive_maximum 不得超过每会话入站 QoS 2 上限；
-max_delayed_wills 不得超过会话与连接容量之和。
+max_delayed_wills 不得超过会话与连接容量之和。到期清理每轮同时受
+max_expiry_work_per_turn 与 256 KiB 估算工作量限制；单个超大对象可独占一轮，
+避免清理停滞。
 
 ## 持久化与升级
 

@@ -34,6 +34,18 @@ pub fn BrokerState::next_expired_pending(
 }
 
 ///|
+pub fn BrokerState::next_expired_pending_cost(
+  self : BrokerState,
+  now_mono_ms : Int64,
+) -> Int64? {
+  let (client_id, index) = match self.next_expired_pending(now_mono_ms) {
+    Some(value) => value
+    None => return None
+  }
+  self.sessions.get(client_id).unwrap().pending_item_cost(index)
+}
+
+///|
 pub fn BrokerState::prepare_durable_pending_expiry(
   self : BrokerState,
   client_id : @session.ClientId,
