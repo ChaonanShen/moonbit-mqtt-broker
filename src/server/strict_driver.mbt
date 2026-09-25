@@ -145,11 +145,16 @@ fn RouterDriver::drain_strict_queues(self : RouterDriver) -> Unit {
     Some(value) => value
     None => return
   }
-  while !coordinator.has_submitted() &&
+  // A handler may defer an event again when its admission state changes.
+  // Visit each item present at entry at most once in this turn.
+  let mut remaining_runtime = self.strict_held.length()
+  while remaining_runtime > 0 &&
+        !coordinator.has_submitted() &&
         !self.strict_fenced &&
         !self.reload_barrier &&
         (!self.strict_checkpoint_inflight || coordinator.checkpoint_active()) &&
         self.strict_checkpoint_cursor is None {
+    remaining_runtime -= 1
     let queued = match self.strict_held.pop_front() {
       Some(value) => value
       None => break
@@ -158,11 +163,14 @@ fn RouterDriver::drain_strict_queues(self : RouterDriver) -> Unit {
     self.strict_released_connection(event)
     self.handle_strict_runtime_event(event, ticket)
   }
-  while !coordinator.has_submitted() &&
+  let mut remaining_management = self.strict_management_held.length()
+  while remaining_management > 0 &&
+        !coordinator.has_submitted() &&
         !self.strict_fenced &&
         !self.reload_barrier &&
         (!self.strict_checkpoint_inflight || coordinator.checkpoint_active()) &&
         self.strict_checkpoint_cursor is None {
+    remaining_management -= 1
     match self.strict_management_held.pop_front() {
       Some(event) => self.handle_strict_management_command(event)
       None => break
@@ -274,7 +282,7 @@ fn RouterDriver::handle_strict_runtime_event(
     self.reload_barrier ||
     collecting_blocks ||
     self.strict_checkpoint_cursor is Some(_) ||
-    self.strict_checkpoint_inflight {
+    (self.strict_checkpoint_inflight && !coordinator.checkpoint_active()) {
     if coordinator.is_collecting() && !coordinator.flush() {
       self.strict_fence("group-commit-submit")
       return
