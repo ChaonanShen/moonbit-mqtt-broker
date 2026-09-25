@@ -62,7 +62,7 @@ pub fn BrokerState::export_snapshot_v5(
   session_ids.sort_by(fn(left, right) {
     compare_utf8_for_sort(left.value(), right.value())
   })
-  let mut next_session_incarnation = 1L
+  let next_session_incarnation = self.next_session_incarnation
   let mut next_delivery_id = self.next_delivery_id
   let sessions : Array[SnapshotSessionV5] = []
   for client_id in session_ids {
@@ -168,7 +168,7 @@ pub fn BrokerState::export_snapshot_v5(
     sessions.push({
       client_id: client_id.value(),
       owner_principal: session.owner().storage_value(),
-      incarnation: next_session_incarnation,
+      incarnation: self.session_incarnation(client_id).unwrap(),
       lifecycle_version: 1L,
       state_revision: session.policy_revision(),
       last_protocol: session.last_protocol(),
@@ -182,7 +182,6 @@ pub fn BrokerState::export_snapshot_v5(
       inflight,
       pending,
     })
-    next_session_incarnation += 1L
   }
   let retained : Array[SnapshotRetainedV5] = []
   for message in self.retained.all_messages() {
@@ -214,17 +213,66 @@ pub fn BrokerState::export_snapshot_v5(
       },
     })
   }
+  let wills : Array[SnapshotWillV5] = []
+  for _, record in self.wills {
+    let template_message = @session.SessionMessage::new(
+      record.template.topic,
+      record.template.payload,
+      record.template.retain,
+      qos=record.template.qos,
+      metadata=record.template.metadata,
+    )
+    let due_clock = match record.due {
+      None => None
+      Some(value) =>
+        match v5_snapshot_clock(value, now_mono_ms, effective_wall) {
+          Ok(clock) => Some(clock)
+          Err(error) => return Err(error)
+        }
+    }
+    wills.push({
+      id: record.id,
+      owner_principal: record.owner.storage_value(),
+      client_id: record.client_id.value(),
+      session_incarnation: record.session_incarnation,
+      state: if record.state == WillArmed {
+        0
+      } else {
+        1
+      },
+      message_template: match
+        v5_snapshot_message(template_message, now_mono_ms, effective_wall) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      },
+      delay_seconds: record.template.delay_seconds,
+      will_message_expiry_seconds: record.template.message_expiry_seconds,
+      trigger_wall_ms: record.trigger_wall_ms,
+      due_clock,
+      policy_sequence: record.policy_sequence,
+      revision: record.revision,
+    })
+  }
+  wills.sort_by(fn(left, right) {
+    if left.id < right.id {
+      -1
+    } else if left.id > right.id {
+      1
+    } else {
+      0
+    }
+  })
   Ok({
     clock_floor_wall_ms: effective_wall,
     next_session_incarnation,
     next_subscription_identity: self.subscriptions.next_identity(),
     next_delivery_id,
     next_group_id: 1L,
-    next_will_id: 1L,
+    next_will_id: self.next_will_id,
     next_retained_revision: self.retained.next_revision(),
     groups: [],
     sessions,
     retained,
-    wills: [],
+    wills,
   })
 }

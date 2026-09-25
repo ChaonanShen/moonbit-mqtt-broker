@@ -2231,8 +2231,14 @@ async fn run_main() -> Unit {
           }
         }
       }
-      if config.protocol_config().mqtt5_enabled &&
-        !initial_state.uses_v5_storage() {
+      if (
+          config.protocol_config().mqtt5_enabled &&
+          !initial_state.uses_v5_storage()
+        ) ||
+        (
+          initial_state.uses_v5_storage() &&
+          initial_state.snapshot_revision() > 0L
+        ) {
         initial_state.enable_v5_storage()
         let migrated = match
           initial_state.export_snapshot_v5(@budget.monotonic_ms(), @async.now()) {

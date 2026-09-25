@@ -173,6 +173,9 @@ pub fn BrokerState::commit_activation(
     ignore(self.subscriptions.remove_all(activation.id))
   }
   self.track_policy_session(activation.id)
+  if old is None || activation.reset {
+    self.assign_session_incarnation(activation.id)
+  }
   if old is Some(_) && activation.reset {
     self.replace_policy_session(activation.id)
   }

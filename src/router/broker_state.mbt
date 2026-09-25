@@ -21,6 +21,12 @@ pub struct BrokerState {
   priv mut next_delivery_id : Int64
   priv mut clock_floor_wall_ms : Int64
   priv mut storage_v5 : Bool
+  priv wills : Map[Int64, Mqtt5WillRecord]
+  priv will_tickets : Map[Int64, @budget.Ticket]
+  priv active_will_by_client : Map[@session.ClientId, Int64]
+  priv mut next_will_id : Int64
+  priv session_incarnations : Map[@session.ClientId, Int64]
+  priv mut next_session_incarnation : Int64
   priv mut last_expiration_check_ms : Int64?
   priv mut time_regression_reported : Bool
 }
@@ -88,6 +94,12 @@ pub fn BrokerState::new(
     next_delivery_id: 1L,
     clock_floor_wall_ms: 0L,
     storage_v5: false,
+    wills: Map([]),
+    will_tickets: Map([]),
+    active_will_by_client: Map([]),
+    next_will_id: 1L,
+    session_incarnations: Map([]),
+    next_session_incarnation: 1L,
     last_expiration_check_ms: None,
     time_regression_reported: false,
   }
@@ -464,6 +476,7 @@ fn BrokerState::create_session(
     Ok(_) => ()
   }
   self.track_policy_session(request.client_id)
+  self.assign_session_incarnation(request.client_id)
   self.sessions.set(
     request.client_id,
     @session.ClientSession::new(
@@ -499,6 +512,7 @@ fn BrokerState::remove_session(
   }
   ignore(self.subscriptions.remove_all(client_id))
   self.sessions.remove(client_id)
+  self.session_incarnations.remove(client_id)
   self.untrack_policy_session(client_id)
   if self.admin_sessions is Some(index) {
     index.remove(client_id)
@@ -1195,6 +1209,12 @@ fn BrokerState::apply_event(
       Ok([])
     }
     ExpireSessions(now_ms) => self.expire_sessions(now_ms)
+    PublishDueWill(request) =>
+      self.publish_due_will(
+        request.id,
+        request.now_mono_ms,
+        request.now_wall_ms,
+      )
     ExpireSessionsV5(request) =>
       self.expire_sessions_v5(request.now_wall_ms, request.now_mono_ms)
     SubscribeV5(request) => self.subscribe_v5(request)
@@ -1733,6 +1753,7 @@ pub fn BrokerState::apply(
     event is RemoveSession(_) ||
     event is ExpireSessions(_) ||
     event is ExpireSessionsV5(_) ||
+    event is PublishDueWill(_) ||
     event is Puback(_) ||
     event is OutboundAckV5(_) ||
     event is Pubrec(_) ||
@@ -1773,4 +1794,24 @@ pub fn BrokerState::enable_v5_storage(self : BrokerState) -> Unit {
 ///|
 pub fn BrokerState::uses_v5_storage(self : BrokerState) -> Bool {
   self.storage_v5
+}
+
+///|
+fn BrokerState::assign_session_incarnation(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Unit {
+  if self.next_session_incarnation == 9223372036854775807L {
+    abort("session incarnation exhausted")
+  }
+  self.session_incarnations.set(client_id, self.next_session_incarnation)
+  self.next_session_incarnation += 1L
+}
+
+///|
+pub fn BrokerState::session_incarnation(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Int64? {
+  self.session_incarnations.get(client_id)
 }

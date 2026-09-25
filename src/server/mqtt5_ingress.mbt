@@ -120,9 +120,6 @@ fn BrokerRuntime::handle_mqtt5_packet(
           return self.reject_mqtt5_connect(event.connection_id, error.reason)
       }
       // The first runtime activation stage keeps unsupported state out of V3 storage.
-      if plan.will is Some(_) {
-        return self.reject_mqtt5_connect(event.connection_id, 0x83)
-      }
       self.v5_pending.set(event.connection_id, {
         ..plan,
         username: None,
