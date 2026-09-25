@@ -151,3 +151,26 @@ test "durable reconnect promotes pending in the same committed session result" {
   assert_eq(state.inflight_count(), 1)
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "C-T31 V5 durable activation reserves incarnation before WAL" {
+  let state = BrokerState::new(BrokerConfig::new(4, 16, 4).unwrap())
+  let before = state.export_snapshot_v5(100L, 1000L).unwrap()
+  let id = @session.ClientId::new("strict-v5-client").unwrap()
+  let plan = state
+    .prepare_durable_activation(
+      id,
+      @session.Persistent,
+      @security.Anonymous,
+      0L,
+      1L,
+    )
+    .unwrap()
+  let delta = plan.delta_v5(100L, 1000L).unwrap()
+  assert_eq(delta.session_puts[0].session.incarnation, 1L)
+  assert_eq(delta.id_floors, [{ kind: 1, new_floor: 2L }])
+  let accumulator = DurableAccumulatorV5::new(before)
+  assert_eq(accumulator.apply(delta), Ok(()))
+  assert_eq(accumulator.snapshot().sessions.length(), 1)
+  plan.cancel()
+}

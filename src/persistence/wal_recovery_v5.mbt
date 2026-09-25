@@ -171,6 +171,7 @@ pub async fn WalStore::recover_state_v5(
         snapshot,
         @budget.monotonic_ms(),
         @async.now(),
+        recover_armed_wills=false,
       ) {
       Ok(value) => value
       Err(_) => raise SnapshotImport("V5 WAL state exceeds limits")

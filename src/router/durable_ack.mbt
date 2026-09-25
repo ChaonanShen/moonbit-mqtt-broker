@@ -6,6 +6,11 @@ pub(all) enum DurableAckKind {
   InboundPubrel
   InboundPublishDropped
   PendingPromotion
+  V5OutboundPuback
+  V5OutboundPubrec
+  V5OutboundPubrecNegative
+  V5OutboundPubcomp
+  V5InboundPubrel
 } derive(Eq, Debug)
 
 ///|
@@ -116,10 +121,47 @@ pub fn BrokerState::prepare_durable_ack(
       actions.push(SendPubrel({ client_id, packet_id }))
       advanced
     }
-    InboundPubrel => {
+    InboundPubrel | V5InboundPubrel => {
       let deleted = candidate.complete_inbound_qos2(packet_id)
-      actions.push(SendPubcomp({ client_id, packet_id }))
+      if kind == V5InboundPubrel && !deleted {
+        actions.push(SendPubcompNotFound({ client_id, packet_id }))
+      } else {
+        actions.push(SendPubcomp({ client_id, packet_id }))
+      }
       deleted
+    }
+    V5OutboundPuback
+    | V5OutboundPubrec
+    | V5OutboundPubrecNegative
+    | V5OutboundPubcomp => {
+      let v5_kind = match kind {
+        V5OutboundPuback => @session.V5Puback
+        V5OutboundPubrec | V5OutboundPubrecNegative => @session.V5Pubrec
+        _ => @session.V5Pubcomp
+      }
+      let transition = match
+        candidate.apply_v5_outbound_ack(
+          packet_id,
+          v5_kind,
+          kind == V5OutboundPubrecNegative,
+        ) {
+        Ok(value) => value
+        Err(error) => {
+          scratch.release().unwrap()
+          return Err(SessionFailure(error))
+        }
+      }
+      match transition {
+        @session.V5UnknownPacketId =>
+          if v5_kind == @session.V5Pubrec {
+            actions.push(SendPubrelNotFound({ client_id, packet_id }))
+          }
+        @session.V5SendPubrel =>
+          actions.push(SendPubrel({ client_id, packet_id }))
+        @session.V5Terminal =>
+          actions.push(DeliveryAcknowledged({ client_id, packet_id }))
+      }
+      transition != @session.V5UnknownPacketId
     }
     PendingPromotion => {
       let free_slots = self.config.max_inflight_total() - self.inflight_total
@@ -274,4 +316,35 @@ pub fn DurableAckPlan::cancel(self : DurableAckPlan) -> Unit {
     self.scratch.release().unwrap()
     self.finished = true
   }
+}
+
+///|
+pub fn DurableAckPlan::delta_v5(
+  self : DurableAckPlan,
+  now_mono_ms : Int64,
+  now_wall_ms : Int64,
+) -> Result[DurableDeltaV5, RouterError] {
+  let session_puts : Array[Mqtt5SessionPut] = []
+  if self.changed && self.candidate.mode() == @session.Persistent {
+    let put = match
+      self.broker.session_put_v5(
+        self.client_id,
+        self.candidate,
+        now_mono_ms,
+        now_wall_ms,
+      ) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    session_puts.push(put)
+  }
+  Ok({
+    ..DurableDeltaV5::empty(),
+    new_clock_floor: if now_wall_ms > self.broker.clock_floor_wall_ms {
+      Some(now_wall_ms)
+    } else {
+      None
+    },
+    session_puts,
+  })
 }

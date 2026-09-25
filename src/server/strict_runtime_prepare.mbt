@@ -339,6 +339,9 @@ pub fn BrokerRuntime::prepare_strict_active_packet(
           self.release_policy_epoch(active.policy_epoch)
         }
         self.connections.remove(event.connection_id)
+        self.v5_active.remove(event.connection_id)
+        self.inbound_aliases.remove(event.connection_id)
+        self.v5_will_ids.remove(event.connection_id)
         let will_ticket = self.will_tickets.get(event.connection_id)
         self.will_tickets.remove(event.connection_id)
         release_optional(will_ticket)

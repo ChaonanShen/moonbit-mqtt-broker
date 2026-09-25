@@ -87,7 +87,17 @@ pub fn DurableAccumulatorV5::apply(
         if found ||
           sessions[index].incarnation != put.expected_incarnation ||
           sessions[index].state_revision != put.expected_revision ||
-          put.session.state_revision <= put.expected_revision {
+          (
+            put.session.incarnation == put.expected_incarnation &&
+            put.session.state_revision <= put.expected_revision
+          ) ||
+          (
+            put.session.incarnation != put.expected_incarnation &&
+            (
+              put.session.incarnation <= put.expected_incarnation ||
+              put.session.state_revision < 1L
+            )
+          ) {
           return Err(InvalidState("session put conflict"))
         }
         sessions[index] = put.session

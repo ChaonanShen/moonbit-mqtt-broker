@@ -1319,6 +1319,9 @@ fn BrokerState::apply_event(
           }
         }
       }
+      if subscriptions_changed {
+        self.sessions.get(client_id).unwrap().subscription_changed()
+      }
       if persistent && (subscriptions_changed || delivery_changed) {
         self.mark_snapshot_dirty()
       }
@@ -1340,6 +1343,9 @@ fn BrokerState::apply_event(
         if changed && self.admin_sessions is Some(index) {
           index.remove_subscription(client_id, filter)
         }
+      }
+      if removed.any(value => value) {
+        self.sessions.get(client_id).unwrap().subscription_changed()
       }
       if removed.any(value => value) && self.session_is_persistent(client_id) {
         self.mark_snapshot_dirty()
@@ -1814,4 +1820,25 @@ pub fn BrokerState::session_incarnation(
   client_id : @session.ClientId,
 ) -> Int64? {
   self.session_incarnations.get(client_id)
+}
+
+///|
+pub fn BrokerState::materialize_delivery_ids(self : BrokerState) -> Bool {
+  let ids = self.sessions.keys().collect()
+  ids.sort_by(fn(left, right) {
+    compare_utf8_for_sort(left.value(), right.value())
+  })
+  let mut next = self.next_delivery_id
+  for id in ids {
+    let session = self.sessions.get(id).unwrap()
+    next = match session.materialize_delivery_ids(next) {
+      Ok(value) => value
+      Err(_) => return false
+    }
+  }
+  if next > self.next_delivery_id {
+    self.next_delivery_id = next
+    self.mark_snapshot_dirty()
+  }
+  true
 }

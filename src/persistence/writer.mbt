@@ -208,26 +208,17 @@ fn SnapshotWriter::take_latest(self : SnapshotWriter) -> Unit {
 async fn SnapshotWriter::wait_retry_latest(self : SnapshotWriter) -> Unit {
   let deadline = @async.now() + self.retry_ms.to_int64()
   for ;; {
+    // Queue.get under a cancelling timeout can consume an item while the
+    // timeout discards its result. Polling the nonblocking queue preserves it.
+    self.take_latest()
     let remaining = deadline - @async.now()
     if remaining <= 0L {
-      self.take_latest()
       return
     }
-    let timeout = if remaining > 2147483647L {
-      2147483647
-    } else {
-      remaining.to_int()
-    }
-    let next = @async.with_timeout_opt(timeout, () => self.sink.queue.get()) catch {
-      error => if self.sink.closed { None } else { raise error }
-    }
-    match next {
-      Some(value) => self.install_latest(value)
-      None => {
-        self.take_latest()
-        return
-      }
-    }
+    let quantum = if self.retry_ms < 100 { 5L } else { 50L }
+    @async.sleep(
+      (if remaining < quantum { remaining } else { quantum }).to_int(),
+    )
   }
 }
 

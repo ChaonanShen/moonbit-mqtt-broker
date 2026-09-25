@@ -63,3 +63,21 @@ test "durable subscribe holds filter and retained replay until commit" {
   assert_eq(accumulator.export_snapshot().0, state.export_snapshot())
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "C-T31 V5 durable subscribe delta keeps SID floor and replay identity" {
+  let (state, client) = durable_subscribe_fixture()
+  let before = state.export_snapshot_v5(100L, 1000L).unwrap()
+  let filter = @topic.TopicFilter::new("state/#").unwrap()
+  let plan = state
+    .prepare_durable_subscribe(client, [{ filter, qos: @session.QoS1 }], 4L)
+    .unwrap()
+  let delta = plan.delta_v5(100L, 1000L).unwrap()
+  assert_eq(delta.session_puts.length(), 1)
+  assert_true(delta.id_floors.any(value => value.kind == 2))
+  assert_true(delta.id_floors.any(value => value.kind == 3))
+  let accumulator = DurableAccumulatorV5::new(before)
+  assert_eq(accumulator.apply(delta), Ok(()))
+  assert_eq(accumulator.snapshot().sessions[0].subscriptions.length(), 1)
+  plan.cancel()
+}

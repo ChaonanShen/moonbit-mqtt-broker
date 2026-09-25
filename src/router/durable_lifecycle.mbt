@@ -34,6 +34,7 @@ pub fn BrokerState::prepare_durable_lifecycle(
   client_id : @session.ClientId,
   generation : Int64,
   kind : DurableLifecycleKind,
+  v5_retention_override? : @session.Retention,
 ) -> Result[DurableLifecyclePlan, RouterError] {
   let old = match self.sessions.get(client_id) {
     Some(value) => value
@@ -59,8 +60,21 @@ pub fn BrokerState::prepare_durable_lifecycle(
         scratch.release().unwrap()
         return Err(InvalidSessionState(client_id))
       }
-      let candidate = old.copy()
-      candidate.detach(detached_at_ms~)
+      let candidate = match v5_retention_override {
+        Some(value) => old.copy().with_retention(value)
+        None => old.copy()
+      }
+      if candidate.retention() is @session.FiniteV5(_) {
+        match candidate.detach_v5(@budget.monotonic_ms(), detached_at_ms) {
+          Ok(_) => ()
+          Err(_) => {
+            scratch.release().unwrap()
+            return Err(InvariantViolation("V5 detach clock overflow"))
+          }
+        }
+      } else {
+        candidate.detach(detached_at_ms~)
+      }
       let delta = if persistent {
         DurableDelta::{
           session_puts: [
@@ -199,4 +213,50 @@ pub fn DurableLifecyclePlan::cancel(self : DurableLifecyclePlan) -> Unit {
     self.scratch.release().unwrap()
     self.finished = true
   }
+}
+
+///|
+pub fn DurableLifecyclePlan::delta_v5(
+  self : DurableLifecyclePlan,
+  now_mono_ms : Int64,
+  now_wall_ms : Int64,
+) -> Result[DurableDeltaV5, RouterError] {
+  let session_puts : Array[Mqtt5SessionPut] = []
+  let session_deletes : Array[Mqtt5SessionDelete] = []
+  match self.candidate {
+    Some(value) if value.mode() == @session.Persistent =>
+      match
+        self.broker.session_put_v5(
+          self.client_id,
+          value,
+          now_mono_ms,
+          now_wall_ms,
+        ) {
+        Ok(put) => session_puts.push(put)
+        Err(error) => return Err(error)
+      }
+    None => {
+      let original = self.broker.sessions.get(self.client_id).unwrap()
+      if original.mode() == @session.Persistent {
+        session_deletes.push({
+          client_id: self.client_id.value(),
+          expected_incarnation: self.broker
+          .session_incarnation(self.client_id)
+          .unwrap(),
+          expected_revision: original.policy_revision(),
+        })
+      }
+    }
+    _ => ()
+  }
+  Ok({
+    ..DurableDeltaV5::empty(),
+    new_clock_floor: if now_wall_ms > self.broker.clock_floor_wall_ms {
+      Some(now_wall_ms)
+    } else {
+      None
+    },
+    session_puts,
+    session_deletes,
+  })
 }

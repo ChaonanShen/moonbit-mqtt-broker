@@ -41,3 +41,31 @@ test "durable unsubscribe keeps subscription until committed" {
   assert_eq(accumulator.export_snapshot().0, state.export_snapshot())
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "C-T31 V5 durable unsubscribe delta removes binding by identity" {
+  let state = BrokerState::new(BrokerConfig::new(4, 16, 4).unwrap())
+  let client = @session.ClientId::new("v5-unsub").unwrap()
+  let filter = @topic.TopicFilter::new("state/#").unwrap()
+  ignore(
+    state.apply(
+      CreateSessionWith({
+        client_id: client,
+        mode: @session.Persistent,
+        attached: true,
+      }),
+    ),
+  )
+  ignore(
+    state.apply(
+      Subscribe({ client_id: client, entries: [{ filter, qos: @session.QoS1 }] }),
+    ),
+  )
+  let before = state.export_snapshot_v5(100L, 1000L).unwrap()
+  let plan = state.prepare_durable_unsubscribe(client, [filter], 1L).unwrap()
+  let delta = plan.delta_v5(100L, 1000L).unwrap()
+  assert_eq(delta.session_puts[0].session.subscriptions.length(), 0)
+  let accumulator = DurableAccumulatorV5::new(before)
+  assert_eq(accumulator.apply(delta), Ok(()))
+  plan.cancel()
+}
