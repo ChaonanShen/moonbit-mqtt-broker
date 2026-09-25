@@ -52,15 +52,20 @@ pub(all) enum BrokerEvent {
   AttachSession(@session.ClientId)
   DetachSession(@session.ClientId)
   DetachSessionAt(DetachSessionRequest)
+  DetachSessionV5(DetachSessionV5Request)
+  UpdateV5Retention(UpdateV5RetentionRequest)
   ExpireSessions(Int64)
+  ExpireSessionsV5(ExpireSessionsV5Request)
   Subscribe(SubscribeRequest)
   SubscribeV5(SubscribeV5Request)
   Unsubscribe(UnsubscribeRequest)
   Publish(PublishInput)
   PublishV5(PublishInputV5)
   Puback(PubackRequest)
+  OutboundAckV5(OutboundAckV5Request)
   Pubrec(PubackRequest)
   Pubrel(PubackRequest)
+  InboundPubrelV5(PubackRequest)
   Pubcomp(PubackRequest)
   ReceiveQoS2(InboundQoS2Request)
   ReceiveQoS2V5(InboundQoS2RequestV5)
@@ -95,4 +100,31 @@ pub(all) struct SubscribeEntryV5 {
 pub(all) struct SubscribeV5Request {
   client_id : @session.ClientId
   entries : Array[SubscribeEntryV5]
+} derive(Eq, Debug)
+
+///|
+pub(all) struct OutboundAckV5Request {
+  client_id : @session.ClientId
+  packet_id : @session.SessionPacketId
+  kind : @session.V5OutboundAckKind
+  negative : Bool
+} derive(Eq, Debug)
+
+///|
+pub(all) struct DetachSessionV5Request {
+  client_id : @session.ClientId
+  now_mono_ms : Int64
+  now_wall_ms : Int64
+} derive(Eq, Debug)
+
+///|
+pub(all) struct ExpireSessionsV5Request {
+  now_wall_ms : Int64
+  now_mono_ms : Int64
+} derive(Eq, Debug)
+
+///|
+pub(all) struct UpdateV5RetentionRequest {
+  client_id : @session.ClientId
+  retention : @session.Retention
 } derive(Eq, Debug)

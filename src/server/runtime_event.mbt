@@ -16,6 +16,8 @@ pub(all) struct Mqtt5PacketReceivedEvent {
   connection_id : ConnectionId
   packet : @protocol.PacketV5
   received_at_ms : Int64
+  rx_permit : RxPermit?
+  rx_error : Int?
 } derive(Eq, Debug)
 
 ///|

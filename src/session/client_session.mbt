@@ -5,6 +5,7 @@ pub struct ClientSession {
   client_id : ClientId
   mode : SessionMode
   retention : Retention
+  last_protocol : Int
   mut expiry_deadline : Deadline?
   mut attached : Bool
   allocator : PacketIdAllocator
@@ -34,6 +35,7 @@ pub fn ClientSession::new(
       LegacyBrokerPolicy
     },
     expiry_deadline: None,
+    last_protocol: 4,
     attached,
     allocator: PacketIdAllocator::new().unwrap(),
     inflight: [],
@@ -58,7 +60,7 @@ pub fn ClientSession::new_with_retention(
 ) -> ClientSession {
   let mode = if retention == DropOnClose { Clean } else { Persistent }
   let session = ClientSession::new(client_id, mode~, attached~, owner~)
-  { ..session, retention, }
+  { ..session, retention, last_protocol: 5 }
 }
 
 ///|
@@ -123,6 +125,7 @@ pub fn ClientSession::restore(
     mode: Persistent,
     retention: LegacyBrokerPolicy,
     expiry_deadline: None,
+    last_protocol: 4,
     attached: false,
     allocator,
     inflight: stored_inflight,
@@ -163,6 +166,11 @@ pub fn ClientSession::retention(self : ClientSession) -> Retention {
 }
 
 ///|
+pub fn ClientSession::last_protocol(self : ClientSession) -> Int {
+  self.last_protocol
+}
+
+///|
 pub fn ClientSession::with_retention(
   self : ClientSession,
   retention : Retention,
@@ -175,6 +183,7 @@ pub fn ClientSession::with_retention(
       Persistent
     },
     retention,
+    last_protocol: 5,
     expiry_deadline: None,
   }
 }
@@ -238,7 +247,14 @@ fn ClientSession::stage_inflight(
     Err(error) => return Err(error)
   }
   let phase = if message.qos == QoS2 { AwaitPubrec } else { AwaitPuback }
-  self.inflight.push({ packet_id, message: Some(message.copy()), phase })
+  self.inflight.push({
+    packet_id,
+    delivery_id: message.delivery_id,
+    started: true,
+    subscription_identifiers: message.subscription_identifiers.copy(),
+    message: Some(message.copy()),
+    phase,
+  })
   self.inflight_cost += message.cost()
   self.bump_policy_revision()
   Ok({ packet_id, message: Some(message.copy()), dup: false })
@@ -552,8 +568,16 @@ pub fn ClientSession::pubrec(
       AwaitPubrec => {
         // Move exactly once: preserve both required replay subsequences.
         self.inflight = self.inflight.filter(value => value.packet_id != id)
-        self.inflight.push({ packet_id: id, phase: AwaitPubcomp, message: None })
-        self.inflight_cost -= item.cost() - 64L
+        let terminal : OutboundInflight = {
+          packet_id: id,
+          delivery_id: item.delivery_id,
+          started: item.started,
+          subscription_identifiers: item.subscription_identifiers.copy(),
+          phase: AwaitPubcomp,
+          message: None,
+        }
+        self.inflight.push(terminal)
+        self.inflight_cost -= item.cost() - terminal.cost()
         self.bump_policy_revision()
         return Ok(true)
       }
@@ -799,4 +823,41 @@ pub fn ClientSession::pending_item_cost(
   } else {
     Some(self.pending[index].cost())
   }
+}
+
+///|
+pub fn ClientSession::restore_v5(
+  client_id : ClientId,
+  next_packet_id : Int,
+  inflight : Array[OutboundInflight],
+  pending : Array[SessionMessage],
+  owner : @security.Principal,
+  detached_at_ms : Int64,
+  inbound_qos2 : Array[SessionPacketId],
+  retention : Retention,
+  last_protocol : Int,
+  expiry_deadline : Deadline?,
+) -> Result[ClientSession, SessionError] {
+  if retention == DropOnClose || (last_protocol != 4 && last_protocol != 5) {
+    return Err(
+      SessionInvariantViolation("invalid durable V5 session retention"),
+    )
+  }
+  if retention is FiniteV5(_) && expiry_deadline is None {
+    return Err(SessionInvariantViolation("finite V5 session lacks deadline"))
+  }
+  let restored = match
+    ClientSession::restore(
+      client_id,
+      next_packet_id,
+      inflight,
+      pending,
+      owner~,
+      detached_at_ms~,
+      inbound_qos2~,
+    ) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  Ok({ ..restored, retention, last_protocol, expiry_deadline })
 }

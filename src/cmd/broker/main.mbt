@@ -2231,6 +2231,25 @@ async fn run_main() -> Unit {
           }
         }
       }
+      if config.protocol_config().mqtt5_enabled &&
+        !initial_state.uses_v5_storage() {
+        initial_state.enable_v5_storage()
+        let migrated = match
+          initial_state.export_snapshot_v5(@budget.monotonic_ms(), @async.now()) {
+          Ok(value) => value
+          Err(_) => {
+            store.close()
+            raise CliError("MQTT 5 snapshot migration preparation failed")
+          }
+        }
+        match store.save_v5(migrated) {
+          Ok(_) => ()
+          Err(error) => {
+            store.close()
+            raise CliError("MQTT 5 snapshot migration: " + error.category())
+          }
+        }
+      }
       let snapshot_bytes = match store.snapshot_size() {
         Ok(Some(value)) => value
         Ok(None) => 0L

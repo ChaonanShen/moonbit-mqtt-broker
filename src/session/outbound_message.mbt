@@ -11,6 +11,7 @@ pub(all) struct SessionMessage {
   qos : DeliveryQoS
   metadata : MessageMetadata
   subscription_identifiers : Array[Int]
+  delivery_id : Int64
 } derive(Eq, Debug)
 
 ///|
@@ -21,6 +22,7 @@ pub fn SessionMessage::new(
   qos? : DeliveryQoS = QoS1,
   metadata? : MessageMetadata = MessageMetadata::empty(),
   subscription_identifiers? : Array[Int] = [],
+  delivery_id? : Int64 = 0L,
 ) -> SessionMessage {
   {
     topic,
@@ -29,6 +31,7 @@ pub fn SessionMessage::new(
     qos,
     metadata: metadata.copy(),
     subscription_identifiers: subscription_identifiers.copy(),
+    delivery_id,
   }
 }
 
@@ -42,6 +45,9 @@ pub(all) enum OutboundPhase {
 ///|
 pub(all) struct OutboundInflight {
   packet_id : SessionPacketId
+  delivery_id : Int64
+  started : Bool
+  subscription_identifiers : Array[Int]
   message : SessionMessage?
   phase : OutboundPhase
 } derive(Eq, Debug)
@@ -114,12 +120,17 @@ pub fn SessionMessage::copy(self : SessionMessage) -> SessionMessage {
     qos=self.qos,
     metadata=self.metadata,
     subscription_identifiers=self.subscription_identifiers,
+    delivery_id=self.delivery_id,
   )
 }
 
 ///|
 pub fn OutboundInflight::copy(self : OutboundInflight) -> OutboundInflight {
-  { ..self, message: self.message.map(message => message.copy()) }
+  {
+    ..self,
+    message: self.message.map(message => message.copy()),
+    subscription_identifiers: self.subscription_identifiers.copy(),
+  }
 }
 
 ///|
@@ -139,6 +150,12 @@ pub fn SessionMessage::cost(self : SessionMessage) -> Int64 {
 pub fn OutboundInflight::cost(self : OutboundInflight) -> Int64 {
   match self.message {
     Some(message) => message.cost()
-    None => @budget.qos2_metadata_cost()
+    None =>
+      @budget.qos2_metadata_cost() +
+      (if self.subscription_identifiers.is_empty() {
+        0L
+      } else {
+        24L + self.subscription_identifiers.length().to_int64() * 8L
+      })
   }
 }

@@ -39,5 +39,7 @@ pub(all) enum BrokerAction {
   DeliverWithMetadata(DeliveryWithMetadataAction)
   SendPubrec(DeliveryAcknowledgedAction)
   SendPubrel(DeliveryAcknowledgedAction)
+  SendPubrelNotFound(DeliveryAcknowledgedAction)
   SendPubcomp(DeliveryAcknowledgedAction)
+  SendPubcompNotFound(DeliveryAcknowledgedAction)
 } derive(Eq, Debug)

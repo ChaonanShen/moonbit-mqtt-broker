@@ -341,7 +341,14 @@ pub fn BrokerState::from_snapshot(
           None
         }
       }
-      restored_inflight.push({ packet_id, message, phase })
+      restored_inflight.push({
+        packet_id,
+        delivery_id: 0L,
+        started: true,
+        subscription_identifiers: [],
+        message,
+        phase,
+      })
     }
     let restored_pending : Array[@session.SessionMessage] = []
     for message in saved.pending {

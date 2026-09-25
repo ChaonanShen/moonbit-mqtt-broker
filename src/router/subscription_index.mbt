@@ -489,3 +489,50 @@ pub fn SubscriptionIndex::matches_v5(
   })
   result
 }
+
+///|
+pub fn SubscriptionIndex::bindings_for(
+  self : SubscriptionIndex,
+  client_id : @session.ClientId,
+) -> Array[SubscriptionBinding] {
+  let result : Array[SubscriptionBinding] = []
+  if self.bindings.get(client_id) is Some(values) {
+    for _, binding in values {
+      result.push(binding)
+    }
+  }
+  result.sort_by(fn(left, right) {
+    if left.identity < right.identity {
+      -1
+    } else if left.identity > right.identity {
+      1
+    } else {
+      0
+    }
+  })
+  result
+}
+
+///|
+pub fn SubscriptionIndex::next_identity(self : SubscriptionIndex) -> Int64 {
+  self.next_identity
+}
+
+///|
+pub fn SubscriptionIndex::ensure_next_identity(
+  self : SubscriptionIndex,
+  value : Int64,
+) -> Bool {
+  if value < 1L {
+    return false
+  }
+  for _, bindings in self.bindings {
+    for _, binding in bindings {
+      if binding.identity >= value {
+        return false
+      }
+    }
+  }
+  self.next_identity = value
+  true
+}

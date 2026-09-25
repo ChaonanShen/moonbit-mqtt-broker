@@ -72,3 +72,8 @@ pub fn WireRxLedger::complete(self : WireRxLedger, permit : RxPermit) -> Bool {
 pub fn WireRxLedger::close(self : WireRxLedger) -> Unit {
   self.entries.clear()
 }
+
+///|
+pub fn WireRxLedger::permit(self : WireRxLedger, packet_id : Int) -> RxPermit? {
+  self.entries.get(packet_id)
+}

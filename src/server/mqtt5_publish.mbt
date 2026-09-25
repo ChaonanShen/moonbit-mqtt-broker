@@ -124,10 +124,12 @@ fn BrokerRuntime::mqtt5_publish_failure(
   connection_id : ConnectionId,
   packet : @protocol.PublishV5,
   reason : Int,
+  rx_permit : RxPermit?,
 ) -> Array[RuntimeAction] {
   if packet.qos == @protocol.QoS0 || reason == 0x82 || reason == 0x94 {
     return [
       SendMqtt5({
+        rx_permit: None,
         connection_id,
         packet: Disconnect5({ reason, properties: [] }),
         close_reason: Some(ProtocolError),
@@ -143,7 +145,7 @@ fn BrokerRuntime::mqtt5_publish_failure(
   } else {
     @protocol.Puback5({ packet_id, reason, properties: [] })
   }
-  [SendMqtt5({ connection_id, packet: reply, close_reason: None })]
+  [SendMqtt5({ rx_permit, connection_id, packet: reply, close_reason: None })]
 }
 
 ///|
@@ -153,6 +155,7 @@ fn BrokerRuntime::handle_v5_publish(
   client_id : @session.ClientId,
   principal : @security.Principal,
   packet : @protocol.PublishV5,
+  rx_permit : RxPermit?,
 ) -> Array[RuntimeAction] {
   self.metrics.record_received()
   let duplicate = packet.qos == @protocol.QoS2 &&
@@ -172,11 +175,17 @@ fn BrokerRuntime::handle_v5_publish(
     ) {
     Ok(value) => value
     Err(error) =>
-      return self.mqtt5_publish_failure(connection_id, packet, error.reason)
+      return self.mqtt5_publish_failure(
+        connection_id,
+        packet,
+        error.reason,
+        rx_permit,
+      )
   }
   if duplicate {
     return [
       SendMqtt5({
+        rx_permit: None,
         connection_id,
         packet: Pubrec5({
           packet_id: packet.packet_id.unwrap(),
@@ -190,14 +199,14 @@ fn BrokerRuntime::handle_v5_publish(
   if !self.security.can_write_topic(principal, normalized.publish.topic) {
     self.metrics.record_acl_denial()
     self.metrics.record_dropped()
-    return self.mqtt5_publish_failure(connection_id, packet, 0x87)
+    return self.mqtt5_publish_failure(connection_id, packet, 0x87, rx_permit)
   }
   if !self.admission.admit_publish(
       client_id,
       @budget.utf8_bytes(normalized.publish.topic.value()) +
       normalized.publish.payload.length().to_int64(),
     ) {
-    return self.mqtt5_publish_failure(connection_id, packet, 0x97)
+    return self.mqtt5_publish_failure(connection_id, packet, 0x97, rx_permit)
   }
   let result = if packet.qos == @protocol.QoS2 {
     self.broker_state.apply(
@@ -218,6 +227,7 @@ fn BrokerRuntime::handle_v5_publish(
       if packet.qos == @protocol.QoS1 {
         actions.push(
           SendMqtt5({
+            rx_permit,
             connection_id,
             packet: Puback5({
               packet_id: packet.packet_id.unwrap(),
@@ -234,7 +244,7 @@ fn BrokerRuntime::handle_v5_publish(
     | Err(@router.QoS1ResourceLimit(_, _))
     | Err(@router.InboundQoS2ResourceLimit(_))
     | Err(@router.RetainedLimitReached(_)) =>
-      self.mqtt5_publish_failure(connection_id, packet, 0x97)
-    Err(_) => self.mqtt5_publish_failure(connection_id, packet, 0x83)
+      self.mqtt5_publish_failure(connection_id, packet, 0x97, rx_permit)
+    Err(_) => self.mqtt5_publish_failure(connection_id, packet, 0x83, rx_permit)
   }
 }
