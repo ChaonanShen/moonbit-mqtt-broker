@@ -373,6 +373,14 @@ measurement. Run this comparison separately from distribution soak.
 
 ## P1-01 strict durability gate
 
+The extended strict transport soak logs progress every 100 publications. Its
+client deadline and shell timeout bound the load; a separate ten-second
+watchdog bounds Broker shutdown after a failed load. A missing
+`DURABILITY_SOAK_PASS`, missing `soak.json`, or nonzero Broker exit is a
+failed or incomplete soak, even when earlier correctness stages passed.
+The checkpoint/live-load regression runs in Native tests so an event that is
+deferred again cannot monopolize the driver turn.
+
 The committed-candidate release chain calls `durability_transports.sh` and
 `durability_commit.sh` once from `verify-release.sh`. They exercise TCP,
 TLS, WS and WSS, QoS 1/2 restart recovery, a held fsync with an independent

@@ -61,9 +61,14 @@ stop_broker() {
   if kill -0 "$broker_pid" 2>/dev/null; then
     kill -- "-$broker_pid" 2>/dev/null || kill "$broker_pid" 2>/dev/null || true
   fi
+  (sleep 10; kill -KILL -- "-$broker_pid" 2>/dev/null ||
+    kill -KILL "$broker_pid" 2>/dev/null || true) &
+  local watchdog_pid=$!
   set +e
   wait "$broker_pid"
   local rc=$?
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
   set -e
   printf '%s\n' "$rc" >"$RUN_DIR/$current_phase.exit-code"
   broker_pid=''

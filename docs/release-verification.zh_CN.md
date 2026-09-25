@@ -430,6 +430,13 @@ soak 分开执行。
 
 ## P1-01 强持久性门禁
 
+扩展 strict transport soak 每 100 条发布记录一次进度。客户端截止时间与
+shell timeout 限制负载时长；负载失败后另有 10 秒 watchdog 限制 Broker
+停机等待。缺少 `DURABILITY_SOAK_PASS`、`soak.json` 或 Broker 退出码
+非零时，soak 属失败或未完成，不能因前面的正确性门禁通过而标为通过。
+Native 测试还覆盖 checkpoint 与在线事件交错，避免重新排队的事件独占
+driver 本轮执行。
+
 已提交候选的 `verify-release.sh` 各调用一次 `durability_transports.sh`
 与 `durability_commit.sh`：覆盖 TCP、TLS、WS、WSS，QoS 1/2 重启恢复，
 阻塞 fsync 期间另一连接继续响应，以及确认后 SIGKILL 恢复。原生测试覆盖 WAL
