@@ -1,0 +1,22 @@
+///|
+test "C-T10 indexed expiry heap updates and removes without stale nodes" {
+  let heap = ExpiryScheduler::new(3, 512L)
+  assert_true(heap.set("retained/a", 300L, 1L))
+  assert_true(heap.set("will/2", 200L, 1L))
+  assert_true(heap.set("pending/1", 100L, 1L))
+  assert_false(heap.set("extra", 50L, 1L))
+  assert_eq(heap.peek_due(99L), None)
+  assert_eq(heap.peek_due(100L).unwrap().key, "pending/1")
+  assert_true(heap.set("pending/1", 400L, 2L))
+  assert_eq(heap.length(), 3)
+  assert_eq(heap.peek_due(200L).unwrap().key, "will/2")
+  assert_true(heap.remove("will/2"))
+  assert_eq(heap.peek_due(300L).unwrap().key, "retained/a")
+  assert_false(heap.remove("will/2"))
+  assert_true(heap.check_invariants())
+  let clone = heap.copy()
+  assert_true(clone.remove("retained/a"))
+  assert_eq(heap.length(), 2)
+  assert_eq(clone.length(), 1)
+  assert_true(clone.check_invariants())
+}

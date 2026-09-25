@@ -3,8 +3,12 @@ fn BrokerState::expire_sessions_v5(
   self : BrokerState,
   now_wall_ms : Int64,
   now_mono_ms : Int64,
+  max_work : Int,
 ) -> Result[Array[BrokerAction], RouterError] {
-  let actions = match self.expire_sessions(now_wall_ms) {
+  if max_work < 1 {
+    return Err(InvariantViolation("invalid MQTT5 expiry work limit"))
+  }
+  let actions = match self.expire_sessions(now_wall_ms, max_items=max_work) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -14,7 +18,7 @@ fn BrokerState::expire_sessions_v5(
       completed += 1
     }
   }
-  let remaining = self.config.max_session_expirations_per_tick() - completed
+  let remaining = max_work - completed
   if remaining <= 0 {
     return Ok(actions)
   }

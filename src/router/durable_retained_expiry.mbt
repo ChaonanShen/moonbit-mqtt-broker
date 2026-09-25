@@ -13,19 +13,7 @@ pub fn BrokerState::next_expired_retained(
   self : BrokerState,
   now_mono_ms : Int64,
 ) -> @topic.TopicName? {
-  let mut selected : @topic.TopicName? = None
-  for topic in self.retained.topic_keys() {
-    let message = self.retained.peek(topic).unwrap()
-    if message.metadata.expiry is Some(deadline) &&
-      deadline.remaining_at(now_mono_ms) == 0L &&
-      (
-        selected is None ||
-        compare_utf8_for_sort(topic.value(), selected.unwrap().value()) < 0
-      ) {
-      selected = Some(topic)
-    }
-  }
-  selected
+  self.retained.next_expired(now_mono_ms)
 }
 
 ///|

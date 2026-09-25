@@ -389,6 +389,16 @@ pub fn BrokerState::from_snapshot_v5(
       Err(_) => return Err(LimitExceeded("restored Will byte budget"))
     }
     ticket.commit().unwrap()
+    if record.state == WillPending &&
+      record.due is Some(deadline) &&
+      !state.will_expiry.set(
+        record.id.to_string(),
+        deadline.mono_due_ms,
+        record.revision,
+      ) {
+      ticket.release().unwrap()
+      return Err(LimitExceeded("restored Will expiry index"))
+    }
     state.will_tickets.set(record.id, ticket)
     state.wills.set(record.id, record)
   }
