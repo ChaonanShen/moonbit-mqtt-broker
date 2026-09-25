@@ -66,3 +66,28 @@ test "C-T05 MQTT5 unsupported auth method and malformed Will payload" {
     Err({ reason: 0x99 }),
   )
 }
+
+///|
+test "M-T26 MQTT5 CONNACK does not claim optional response namespace" {
+  let config = ServerConfig::default()
+  let packet : @protocol.ConnectV5 = {
+    ..v5_connect_test_packet(),
+    properties: [{ id: 0x19, value: @protocol.ByteValue(1) }],
+  }
+  let plan = normalize_mqtt5_connect(packet, config, _ => false).unwrap()
+  let properties = match mqtt5_connack(plan, config, false) {
+    @protocol.Connack5(value) => value.properties
+    _ => fail("expected CONNACK")
+  }
+  for id in [0x21, 0x22, 0x25, 0x27, 0x28, 0x29, 0x2a] {
+    assert_true(properties.any(item => item.id == id))
+  }
+  assert_true(
+    properties.any(item => {
+      item.id == 0x2a && item.value == @protocol.ByteValue(0)
+    }),
+  )
+  for id in [0x1a, 0x1c, 0x24] {
+    assert_false(properties.any(item => item.id == id))
+  }
+}

@@ -114,7 +114,32 @@ pub fn property_allowed(
     ) => true
     (0x1f, SubackProperties | UnsubackProperties, ServerToClient) => true
     (0x15 | 0x16, AuthProperties, _) => true
-    (0x26, _, _) => true
+    (
+      0x26,
+      ConnectProperties
+      | WillProperties
+      | SubscribeProperties
+      | UnsubscribeProperties,
+      ClientToServer,
+    ) => true
+    (
+      0x26,
+      ConnackProperties
+      | SubackProperties
+      | UnsubackProperties,
+      ServerToClient,
+    ) => true
+    (
+      0x26,
+      PublishProperties
+      | PubackProperties
+      | PubrecProperties
+      | PubrelProperties
+      | PubcompProperties
+      | DisconnectProperties
+      | AuthProperties,
+      _,
+    ) => true
     _ => false
   }
 }

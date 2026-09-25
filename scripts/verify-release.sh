@@ -26,6 +26,7 @@ printf 'candidate_sha=%s\ncommands=%s\n' "${CANDIDATE_SHA:-unbound}" \
 tests/integration/reload_lifecycle.sh
 tests/integration/reload_tls.sh
 tests/integration/reload_durability.sh
+MQTT5_RELOAD=1 tests/integration/reload_durability.sh
 tests/integration/reload_limits.sh
 tests/integration/reload_shutdown.sh
 for mode in off snapshot strict; do
