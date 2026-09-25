@@ -995,14 +995,58 @@ fn RouterDriver::encode_v5_and_queue(
     .get(connection_id)
     .map(plan => plan.peer_max_packet_bytes)
     .unwrap_or(self.runtime.config.max_packet_size())
+  let mut outgoing = packet
+  let mut alias_proposal = AliasNone
+  if packet is Publish5(publish) &&
+    self.runtime.v5_active.get(connection_id) is Some(plan) {
+    let maximum = if plan.peer_topic_alias_maximum <
+      self.runtime.config.protocol_config().topic_alias_maximum {
+      plan.peer_topic_alias_maximum
+    } else {
+      self.runtime.config.protocol_config().topic_alias_maximum
+    }
+    alias_proposal = sink.propose_outbound_alias(
+      publish.topic,
+      maximum,
+      self.runtime.config.protocol_config().max_alias_bytes_per_connection,
+    )
+    match alias_proposal {
+      AliasDefine(id, _) | AliasReuse(id) => {
+        let properties = publish.properties.copy()
+        properties.push({ id: 0x23, value: @protocol.TwoByteValue(id) })
+        outgoing = Publish5({
+          ..publish,
+          topic: if alias_proposal is AliasReuse(_) {
+            ""
+          } else {
+            publish.topic
+          },
+          properties,
+        })
+      }
+      AliasNone => ()
+    }
+  }
   let frame = match
     @protocol.encode_v5(
-      packet,
+      outgoing,
       @protocol.PacketDirection::ServerToClient,
       peer_limit,
     ) {
     Ok(value) => value
-    Err(_) => return Err(EncodeFailure)
+    Err(_) => {
+      sink.outbound_alias_cancel(alias_proposal)
+      if alias_proposal is AliasDefine(_, _) {
+        alias_proposal = AliasNone
+        match
+          @protocol.encode_v5(packet, @protocol.ServerToClient, peer_limit) {
+          Ok(value) => value
+          Err(_) => return Err(EncodeFailure)
+        }
+      } else {
+        return Err(EncodeFailure)
+      }
+    }
   }
   let charged = frame.length().to_int64() +
     authorization.map(value => value.cost()).unwrap_or(0L)
@@ -1021,6 +1065,7 @@ fn RouterDriver::encode_v5_and_queue(
         ])
         is Err(_) {
         frame_reservation.ticket.release().unwrap()
+        sink.outbound_alias_cancel(alias_proposal)
         return Err(SlowConsumer)
       }
       Some(frame_reservation)
@@ -1028,12 +1073,23 @@ fn RouterDriver::encode_v5_and_queue(
     None =>
       match sink.reserve_frame(charged, authorization is None) {
         Ok(value) => value
-        Err(_) => return Err(SlowConsumer)
+        Err(_) => {
+          sink.outbound_alias_cancel(alias_proposal)
+          return Err(SlowConsumer)
+        }
       }
   }
-  if sink.enqueue_frame(frame, reservation, close, authorization?, rx_permit?) {
+  if sink.enqueue_frame(
+      frame,
+      reservation,
+      close,
+      authorization?,
+      rx_permit?,
+      alias_proposal~,
+    ) {
     Ok(())
   } else {
+    sink.outbound_alias_cancel(alias_proposal)
     Err(SlowConsumer)
   }
 }

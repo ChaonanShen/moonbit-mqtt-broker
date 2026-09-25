@@ -322,7 +322,9 @@ async fn write_transport(
         return PeerEof
       }
       WriteFrame(frame) => {
-        let (ticket, authorization, rx_permit) = sink.take_owned_frame(frame)
+        let (ticket, authorization, rx_permit, alias_proposal) = sink.take_owned_frame(
+          frame,
+        )
         defer release_optional(ticket)
         if sink.ws_closing {
           continue
@@ -340,12 +342,15 @@ async fn write_transport(
         if rx_permit is Some(permit) {
           ignore(sink.rx_ledger.complete(permit))
         }
+        sink.outbound_alias_written(alias_proposal)
         if bus is Some(bus) && bus.needs_promotion {
           bus.post_tick(CheckDeadlines(@async.now()))
         }
       }
       WriteFrameThenClose(frame, reason) => {
-        let (ticket, authorization, rx_permit) = sink.take_owned_frame(frame)
+        let (ticket, authorization, rx_permit, alias_proposal) = sink.take_owned_frame(
+          frame,
+        )
         defer release_optional(ticket)
         if sink.ws_closing {
           continue
@@ -363,6 +368,7 @@ async fn write_transport(
         if rx_permit is Some(permit) {
           ignore(sink.rx_ledger.complete(permit))
         }
+        sink.outbound_alias_written(alias_proposal)
         return reason
       }
     }
