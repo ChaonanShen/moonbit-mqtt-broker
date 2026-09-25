@@ -10,6 +10,7 @@ pub(all) struct SessionMessage {
   retain : Bool
   qos : DeliveryQoS
   metadata : MessageMetadata
+  subscription_identifiers : Array[Int]
 } derive(Eq, Debug)
 
 ///|
@@ -19,6 +20,7 @@ pub fn SessionMessage::new(
   retain : Bool,
   qos? : DeliveryQoS = QoS1,
   metadata? : MessageMetadata = MessageMetadata::empty(),
+  subscription_identifiers? : Array[Int] = [],
 ) -> SessionMessage {
   {
     topic,
@@ -26,6 +28,7 @@ pub fn SessionMessage::new(
     retain,
     qos,
     metadata: metadata.copy(),
+    subscription_identifiers: subscription_identifiers.copy(),
   }
 }
 
@@ -110,6 +113,7 @@ pub fn SessionMessage::copy(self : SessionMessage) -> SessionMessage {
     self.retain,
     qos=self.qos,
     metadata=self.metadata,
+    subscription_identifiers=self.subscription_identifiers,
   )
 }
 
@@ -122,7 +126,12 @@ pub fn OutboundInflight::copy(self : OutboundInflight) -> OutboundInflight {
 pub fn SessionMessage::cost(self : SessionMessage) -> Int64 {
   @budget.checked_add(
     @budget.message_cost(self.topic.value(), self.payload.length().to_int64()).unwrap(),
-    self.metadata.cost(),
+    self.metadata.cost() +
+    (if self.subscription_identifiers.is_empty() {
+      0L
+    } else {
+      24L + self.subscription_identifiers.length().to_int64() * 8L
+    }),
   ).unwrap()
 }
 

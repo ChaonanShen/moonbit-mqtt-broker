@@ -57,3 +57,39 @@ test "action ordering ignores insertion order" {
     expected,
   )
 }
+
+///|
+test "C-T12 MQTT5 NoLocal RAP and duplicate SID preserve delivery classes" {
+  let index = SubscriptionIndex::new()
+  let alice = client("v5-alice")
+  ignore(
+    index.put_v5(alice, filter("a/#"), @session.QoS1, true, false, 0, Some(7)),
+  )
+  ignore(
+    index.put_v5(alice, filter("a/+"), @session.QoS2, false, true, 0, Some(7)),
+  )
+  let other = client("publisher")
+  assert_eq(index.matches_v5(topic("a/b"), Some(other), true), [
+    {
+      client_id: alice,
+      qos: @session.QoS1,
+      retain: false,
+      subscription_identifiers: [7],
+    },
+    {
+      client_id: alice,
+      qos: @session.QoS2,
+      retain: true,
+      subscription_identifiers: [7],
+    },
+  ])
+  assert_eq(index.matches_v5(topic("a/b"), Some(alice), true), [
+    {
+      client_id: alice,
+      qos: @session.QoS2,
+      retain: true,
+      subscription_identifiers: [7],
+    },
+  ])
+  assert_true(index.check_invariants())
+}

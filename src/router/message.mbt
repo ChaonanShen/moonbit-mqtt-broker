@@ -19,6 +19,7 @@ pub(all) struct RetainedMessage {
   topic : @topic.TopicName
   payload : Bytes
   qos : @session.DeliveryQoS
+  metadata : @session.MessageMetadata
 } derive(Eq, Debug)
 
 ///|
@@ -30,4 +31,17 @@ pub(all) struct RoutedDelivery {
   retain : Bool
   packet_id : @session.SessionPacketId?
   dup : Bool
+} derive(Eq, Debug)
+
+///|
+pub(all) struct PublishInputV5 {
+  publish : PublishInput
+  metadata : @session.MessageMetadata
+} derive(Eq, Debug)
+
+///|
+pub(all) struct DeliveryWithMetadataAction {
+  delivery : RoutedDelivery
+  metadata : @session.MessageMetadata
+  subscription_identifiers : Array[Int]
 } derive(Eq, Debug)

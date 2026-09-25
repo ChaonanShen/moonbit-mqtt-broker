@@ -20,13 +20,25 @@ pub struct SubscriptionIndex {
     @session.ClientId,
     Map[@topic.TopicFilter, @session.DeliveryQoS],
   ]
+  priv bindings : Map[
+    @session.ClientId,
+    Map[@topic.TopicFilter, SubscriptionBinding],
+  ]
+  priv mut next_identity : Int64
   priv mut count : Int
   priv mut policy_slots : PolicySubscriptionSlots?
 }
 
 ///|
 pub fn SubscriptionIndex::new() -> SubscriptionIndex {
-  { by_filter: Map([]), by_client: Map([]), count: 0, policy_slots: None }
+  {
+    by_filter: Map([]),
+    by_client: Map([]),
+    bindings: Map([]),
+    next_identity: 1L,
+    count: 0,
+    policy_slots: None,
+  }
 }
 
 ///|
@@ -57,6 +69,27 @@ pub fn SubscriptionIndex::put(
   }
   filters.set(filter, qos)
   clients.set(client_id, qos)
+  if self.next_identity == 9223372036854775807L {
+    abort("subscription identity exhausted")
+  }
+  let bindings = match self.bindings.get(client_id) {
+    Some(value) => value
+    None => {
+      let value : Map[@topic.TopicFilter, SubscriptionBinding] = Map([])
+      self.bindings.set(client_id, value)
+      value
+    }
+  }
+  bindings.set(filter, {
+    identity: self.next_identity,
+    filter,
+    qos,
+    no_local: false,
+    retain_as_published: false,
+    retain_handling: 0,
+    subscription_identifier: None,
+  })
+  self.next_identity += 1L
   if !existed {
     if self.policy_slots is Some(slots) && !slots.track(client_id, filter) {
       abort("core policy subscription slot exhausted")
@@ -64,6 +97,64 @@ pub fn SubscriptionIndex::put(
     self.count = self.count + 1
   }
   !existed
+}
+
+///|
+pub fn SubscriptionIndex::put_v5(
+  self : SubscriptionIndex,
+  client_id : @session.ClientId,
+  filter : @topic.TopicFilter,
+  qos : @session.DeliveryQoS,
+  no_local : Bool,
+  retain_as_published : Bool,
+  retain_handling : Int,
+  subscription_identifier : Int?,
+) -> Bool {
+  let added = self.put(client_id, filter, qos)
+  let prior = self.bindings.get(client_id).unwrap().get(filter).unwrap()
+  self.bindings
+  .get(client_id)
+  .unwrap()
+  .set(filter, {
+    ..prior,
+    no_local,
+    retain_as_published,
+    retain_handling,
+    subscription_identifier,
+  })
+  added
+}
+
+///|
+fn SubscriptionIndex::restore_binding(
+  self : SubscriptionIndex,
+  client_id : @session.ClientId,
+  binding : SubscriptionBinding,
+) -> Unit {
+  ignore(
+    self.put_v5(
+      client_id,
+      binding.filter,
+      binding.qos,
+      binding.no_local,
+      binding.retain_as_published,
+      binding.retain_handling,
+      binding.subscription_identifier,
+    ),
+  )
+  self.bindings.get(client_id).unwrap().set(binding.filter, binding)
+}
+
+///|
+pub fn SubscriptionIndex::binding(
+  self : SubscriptionIndex,
+  client_id : @session.ClientId,
+  filter : @topic.TopicFilter,
+) -> SubscriptionBinding? {
+  match self.bindings.get(client_id) {
+    Some(values) => values.get(filter)
+    None => None
+  }
 }
 
 ///|
@@ -81,6 +172,11 @@ pub fn SubscriptionIndex::remove(
           filters.remove(filter)
           if filters.length() == 0 {
             self.by_client.remove(client_id)
+          }
+          let bindings = self.bindings.get(client_id).unwrap()
+          bindings.remove(filter)
+          if bindings.length() == 0 {
+            self.bindings.remove(client_id)
           }
           let clients = self.by_filter.get(filter).unwrap()
           clients.remove(client_id)
@@ -249,8 +345,37 @@ pub fn SubscriptionIndex::check_invariants(self : SubscriptionIndex) -> Bool {
       }
     }
   }
+  if self.bindings.length() != self.by_client.length() ||
+    self.next_identity < 1L {
+    return false
+  }
+  let seen_identities : Map[Int64, Bool] = Map([])
+  let mut binding_count = 0
+  for client_id, bindings in self.bindings {
+    let filters = match self.by_client.get(client_id) {
+      Some(value) => value
+      None => return false
+    }
+    if bindings.length() != filters.length() {
+      return false
+    }
+    for filter, binding in bindings {
+      if binding.filter != filter ||
+        filters.get(filter) != Some(binding.qos) ||
+        binding.identity < 1L ||
+        binding.identity >= self.next_identity ||
+        binding.retain_handling < 0 ||
+        binding.retain_handling > 2 ||
+        seen_identities.contains(binding.identity) {
+        return false
+      }
+      seen_identities.set(binding.identity, true)
+      binding_count += 1
+    }
+  }
   forward_count == self.count &&
   reverse_count == self.count &&
+  binding_count == self.count &&
   forward_count == reverse_count &&
   (
     self.policy_slots is None ||
@@ -273,4 +398,94 @@ fn SubscriptionIndex::cost_for(
     }
   }
   cost
+}
+
+///|
+pub fn SubscriptionIndex::matches_v5(
+  self : SubscriptionIndex,
+  topic : @topic.TopicName,
+  publisher_client_id : @session.ClientId?,
+  retain_from_publish : Bool,
+  retained_replay? : Bool = false,
+) -> Array[SubscriptionDeliveryMatch] {
+  let result : Array[SubscriptionDeliveryMatch] = []
+  for client_id, bindings in self.bindings {
+    let matched : Array[SubscriptionBinding] = []
+    for filter, binding in bindings {
+      if filter.matches(topic) &&
+        !(binding.no_local && publisher_client_id == Some(client_id)) {
+        matched.push(binding)
+      }
+    }
+    matched.sort_by(fn(left, right) {
+      if left.identity < right.identity {
+        -1
+      } else if left.identity > right.identity {
+        1
+      } else {
+        0
+      }
+    })
+    let mut normal_qos : @session.DeliveryQoS? = None
+    let normal_ids : Array[Int] = []
+    let mut retained_qos : @session.DeliveryQoS? = None
+    let retained_ids : Array[Int] = []
+    for binding in matched {
+      let final_retain = retained_replay ||
+        (retain_from_publish && binding.retain_as_published)
+      if final_retain {
+        retained_qos = Some(
+          match retained_qos {
+            Some(previous) => @session.max_qos(previous, binding.qos)
+            None => binding.qos
+          },
+        )
+        if binding.subscription_identifier is Some(id) {
+          retained_ids.push(id)
+        }
+      } else {
+        normal_qos = Some(
+          match normal_qos {
+            Some(previous) => @session.max_qos(previous, binding.qos)
+            None => binding.qos
+          },
+        )
+        if binding.subscription_identifier is Some(id) {
+          normal_ids.push(id)
+        }
+      }
+    }
+    if normal_qos is Some(qos) {
+      result.push({
+        client_id,
+        qos,
+        retain: false,
+        subscription_identifiers: normal_ids,
+      })
+    }
+    if retained_qos is Some(qos) {
+      result.push({
+        client_id,
+        qos,
+        retain: true,
+        subscription_identifiers: retained_ids,
+      })
+    }
+  }
+  result.sort_by(fn(left, right) {
+    let names = compare_utf8_for_sort(
+      left.client_id.value(),
+      right.client_id.value(),
+    )
+    if names != 0 {
+      names
+    } else if left.retain == right.retain {
+      0
+    } else if left.retain {
+      1
+    } else {
+      -1
+    }
+  })
+  result
 }

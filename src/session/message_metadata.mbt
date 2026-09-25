@@ -81,3 +81,14 @@ pub fn MessageMetadata::cost(self : MessageMetadata) -> Int64 {
   }
   cost
 }
+
+///|
+pub fn MessageMetadata::is_empty(self : MessageMetadata) -> Bool {
+  self.payload_format is None &&
+  self.content_type is None &&
+  self.response_topic is None &&
+  self.correlation_data is None &&
+  self.user_properties.is_empty() &&
+  self.publisher_client_id is None &&
+  self.expiry is None
+}

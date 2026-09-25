@@ -148,3 +148,55 @@ test "retained capacity rejection is atomic and unsubscribe is idempotent" {
     ]),
   )
 }
+
+///|
+test "C-T13 MQTT5 metadata follows live and retained delivery" {
+  let state = BrokerState::new(config())
+  let alice = state_client("meta-alice")
+  let bob = state_client("meta-bob")
+  ignore(state.apply(CreateSession(alice)))
+  ignore(state.apply(CreateSession(bob)))
+  ignore(
+    state.apply(
+      Subscribe({
+        client_id: bob,
+        entries: [{ filter: state_filter("meta/#"), qos: @session.QoS1 }],
+      }),
+    ),
+  )
+  let metadata : @session.MessageMetadata = {
+    ..@session.MessageMetadata::empty(),
+    content_type: Some("text/plain"),
+    user_properties: [("k", "v1"), ("k", "v2")],
+    publisher_client_id: Some(alice),
+  }
+  let actions = state
+    .apply(
+      PublishV5({
+        publish: {
+          origin: Client(alice),
+          topic: state_topic("meta/a"),
+          payload: b"value",
+          qos: @session.QoS1,
+          retain: true,
+        },
+        metadata,
+      }),
+    )
+    .unwrap()
+  assert_true(actions[0] is DeliverWithMetadata(_))
+  let retained = state.retained_message(state_topic("meta/a")).unwrap()
+  assert_eq(retained.metadata.user_properties, [("k", "v1"), ("k", "v2")])
+  let carol = state_client("meta-carol")
+  ignore(state.apply(CreateSession(carol)))
+  let replay = state
+    .apply(
+      Subscribe({
+        client_id: carol,
+        entries: [{ filter: state_filter("meta/#"), qos: @session.QoS1 }],
+      }),
+    )
+    .unwrap()
+  assert_true(replay.any(action => action is DeliverWithMetadata(_)))
+  assert_eq(state.check_invariants(), Ok(()))
+}

@@ -19,7 +19,12 @@ test "retained store bounds new topics but permits replacement and deletion" {
   assert_true(store.put(a, b"new", @session.DeliveryQoS::QoS1, 1))
   assert_eq(
     store.get(a),
-    Some({ topic: a, payload: b"new", qos: @session.DeliveryQoS::QoS1 }),
+    Some({
+      topic: a,
+      payload: b"new",
+      qos: @session.DeliveryQoS::QoS1,
+      metadata: @session.MessageMetadata::empty(),
+    }),
   )
   store.remove(a)
   assert_eq(store.count(), 0)

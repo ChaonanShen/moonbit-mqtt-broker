@@ -54,13 +54,16 @@ pub(all) enum BrokerEvent {
   DetachSessionAt(DetachSessionRequest)
   ExpireSessions(Int64)
   Subscribe(SubscribeRequest)
+  SubscribeV5(SubscribeV5Request)
   Unsubscribe(UnsubscribeRequest)
   Publish(PublishInput)
+  PublishV5(PublishInputV5)
   Puback(PubackRequest)
   Pubrec(PubackRequest)
   Pubrel(PubackRequest)
   Pubcomp(PubackRequest)
   ReceiveQoS2(InboundQoS2Request)
+  ReceiveQoS2V5(InboundQoS2RequestV5)
 } derive(Eq, Debug)
 
 ///|
@@ -69,4 +72,27 @@ pub(all) struct InboundQoS2Request {
   client_id : @session.ClientId
   packet_id : @session.SessionPacketId
   publish : PublishInput?
+} derive(Eq, Debug)
+
+///|
+pub(all) struct InboundQoS2RequestV5 {
+  client_id : @session.ClientId
+  packet_id : @session.SessionPacketId
+  publish : PublishInputV5?
+} derive(Eq, Debug)
+
+///|
+pub(all) struct SubscribeEntryV5 {
+  filter : @topic.TopicFilter
+  qos : @session.DeliveryQoS
+  no_local : Bool
+  retain_as_published : Bool
+  retain_handling : Int
+  subscription_identifier : Int?
+} derive(Eq, Debug)
+
+///|
+pub(all) struct SubscribeV5Request {
+  client_id : @session.ClientId
+  entries : Array[SubscribeEntryV5]
 } derive(Eq, Debug)

@@ -37,6 +37,8 @@ priv struct DeliveryCandidate {
   payload : Bytes
   qos : @session.DeliveryQoS
   retain : Bool
+  metadata : @session.MessageMetadata
+  subscription_identifiers : Array[Int]
 }
 
 ///|
@@ -611,10 +613,19 @@ fn BrokerState::pending_head_authorized(
 fn BrokerState::delivery_candidates(
   self : BrokerState,
   input : PublishInput,
-  retain : Bool,
+  metadata? : @session.MessageMetadata = @session.MessageMetadata::empty(),
 ) -> Array[DeliveryCandidate] {
   let candidates : Array[DeliveryCandidate] = []
-  for subscription in self.subscriptions.matches(input.topic) {
+  let publisher = match input.origin {
+    Client(id) | Will(id) => Some(id)
+    Internal => None
+  }
+  for
+    subscription in self.subscriptions.matches_v5(
+      input.topic,
+      publisher,
+      input.retain,
+    ) {
     if self.security_policy is Some(policy) &&
       self.session_owner(subscription.client_id) is Some(owner) &&
       (
@@ -628,10 +639,28 @@ fn BrokerState::delivery_candidates(
       topic: input.topic,
       payload: input.payload,
       qos: @session.min_qos(input.qos, subscription.qos),
-      retain,
+      retain: subscription.retain,
+      metadata: metadata.copy(),
+      subscription_identifiers: subscription.subscription_identifiers.copy(),
     })
   }
   candidates
+}
+
+///|
+fn delivery_candidate_cost(candidate : DeliveryCandidate) -> Int64 {
+  let identifiers = if candidate.subscription_identifiers.is_empty() {
+    0L
+  } else {
+    24L + candidate.subscription_identifiers.length().to_int64() * 8L
+  }
+  @budget.checked_add(
+    @budget.message_cost(
+      candidate.topic.value(),
+      candidate.payload.length().to_int64(),
+    ).unwrap(),
+    candidate.metadata.cost() + identifiers,
+  ).unwrap()
 }
 
 ///|
@@ -670,10 +699,7 @@ fn BrokerState::preflight_deliveries(
         let extra_pending = planned_pending
           .get(candidate.recipient)
           .unwrap_or(0)
-        let cost = @budget.message_cost(
-          candidate.topic.value(),
-          candidate.payload.length().to_int64(),
-        ).unwrap()
+        let cost = delivery_candidate_cost(candidate)
         let usage = self.resources.owners.get(candidate.recipient).unwrap().usage
         let inflight_extra = planned_inflight_bytes
           .get(candidate.recipient)
@@ -769,6 +795,23 @@ fn BrokerState::preflight_deliveries(
 }
 
 ///|
+fn delivery_with_metadata(
+  delivery : RoutedDelivery,
+  metadata : @session.MessageMetadata,
+  subscription_identifiers : Array[Int],
+) -> BrokerAction {
+  if metadata.is_empty() && subscription_identifiers.is_empty() {
+    Deliver(delivery)
+  } else {
+    DeliverWithMetadata({
+      delivery,
+      metadata: metadata.copy(),
+      subscription_identifiers: subscription_identifiers.copy(),
+    })
+  }
+}
+
+///|
 fn BrokerState::prepare_deliveries(
   self : BrokerState,
   planned : Array[PlannedDelivery],
@@ -779,10 +822,7 @@ fn BrokerState::prepare_deliveries(
   let mut scratch_bytes = planned.length().to_int64() * 128L
   for item in planned {
     let candidate = item.candidate
-    let cost = @budget.message_cost(
-      candidate.topic.value(),
-      candidate.payload.length().to_int64(),
-    ).unwrap()
+    let cost = delivery_candidate_cost(candidate)
     match item.destination {
       DirectQoS0 =>
         scratch_bytes = @budget.checked_add(
@@ -843,15 +883,19 @@ fn BrokerState::prepare_deliveries(
     match item.destination {
       DirectQoS0 =>
         actions.push(
-          Deliver({
-            recipient: candidate.recipient,
-            topic: candidate.topic,
-            payload: copy_router_bytes(candidate.payload),
-            qos: QoS0,
-            retain: candidate.retain,
-            packet_id: None,
-            dup: false,
-          }),
+          delivery_with_metadata(
+            {
+              recipient: candidate.recipient,
+              topic: candidate.topic,
+              payload: copy_router_bytes(candidate.payload),
+              qos: QoS0,
+              retain: candidate.retain,
+              packet_id: None,
+              dup: false,
+            },
+            candidate.metadata,
+            candidate.subscription_identifiers,
+          ),
         )
       StageInflight | StagePending => {
         let session = match updates.get(candidate.recipient) {
@@ -877,6 +921,8 @@ fn BrokerState::prepare_deliveries(
               candidate.payload,
               candidate.retain,
               qos=candidate.qos,
+              metadata=candidate.metadata,
+              subscription_identifiers=candidate.subscription_identifiers,
             ),
             self.session_limits(max_inflight~, max_pending~),
           ) {
@@ -887,15 +933,19 @@ fn BrokerState::prepare_deliveries(
           SendNow(delivery) => {
             inflight_added += 1
             actions.push(
-              Deliver({
-                recipient: candidate.recipient,
-                topic: delivery.message.unwrap().topic,
-                payload: copy_router_bytes(delivery.message.unwrap().payload),
-                qos: delivery.message.unwrap().qos,
-                retain: delivery.message.unwrap().retain,
-                packet_id: Some(delivery.packet_id),
-                dup: delivery.dup,
-              }),
+              delivery_with_metadata(
+                {
+                  recipient: candidate.recipient,
+                  topic: delivery.message.unwrap().topic,
+                  payload: copy_router_bytes(delivery.message.unwrap().payload),
+                  qos: delivery.message.unwrap().qos,
+                  retain: delivery.message.unwrap().retain,
+                  packet_id: Some(delivery.packet_id),
+                  dup: delivery.dup,
+                },
+                delivery.message.unwrap().metadata,
+                delivery.message.unwrap().subscription_identifiers,
+              ),
             )
           }
           Queued => pending_added += 1
@@ -958,15 +1008,19 @@ fn BrokerState::attach_session(
       continue
     }
     actions.push(
-      Deliver({
-        recipient: client_id,
-        topic: delivery.message.unwrap().topic,
-        payload: copy_router_bytes(delivery.message.unwrap().payload),
-        qos: delivery.message.unwrap().qos,
-        retain: delivery.message.unwrap().retain,
-        packet_id: Some(delivery.packet_id),
-        dup: delivery.dup,
-      }),
+      delivery_with_metadata(
+        {
+          recipient: client_id,
+          topic: delivery.message.unwrap().topic,
+          payload: copy_router_bytes(delivery.message.unwrap().payload),
+          qos: delivery.message.unwrap().qos,
+          retain: delivery.message.unwrap().retain,
+          packet_id: Some(delivery.packet_id),
+          dup: delivery.dup,
+        },
+        delivery.message.unwrap().metadata,
+        delivery.message.unwrap().subscription_identifiers,
+      ),
     )
   }
   Ok(actions)
@@ -1005,15 +1059,19 @@ fn BrokerState::ack_delivery(
       ]
       for delivery in promoted {
         actions.push(
-          Deliver({
-            recipient: client_id,
-            topic: delivery.message.unwrap().topic,
-            payload: copy_router_bytes(delivery.message.unwrap().payload),
-            qos: delivery.message.unwrap().qos,
-            retain: delivery.message.unwrap().retain,
-            packet_id: Some(delivery.packet_id),
-            dup: false,
-          }),
+          delivery_with_metadata(
+            {
+              recipient: client_id,
+              topic: delivery.message.unwrap().topic,
+              payload: copy_router_bytes(delivery.message.unwrap().payload),
+              qos: delivery.message.unwrap().qos,
+              retain: delivery.message.unwrap().retain,
+              packet_id: Some(delivery.packet_id),
+              dup: false,
+            },
+            delivery.message.unwrap().metadata,
+            delivery.message.unwrap().subscription_identifiers,
+          ),
         )
       }
       Ok(actions)
@@ -1076,6 +1134,7 @@ fn BrokerState::apply_event(
       Ok([SessionDetached(request.client_id)])
     }
     ExpireSessions(now_ms) => self.expire_sessions(now_ms)
+    SubscribeV5(request) => self.subscribe_v5(request)
     Subscribe(request) => {
       let client_id = request.client_id
       let entries = request.entries
@@ -1126,7 +1185,13 @@ fn BrokerState::apply_event(
       }
       let candidates : Array[DeliveryCandidate] = []
       for message in self.retained.matching_for_router(successful) {
-        for subscription in self.subscriptions.matches(message.topic) {
+        for
+          subscription in self.subscriptions.matches_v5(
+            message.topic,
+            message.metadata.publisher_client_id,
+            true,
+            retained_replay=true,
+          ) {
           if subscription.client_id == client_id {
             candidates.push({
               recipient: client_id,
@@ -1134,6 +1199,8 @@ fn BrokerState::apply_event(
               payload: message.payload,
               qos: @session.min_qos(message.qos, subscription.qos),
               retain: true,
+              metadata: message.metadata.copy(),
+              subscription_identifiers: subscription.subscription_identifiers.copy(),
             })
           }
         }
@@ -1197,7 +1264,20 @@ fn BrokerState::apply_event(
       Ok([UnsubscriptionsApplied({ client_id, removed })])
     }
     Publish(input) => self.publish_input(input)
+    PublishV5(input) =>
+      self.publish_input(input.publish, metadata=input.metadata)
     ReceiveQoS2(request) => self.receive_qos2(request)
+    ReceiveQoS2V5(request) =>
+      self.receive_qos2(
+        {
+          client_id: request.client_id,
+          packet_id: request.packet_id,
+          publish: request.publish.map(value => value.publish),
+        },
+        metadata=request.publish
+          .map(value => value.metadata)
+          .unwrap_or(@session.MessageMetadata::empty()),
+      )
     Pubrel(request) => self.complete_qos2(request)
     Pubrec(request) => self.receive_pubrec(request)
     Pubcomp(request) =>
@@ -1303,6 +1383,7 @@ pub fn BrokerState::check_invariants(
 fn BrokerState::publish_input(
   self : BrokerState,
   input : PublishInput,
+  metadata? : @session.MessageMetadata = @session.MessageMetadata::empty(),
 ) -> Result[Array[BrokerAction], RouterError] {
   if input.retain &&
     input.payload.length() > 0 &&
@@ -1313,7 +1394,13 @@ fn BrokerState::publish_input(
   let descriptor_bytes = self.subscriptions.subscription_count().to_int64() *
     192L
   let new_retained_cost = if input.retain && input.payload.length() > 0 {
-    @budget.message_cost(input.topic.value(), input.payload.length().to_int64()).unwrap()
+    @budget.checked_add(
+      @budget.message_cost(
+        input.topic.value(),
+        input.payload.length().to_int64(),
+      ).unwrap(),
+      metadata.cost(),
+    ).unwrap()
   } else {
     0L
   }
@@ -1339,7 +1426,10 @@ fn BrokerState::publish_input(
   }
   let strict = input.origin is Client(_)
   let planned = match
-    self.preflight_deliveries(self.delivery_candidates(input, false), strict) {
+    self.preflight_deliveries(
+      self.delivery_candidates(input, metadata~),
+      strict,
+    ) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -1359,13 +1449,19 @@ fn BrokerState::publish_input(
       }
     } else {
       retained_changed = previous !=
-        Some({ topic: input.topic, payload: input.payload, qos: input.qos })
+        Some({
+          topic: input.topic,
+          payload: input.payload,
+          qos: input.qos,
+          metadata,
+        })
       ignore(
         self.retained.put(
           input.topic,
           input.payload,
           input.qos,
           self.config.max_retained_messages(),
+          metadata~,
         ),
       )
       if previous is None && self.admin_sessions is Some(index) {
@@ -1413,6 +1509,7 @@ pub fn BrokerState::phase_count(
 fn BrokerState::receive_qos2(
   self : BrokerState,
   request : InboundQoS2Request,
+  metadata? : @session.MessageMetadata = @session.MessageMetadata::empty(),
 ) -> Result[Array[BrokerAction], RouterError] {
   let session = match self.sessions.get(request.client_id) {
     Some(value) => value
@@ -1451,7 +1548,7 @@ fn BrokerState::receive_qos2(
   // single-writer event has no await or externally observable intermediate state.
   let deliveries = match request.publish {
     Some(input) =>
-      match self.publish_input(input) {
+      match self.publish_input(input, metadata~) {
         Ok(value) => value
         Err(error) => return Err(error)
       }
@@ -1548,6 +1645,9 @@ pub fn BrokerState::apply(
     Subscribe(request) =>
       self.retained.count().to_int64() * 192L +
       request.entries.length().to_int64() * 192L
+    SubscribeV5(request) =>
+      self.retained.count().to_int64() * 256L +
+      request.entries.length().to_int64() * 256L
     _ => 0L
   }
   let temporary = if temporary_bytes == 0L {

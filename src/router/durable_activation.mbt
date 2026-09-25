@@ -126,15 +126,19 @@ pub fn BrokerState::prepare_durable_activation(
         )
       Some(message) =>
         replay.push(
-          Deliver({
-            recipient: id,
-            topic: message.topic,
-            payload: copy_router_bytes(message.payload),
-            qos: message.qos,
-            retain: message.retain,
-            packet_id: Some(delivery.packet_id),
-            dup: delivery.dup,
-          }),
+          delivery_with_metadata(
+            {
+              recipient: id,
+              topic: message.topic,
+              payload: copy_router_bytes(message.payload),
+              qos: message.qos,
+              retain: message.retain,
+              packet_id: Some(delivery.packet_id),
+              dup: delivery.dup,
+            },
+            message.metadata,
+            message.subscription_identifiers,
+          ),
         )
     }
   }

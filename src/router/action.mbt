@@ -2,6 +2,7 @@
 pub(all) enum SubscribeResult {
   Granted(@session.DeliveryQoS)
   RejectedLimit(LimitKind)
+  RejectedSharedUnsupported
 } derive(Eq, Debug)
 
 ///|
@@ -35,6 +36,7 @@ pub(all) enum BrokerAction {
   DeliveryAcknowledged(DeliveryAcknowledgedAction)
   DeliveryDroppedResourceLimit(@session.ClientId)
   Deliver(RoutedDelivery)
+  DeliverWithMetadata(DeliveryWithMetadataAction)
   SendPubrec(DeliveryAcknowledgedAction)
   SendPubrel(DeliveryAcknowledgedAction)
   SendPubcomp(DeliveryAcknowledgedAction)
