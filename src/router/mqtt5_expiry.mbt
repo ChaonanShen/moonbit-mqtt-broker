@@ -22,29 +22,23 @@ fn BrokerState::expire_sessions_v5(
   if remaining <= 0 {
     return Ok(actions)
   }
-  let candidates : Array[(@session.ClientId, Int64)] = []
-  for client_id, session in self.sessions {
-    if session.retention() is @session.FiniteV5(_) &&
-      !session.is_attached() &&
-      session.logically_expired(now_mono_ms) {
-      let due = session
-        .expiry_deadline()
-        .map(value => value.mono_due_ms)
-        .unwrap_or(0L)
-      candidates.push((client_id, due))
+  for _ in 0..<remaining {
+    let entry = match self.session_expiry.peek_due(now_mono_ms) {
+      Some(value) => value
+      None => break
     }
-  }
-  candidates.sort_by(fn(left, right) {
-    if left.1 < right.1 {
-      -1
-    } else if left.1 > right.1 {
-      1
-    } else {
-      compare_utf8_for_sort(left.0.value(), right.0.value())
+    let client_id = match @session.ClientId::new(entry.key) {
+      Ok(value) => value
+      Err(_) => return Err(InvariantViolation("invalid session expiry key"))
     }
-  })
-  for index in 0..<@cmp.minimum(remaining, candidates.length()) {
-    let client_id = candidates[index].0
+    let session = match self.sessions.get(client_id) {
+      Some(value) => value
+      None => return Err(InvariantViolation("stale session expiry key"))
+    }
+    if self.session_incarnation(client_id) != Some(entry.revision) ||
+      !session.logically_expired(now_mono_ms) {
+      return Err(InvariantViolation("session expiry identity changed"))
+    }
     match self.remove_session(client_id) {
       Ok(removed) => {
         actions.append(removed)

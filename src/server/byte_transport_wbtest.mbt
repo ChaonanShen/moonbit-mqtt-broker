@@ -287,6 +287,7 @@ async test "queued MQTT publish is denied at writer start after policy change" {
     connection_id: ConnectionId::new(1L),
     client_id: @session.ClientId::new("client").unwrap(),
     session_incarnation: Some(1L),
+    delivery_id: None,
     topic: @topic.TopicName::new("private/value").unwrap(),
   }
   assert_true(sink.enqueue_frame(b"must-not-write", None, None, authorization~))

@@ -15,7 +15,7 @@ pub struct ExpiryScheduler {
   mut used_bytes : Int64
   max_entries : Int
   max_bytes : Int64
-}
+} derive(Eq, Debug)
 
 ///|
 pub fn ExpiryScheduler::new(

@@ -4,21 +4,13 @@ pub fn BrokerState::next_durable_expiration(
   now_ms : Int64,
 ) -> (@session.ClientId, DurableLifecycleKind)? {
   let now_mono_ms = @budget.monotonic_ms()
-  let mut finite_due : @session.ClientId? = None
-  for client_id, session in self.sessions {
-    if session.retention() is @session.FiniteV5(_) &&
-      !session.is_attached() &&
-      session.logically_expired(now_mono_ms) &&
-      (
-        finite_due is None ||
-        compare_utf8_for_sort(client_id.value(), finite_due.unwrap().value()) <
-        0
-      ) {
-      finite_due = Some(client_id)
+  if self.session_expiry.peek_due(now_mono_ms) is Some(entry) {
+    let client_id = @session.ClientId::new(entry.key).unwrap()
+    if self.sessions.get(client_id) is Some(session) &&
+      self.session_incarnation(client_id) == Some(entry.revision) &&
+      session.logically_expired(now_mono_ms) {
+      return Some((client_id, Delete))
     }
-  }
-  if finite_due is Some(client_id) {
-    return Some((client_id, Delete))
   }
   let expiry_ms = match self.config.persistent_session_expiry_ms() {
     Some(value) if now_ms > 0L => value

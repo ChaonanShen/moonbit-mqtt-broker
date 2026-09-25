@@ -185,6 +185,7 @@ pub fn BrokerState::commit_activation(
     self.replace_policy_session(activation.id)
   }
   self.sessions.set(activation.id, activation.session)
+  ignore(self.session_expiry.remove(activation.id.value()))
   if self.admin_sessions is Some(index) {
     if old is None {
       index.register(activation.id)

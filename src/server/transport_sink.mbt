@@ -13,6 +13,7 @@ pub(all) struct OutboundAuthorization {
   connection_id : ConnectionId
   client_id : @session.ClientId
   session_incarnation : Int64?
+  delivery_id : Int64?
   topic : @topic.TopicName
 }
 
@@ -53,6 +54,7 @@ pub struct TransportSink {
   mut alias_connection_id : ConnectionId?
   pending_outbound_aliases : Map[Int, String]
   mut next_outbound_alias : Int
+  free_outbound_aliases : Array[Int]
   mut outbound_alias_bytes : Int
   priv mut budget : (@budget.Ledger, @budget.Pool, @budget.Pool)?
   priv mut owned : Array[OwnedFrame]
@@ -86,6 +88,7 @@ pub fn TransportSink::new(
     alias_connection_id: None,
     pending_outbound_aliases: Map([]),
     next_outbound_alias: 1,
+    free_outbound_aliases: [],
     outbound_alias_bytes: 0,
     budget: None,
     owned: [],
@@ -227,6 +230,7 @@ pub fn TransportSink::close(self : TransportSink) -> Unit {
   }
   self.outbound_aliases.clear()
   self.pending_outbound_aliases.clear()
+  self.free_outbound_aliases.clear()
 }
 
 ///|

@@ -146,6 +146,13 @@ pub fn BrokerState::prepare_durable_lifecycle(
       (None, SessionRemoved(client_id), delta)
     }
   }
+  if candidate is Some(value) &&
+    value.retention() is @session.FiniteV5(_) &&
+    !value.is_attached() &&
+    !self.session_expiry.can_set(client_id.value()) {
+    scratch.release().unwrap()
+    return Err(InvariantViolation("session expiry index capacity reached"))
+  }
   Ok({
     broker: self,
     client_id,
@@ -188,6 +195,18 @@ pub fn DurableLifecyclePlan::commit(
   }
   match self.candidate {
     Some(candidate) => {
+      match candidate.expiry_deadline() {
+        Some(deadline) if candidate.retention() is @session.FiniteV5(_) &&
+          !candidate.is_attached() =>
+          if !self.broker.session_expiry.set(
+              self.client_id.value(),
+              deadline.mono_due_ms,
+              self.broker.session_incarnation(self.client_id).unwrap(),
+            ) {
+            abort("session expiry index changed after preflight")
+          }
+        _ => ignore(self.broker.session_expiry.remove(self.client_id.value()))
+      }
       self.broker.sessions.set(self.client_id, candidate)
       if self.broker.admin_sessions is Some(index) {
         index.bump(self.client_id)
@@ -204,6 +223,7 @@ pub fn DurableLifecyclePlan::commit(
       }
       ignore(self.broker.subscriptions.remove_all(self.client_id))
       self.broker.sessions.remove(self.client_id)
+      ignore(self.broker.session_expiry.remove(self.client_id.value()))
       self.broker.untrack_policy_session(self.client_id)
       if self.broker.admin_sessions is Some(index) {
         index.remove(self.client_id)

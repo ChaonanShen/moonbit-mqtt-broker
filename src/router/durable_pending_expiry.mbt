@@ -15,22 +15,22 @@ pub fn BrokerState::next_expired_pending(
   self : BrokerState,
   now_mono_ms : Int64,
 ) -> (@session.ClientId, Int)? {
-  let mut selected : (@session.ClientId, Int)? = None
+  let mut selected : (@session.ClientId, Int, Int64)? = None
   for client_id, session in self.sessions {
-    for index in 0..<session.pending_count() {
-      let message = session.pending_item_reference(index).unwrap()
-      if message.metadata.expiry is Some(deadline) &&
-        deadline.remaining_at(now_mono_ms) == 0L &&
+    if session.next_expired_pending_item(now_mono_ms) is Some((index, due)) &&
+      (
+        selected is None ||
+        due < selected.unwrap().2 ||
         (
-          selected is None ||
+          due == selected.unwrap().2 &&
           compare_utf8_for_sort(client_id.value(), selected.unwrap().0.value()) <
           0
-        ) {
-        selected = Some((client_id, index))
-      }
+        )
+      ) {
+      selected = Some((client_id, index, due))
     }
   }
-  selected
+  selected.map(value => (value.0, value.1))
 }
 
 ///|

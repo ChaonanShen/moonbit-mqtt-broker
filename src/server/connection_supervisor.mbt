@@ -468,6 +468,10 @@ async fn write_transport(
                 client_id: owner.client_id,
                 session_incarnation: owner.session_incarnation,
                 packet_id: publish.packet_id.unwrap(),
+                delivery_id: match owner.delivery_id {
+                  Some(value) if value > 0L => value
+                  _ => return WriteFailure
+                },
                 qos: publish.qos,
               }
               if bus is Some(active) && active.post_write_not_started(report) {
@@ -544,6 +548,10 @@ async fn write_transport(
                 client_id: owner.client_id,
                 session_incarnation: owner.session_incarnation,
                 packet_id: publish.packet_id.unwrap(),
+                delivery_id: match owner.delivery_id {
+                  Some(value) if value > 0L => value
+                  _ => return WriteFailure
+                },
                 qos: publish.qos,
               }
               if bus is Some(active) && active.post_write_not_started(report) {

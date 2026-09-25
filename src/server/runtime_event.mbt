@@ -26,6 +26,7 @@ pub(all) struct WriteNotStartedEvent {
   client_id : @session.ClientId
   session_incarnation : Int64?
   packet_id : @protocol.PacketId
+  delivery_id : Int64
   qos : @protocol.QoS
 } derive(Eq, Debug)
 
