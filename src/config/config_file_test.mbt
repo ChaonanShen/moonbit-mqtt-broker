@@ -209,3 +209,34 @@ test "WS listener arrays keep origin entries without flattening identity" {
     ),
   )
 }
+
+///|
+test "reload TOML fields map to bounded CLI settings" {
+  assert_eq(
+    parse_config_file(
+      (
+        #|[reload]
+        #|enabled = false
+        #|manifest_file = "/srv/bundle/manifest.toml"
+        #|material_runtime_dir = "/srv/runtime"
+        #|prepare_timeout_ms = 30000
+        #|max_source_bytes = 16777216
+        #|max_generation_bytes = 67108864
+        #|max_reconcile_items_per_turn = 64
+        #|max_reconcile_bytes_per_turn = 1048576
+        #|max_accounts = 4096
+        #|max_acl_rules = 4096
+        #|
+      ),
+    ),
+    [
+      "--reload-enabled", "false", "--reload-manifest-file", "/srv/bundle/manifest.toml",
+      "--reload-material-runtime-dir", "/srv/runtime", "--reload-prepare-timeout-ms",
+      "30000", "--reload-max-source-bytes", "16777216", "--reload-max-generation-bytes",
+      "67108864", "--reload-max-reconcile-items-per-turn", "64", "--reload-max-reconcile-bytes-per-turn",
+      "1048576", "--reload-max-accounts", "4096", "--reload-max-acl-rules", "4096",
+    ],
+  )
+  assert_true(config_rejected("[reload]\nenabled = 1\n"))
+  assert_true(config_rejected("[reload]\nunknown = 1\n"))
+}

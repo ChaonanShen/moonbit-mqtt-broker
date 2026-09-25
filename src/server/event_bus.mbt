@@ -391,6 +391,23 @@ fn EventBus::post_management_maintenance(self : EventBus) -> Unit {
 }
 
 ///|
+
+///|
+/// One prepared candidate is admitted to the existing bounded event queue.
+/// The caller retains ownership when admission fails.
+fn EventBus::post_reload_control(
+  self : EventBus,
+  command : ReloadDriverCommand,
+) -> Bool {
+  if self.closed ||
+    !(self.data.try_put(ReloadControl(command)) catch { _ => false }) {
+    return false
+  }
+  self.signal()
+  true
+}
+
+///|
 fn EventBus::post_observation(self : EventBus) -> Unit {
   if !self.closed {
     if !self.observation_due {
@@ -567,11 +584,20 @@ fn EventBus::close(self : EventBus) -> Unit {
   if self.deferred_data is Some(Accounted(_, ticket)) {
     ticket.release().unwrap()
   }
+  if self.deferred_data is Some(ReloadControl(ReloadActivate(candidate, _, _))) {
+    candidate.release()
+  }
+  if self.deferred_data
+    is Some(ReloadControl(ReloadCommitPolicy(candidate, _, _))) {
+    candidate.release()
+  }
   self.deferred_data = None
   for ;; {
     let event = self.data.try_get() catch { _ => None }
     match event {
       Some(Accounted(_, ticket)) => ticket.release().unwrap()
+      Some(ReloadControl(ReloadActivate(candidate, _, _))) =>
+        candidate.release()
       Some(_) => ()
       None => break
     }

@@ -273,7 +273,8 @@ fn RouterDriver::management_query_result(
   let state = self.runtime.broker_state()
   let boot_id = active.context.boot_id
   if spec.kind == @management.Operation {
-    if !active.config.operations_enabled() || active.operations is None {
+    if active.operations is None ||
+      (!active.config.operations_enabled() && self.reload_service is None) {
       return management_query_error(
         @http_transport.ServiceUnavailable,
         "operations_disabled",
@@ -296,11 +297,22 @@ fn RouterDriver::management_query_result(
     if sequence < 1L || sequence.to_string() != parts[1].to_owned() {
       return management_query_error(@http_transport.BadRequest, "bad_request")
     }
-    let record = match
-      active.operations.unwrap().get(spec.target, spec.actor_token_id) {
+    let table = active.operations.unwrap()
+    let record = match table.get(spec.target, spec.actor_token_id) {
       Some(value) => value
       None =>
-        return management_query_error(@http_transport.NotFound, "not_found")
+        match table.get_internal(spec.target) {
+          Some(value) if value.actor_token_id == "local_signal" &&
+            active.http.tokens.token_has_scope(
+              spec.actor_token_id,
+              @management.ConfigAdmin,
+            ) => value
+          _ =>
+            return management_query_error(@http_transport.NotFound, "not_found")
+        }
+    }
+    if !active.config.operations_enabled() && record.kind != @management.Reload {
+      return management_query_error(@http_transport.NotFound, "not_found")
     }
     let bytes = @utf8.encode(record.to_json().stringify())
     if bytes.length() > active.config.max_response_bytes() {
@@ -312,9 +324,16 @@ fn RouterDriver::management_query_result(
     return { status: @http_transport.Ok, body: bytes }
   }
   if spec.kind == @management.Audit {
-    if !active.config.operations_enabled() ||
-      active.audit is None ||
-      active.cursor_table is None {
+    let config_admin = active.http.tokens.token_has_scope(
+      spec.actor_token_id,
+      @management.ConfigAdmin,
+    )
+    if active.audit is None ||
+      active.cursor_table is None ||
+      (
+        !active.config.operations_enabled() &&
+        !(self.reload_service is Some(_) && config_admin)
+      ) {
       return management_query_error(
         @http_transport.ServiceUnavailable,
         "operations_disabled",
@@ -360,6 +379,7 @@ fn RouterDriver::management_query_result(
         after,
         spec.limit,
         active.config.query_scan_limit(),
+        include_local_signal=config_admin && self.reload_service is Some(_),
       )
     let items : Array[Json] = []
     let mut used = 256

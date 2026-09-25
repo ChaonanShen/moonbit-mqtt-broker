@@ -388,6 +388,7 @@ pub fn BrokerState::from_snapshot(
         return Err(InvalidPacketId(value))
       Err(_) => return Err(InvalidState("invalid restored session"))
     }
+    state.track_policy_session(client_id)
     state.sessions.set(client_id, session)
     let seen_filters : Map[@topic.TopicFilter, Bool] = Map([])
     for subscription in saved.subscriptions {

@@ -53,6 +53,7 @@ pub fn encode_status(
   details_enabled? : Bool = false,
   operations_enabled? : Bool = false,
   details_available? : Bool = false,
+  reload_enabled? : Bool = false,
 ) -> Bytes {
   let health = evaluate_health(
     sample,
@@ -132,7 +133,7 @@ pub fn encode_status(
   let capabilities : Map[String, Json] = Map([
     ("details", details_enabled.to_json()),
     ("operations", operations_enabled.to_json()),
-    ("reload", false.to_json()),
+    ("reload", reload_enabled.to_json()),
     (
       "completion_scope",
       (if sample.persistence_mode == Strict { "durable" } else { "runtime" }).to_json(),

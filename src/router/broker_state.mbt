@@ -5,7 +5,12 @@ pub struct BrokerState {
   priv mut promotion_cursor : Int
   priv resources : RouterResources
   config : BrokerConfig
+  priv mut security_policy : @security.SecurityPolicy?
   priv sessions : Map[@session.ClientId, @session.ClientSession]
+  priv mut policy_slots : @slot_index.SlotIndex?
+  priv mut policy_incarnations : Map[@session.ClientId, Int64]?
+  priv mut next_policy_incarnation : Int64
+  priv mut policy_index_ticket : @budget.Ticket?
   priv mut admin_sessions : AdminSessionIndex?
   priv subscriptions : SubscriptionIndex
   priv retained : RetainedStore
@@ -58,11 +63,16 @@ pub fn BrokerState::new(
 ) -> BrokerState {
   {
     config,
+    security_policy: None,
     action_scope: false,
     action_leases: [],
     promotion_cursor: 0,
     resources: RouterResources::new(config.resources, ledger?),
     sessions: Map([]),
+    policy_slots: None,
+    policy_incarnations: None,
+    next_policy_incarnation: 1L,
+    policy_index_ticket: None,
     admin_sessions: None,
     subscriptions: SubscriptionIndex::new(),
     retained: RetainedStore::new(),
@@ -81,8 +91,187 @@ pub fn BrokerState::config(self : BrokerState) -> BrokerConfig {
 }
 
 ///|
+pub fn BrokerState::policy_action_scope_active(self : BrokerState) -> Bool {
+  self.action_scope
+}
+
+///|
+/// A prepared generation is installed only outside a router action scope.
+pub fn BrokerState::set_security_policy(
+  self : BrokerState,
+  policy : @security.SecurityPolicy,
+) -> Bool {
+  if self.action_scope {
+    return false
+  }
+  self.security_policy = Some(policy)
+  true
+}
+
+///|
 pub fn BrokerState::session_count(self : BrokerState) -> Int {
   self.sessions.length()
+}
+
+///|
+/// This source-of-truth index is allocated only for reload-enabled service.
+/// Startup restoration may scan the initial sessions before listeners bind.
+pub fn BrokerState::enable_policy_index(
+  self : BrokerState,
+) -> Result[Unit, RouterError] {
+  if self.policy_slots is Some(_) {
+    return Ok(())
+  }
+  let capacity = self.config.max_sessions()
+  let session_cost = @budget.checked_mul(capacity.to_int64(), 128L)
+  let subscription_cost = @budget.checked_mul(
+    self.config.max_subscriptions_total().to_int64(),
+    160L,
+  )
+  let cost = match (session_cost, subscription_cost) {
+    (Ok(a), Ok(b)) =>
+      match @budget.checked_add(a, b) {
+        Ok(total) => @budget.checked_add(total, 4096L).unwrap_or(-1L)
+        Err(_) => -1L
+      }
+    _ => -1L
+  }
+  if cost < 0L {
+    return Err(InvalidConfiguration("policy index capacity overflow"))
+  }
+  let pool = self.resources.ledger
+    .pool(Infrastructure, self.config.resources.get("max_managed_bytes_total"))
+    .unwrap()
+  let ticket = match pool.reserve(cost) {
+    Ok(value) => value
+    Err(error) => return Err(ByteResourceLimit(error))
+  }
+  let slots = @slot_index.SlotIndex::new(capacity)
+  let incarnations : Map[@session.ClientId, Int64] = Map([])
+  let mut next_incarnation = 1L
+  for id, _ in self.sessions {
+    match slots.put(id.value()) {
+      @slot_index.Added(_) => {
+        incarnations.set(id, next_incarnation)
+        next_incarnation += 1L
+      }
+      _ => {
+        ticket.release().unwrap()
+        return Err(InvariantViolation("policy index startup identity"))
+      }
+    }
+  }
+  if !self.subscriptions.enable_policy_slots(
+      self.config.max_subscriptions_total(),
+    ) {
+    ticket.release().unwrap()
+    return Err(InvariantViolation("policy subscription index startup"))
+  }
+  ticket.commit().unwrap()
+  self.policy_index_ticket = Some(ticket)
+  self.policy_incarnations = Some(incarnations)
+  self.next_policy_incarnation = next_incarnation
+  self.policy_slots = Some(slots)
+  Ok(())
+}
+
+///|
+fn BrokerState::track_policy_session(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Unit {
+  if self.policy_slots is Some(slots) {
+    match slots.put(client_id.value()) {
+      @slot_index.Added(_) => {
+        if self.next_policy_incarnation == 9223372036854775807L {
+          abort("core session incarnation exhausted")
+        }
+        self.policy_incarnations
+        .unwrap()
+        .set(client_id, self.next_policy_incarnation)
+        self.next_policy_incarnation += 1L
+      }
+      @slot_index.Existing(_) => ()
+      @slot_index.Full => abort("core session slot capacity exceeded")
+    }
+  }
+}
+
+///|
+fn BrokerState::untrack_policy_session(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Unit {
+  if self.policy_slots is Some(slots) {
+    if !slots.remove(client_id.value()) {
+      abort("core session slot identity missing")
+    }
+    self.policy_incarnations.unwrap().remove(client_id)
+  }
+}
+
+///|
+fn BrokerState::replace_policy_session(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Unit {
+  if self.policy_incarnations is Some(incarnations) {
+    if self.next_policy_incarnation == 9223372036854775807L ||
+      !incarnations.contains(client_id) {
+      abort("core session replacement identity invalid")
+    }
+    incarnations.set(client_id, self.next_policy_incarnation)
+    self.next_policy_incarnation += 1L
+  }
+}
+
+///|
+pub fn BrokerState::policy_session_incarnation(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Int64? {
+  match self.policy_incarnations {
+    Some(value) => value.get(client_id)
+    None => None
+  }
+}
+
+///|
+pub fn BrokerState::policy_session_revision(
+  self : BrokerState,
+  client_id : @session.ClientId,
+) -> Int64? {
+  self.sessions.get(client_id).map(session => session.policy_revision())
+}
+
+///|
+/// A page scans at most scan_limit physical slots, including empty slots.
+pub fn BrokerState::policy_session_page(
+  self : BrokerState,
+  start : Int,
+  scan_limit : Int,
+) -> @slot_index.SlotPage? {
+  self.policy_slots.map(slots => {
+    slots.page(start, scan_limit, scan_limit, _ => true)
+  })
+}
+
+///|
+pub fn BrokerState::policy_subscription_page(
+  self : BrokerState,
+  start : Int,
+  scan_limit : Int,
+) -> PolicySubscriptionPage? {
+  self.subscriptions.policy_page(start, scan_limit)
+}
+
+///|
+pub fn BrokerState::policy_subscription_identity(
+  self : BrokerState,
+  client_id : @session.ClientId,
+  filter : @topic.TopicFilter,
+) -> Int64? {
+  self.subscriptions.policy_identity(client_id, filter)
 }
 
 ///|
@@ -240,6 +429,10 @@ fn BrokerState::create_session(
   if self.sessions.length() >= self.config.max_sessions() {
     return Err(SessionLimitReached(self.config.max_sessions()))
   }
+  if self.security_policy is Some(policy) &&
+    !policy.allows_principal(request.owner) {
+    return Err(InvalidSessionState(request.client_id))
+  }
   match
     self.resources.add_owner(request.client_id, {
       inflight: 0L,
@@ -254,6 +447,7 @@ fn BrokerState::create_session(
     Err(e) => return Err(e)
     Ok(_) => ()
   }
+  self.track_policy_session(request.client_id)
   self.sessions.set(
     request.client_id,
     @session.ClientSession::new(
@@ -289,6 +483,7 @@ fn BrokerState::remove_session(
   }
   ignore(self.subscriptions.remove_all(client_id))
   self.sessions.remove(client_id)
+  self.untrack_policy_session(client_id)
   if self.admin_sessions is Some(index) {
     index.remove(client_id)
   }
@@ -385,6 +580,26 @@ fn BrokerState::session_is_persistent(
 }
 
 ///|
+fn BrokerState::pending_head_authorized(
+  self : BrokerState,
+  session : @session.ClientSession,
+) -> Bool {
+  match self.security_policy {
+    None => true
+    Some(policy) => {
+      let principal = session.owner()
+      if !policy.allows_principal(principal) {
+        return false
+      }
+      match session.pending_head_topic() {
+        Some(topic) => policy.can_read_topic(principal, topic)
+        None => true
+      }
+    }
+  }
+}
+
+///|
 fn BrokerState::delivery_candidates(
   self : BrokerState,
   input : PublishInput,
@@ -392,6 +607,14 @@ fn BrokerState::delivery_candidates(
 ) -> Array[DeliveryCandidate] {
   let candidates : Array[DeliveryCandidate] = []
   for subscription in self.subscriptions.matches(input.topic) {
+    if self.security_policy is Some(policy) &&
+      self.session_owner(subscription.client_id) is Some(owner) &&
+      (
+        !policy.allows_principal(owner) ||
+        !policy.can_read_topic(owner, input.topic)
+      ) {
+      continue
+    }
     candidates.push({
       recipient: subscription.client_id,
       topic: input.topic,
@@ -1045,6 +1268,24 @@ pub fn BrokerState::check_invariants(
   for id, owner in self.resources.owners {
     if owner.usage != self.resource_usage(id) {
       return Err(InvariantViolation("session byte ledger mismatch"))
+    }
+  }
+  if (self.policy_slots is Some(_)) != (self.policy_index_ticket is Some(_)) ||
+    (self.policy_slots is Some(_)) != (self.policy_incarnations is Some(_)) {
+    return Err(InvariantViolation("core policy index ticket mismatch"))
+  }
+  if self.policy_slots is Some(slots) {
+    if slots.live_count() != self.sessions.length() || !slots.check_invariants() {
+      return Err(InvariantViolation("core policy session index mismatch"))
+    }
+    let incarnations = self.policy_incarnations.unwrap()
+    if incarnations.length() != self.sessions.length() {
+      return Err(InvariantViolation("core policy incarnation count mismatch"))
+    }
+    for id, _ in self.sessions {
+      if slots.get(id.value()) is None || incarnations.get(id) is None {
+        return Err(InvariantViolation("core policy session identity missing"))
+      }
     }
   }
   Ok(())

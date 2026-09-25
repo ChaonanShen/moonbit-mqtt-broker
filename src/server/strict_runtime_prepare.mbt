@@ -46,11 +46,15 @@ pub fn BrokerRuntime::prepare_strict_active_packet(
       Some(event.connection_id) => value
     _ => return StrictClose(event.connection_id, ProtocolError)
   }
+  if !self.connection_credential_current(event.connection_id) {
+    return StrictClose(event.connection_id, PolicyRevoked)
+  }
+  let current = self.connections.get(event.connection_id).unwrap()
   self.connections.set(event.connection_id, {
-    ..meta,
+    ..current,
     last_control_at_ms: event.received_at_ms,
   })
-  let principal = meta.principal.unwrap()
+  let principal = current.principal.unwrap()
   match event.packet {
     Pingreq =>
       StrictImmediate([
@@ -329,6 +333,10 @@ pub fn BrokerRuntime::prepare_strict_active_packet(
       }
       StrictPrepared(Lifecycle(plan), _ => {
         self.active_by_client.remove(client_id)
+        if self.connections.get(event.connection_id) is Some(active) &&
+          active.phase is Active(_) {
+          self.release_policy_epoch(active.policy_epoch)
+        }
         self.connections.remove(event.connection_id)
         let will_ticket = self.will_tickets.get(event.connection_id)
         self.will_tickets.remove(event.connection_id)

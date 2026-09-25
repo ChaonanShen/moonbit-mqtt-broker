@@ -8,6 +8,9 @@ fn BrokerRuntime::finish_strict_transport_close(
     None => return []
   }
   self.connections.remove(event.connection_id)
+  if meta.phase is Active(_) {
+    self.release_policy_epoch(meta.policy_epoch)
+  }
   let actions : Array[RuntimeAction] = []
   match meta.phase {
     Active(client_id) => {
@@ -17,7 +20,11 @@ fn BrokerRuntime::finish_strict_transport_close(
       let publish_will = event.reason != NormalDisconnect &&
         event.reason != ConnectRejected &&
         event.reason != ServerShutdown
-      if publish_will && meta.will is Some(will) {
+      if publish_will &&
+        meta.will is Some(will) &&
+        meta.principal is Some(principal) &&
+        self.security.allows_principal(principal) &&
+        self.security.can_write_topic(principal, will.topic) {
         self.strict_pending_wills.set(event.connection_id, (client_id, will))
         actions.push(StartDurableWill(event.connection_id))
       } else {

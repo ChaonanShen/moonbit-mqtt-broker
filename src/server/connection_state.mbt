@@ -25,6 +25,7 @@ pub(all) enum CloseReason {
   ConnectTimeout
   ClientTakeover
   AdminKick
+  PolicyRevoked
   SlowConsumer
   EncodeFailure
   ResourceExhausted
@@ -41,4 +42,5 @@ pub(all) struct ConnectionMeta {
   keep_alive_seconds : Int
   will : StoredWill?
   principal : @security.Principal?
+  policy_epoch : Int64
 } derive(Eq, Debug)

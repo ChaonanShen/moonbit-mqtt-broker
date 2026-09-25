@@ -9,6 +9,8 @@ pub(all) enum PreparedBrokerMutation {
   Lifecycle(@router.DurableLifecyclePlan)
   Subscribe(@router.DurableSubscribePlan)
   Unsubscribe(@router.DurableUnsubscribePlan)
+  PolicyRecord(@persistence.WalPolicyRecord)
+  PolicyReconcile(@router.DurableReconcilePlan)
 }
 
 ///|
@@ -25,6 +27,7 @@ fn PreparedBrokerMutation::delta(
     Lifecycle(value) => value.delta()
     Subscribe(value) => value.delta()
     Unsubscribe(value) => value.delta()
+    PolicyRecord(_) | PolicyReconcile(_) => @router.DurableDelta::empty()
   }
 }
 
@@ -42,6 +45,8 @@ fn PreparedBrokerMutation::commit(
     Lifecycle(value) => value.commit()
     Subscribe(value) => value.commit()
     Unsubscribe(value) => value.commit()
+    PolicyRecord(_) => Ok([])
+    PolicyReconcile(value) => value.commit()
   }
 }
 
@@ -63,6 +68,8 @@ fn PreparedBrokerMutation::cancel(self : PreparedBrokerMutation) -> Unit {
     Lifecycle(value) => value.cancel()
     Subscribe(value) => value.cancel()
     Unsubscribe(value) => value.cancel()
+    PolicyRecord(_) => ()
+    PolicyReconcile(value) => value.cancel()
   }
 }
 
@@ -87,6 +94,7 @@ pub enum CommitPollResult {
   CommitFencedResult(String)
   CommitCheckpointPublished(Int64, Int64)
   CommitCheckpointFailed(String, Bool)
+  CommitPolicyCapabilityReady
 }
 
 ///|
@@ -125,6 +133,7 @@ pub struct CommitCoordinator {
   mut collecting_started_ms : Int64
   mut collecting_bytes : Int64
   mut submitted : PendingBatch?
+  mut policy_upgrade_pending : Bool
   mut fenced : Bool
 }
 
@@ -166,6 +175,7 @@ pub fn CommitCoordinator::new(
     collecting_started_ms: 0L,
     collecting_bytes: 0L,
     submitted: None,
+    policy_upgrade_pending: false,
     fenced: false,
   })
 }
@@ -211,7 +221,40 @@ pub fn CommitCoordinator::is_fenced(self : CommitCoordinator) -> Bool {
 
 ///|
 pub fn CommitCoordinator::has_pending(self : CommitCoordinator) -> Bool {
-  self.submitted is Some(_) || !self.collecting.is_empty()
+  self.submitted is Some(_) ||
+  !self.collecting.is_empty() ||
+  self.policy_upgrade_pending
+}
+
+///|
+pub fn CommitCoordinator::policy_required(self : CommitCoordinator) -> Bool {
+  self.writer.policy_required()
+}
+
+///|
+pub fn CommitCoordinator::policy_state(
+  self : CommitCoordinator,
+) -> @persistence.WalPolicyState? {
+  self.writer.policy_state()
+}
+
+///|
+/// The writer serializes the durable capability switch with all WAL writes.
+pub fn CommitCoordinator::request_policy_capability(
+  self : CommitCoordinator,
+) -> Bool {
+  if self.is_fenced() || self.has_pending() {
+    return false
+  }
+  if self.writer.policy_required() {
+    return true
+  }
+  if self.writer.submit_policy_capability() {
+    self.policy_upgrade_pending = true
+    true
+  } else {
+    false
+  }
 }
 
 ///|
@@ -452,7 +495,7 @@ pub fn CommitCoordinator::submit(
     plan.cancel()
     return Err(CommitFenced)
   }
-  if self.submitted is Some(_) {
+  if self.submitted is Some(_) || self.policy_upgrade_pending {
     plan.cancel()
     return Err(CommitBusy)
   }
@@ -462,18 +505,48 @@ pub fn CommitCoordinator::submit(
     self.fenced = true
     return Err(CommitLsnExhausted)
   }
+  if plan is PolicyRecord(_) && !self.writer.policy_required() {
+    plan.cancel()
+    self.fenced = true
+    return Err(CommitFenced)
+  }
+  if plan is PolicyReconcile(_) &&
+    !(self.writer.policy_state() is Some({ reconcile_pending: true, .. })) {
+    plan.cancel()
+    self.fenced = true
+    return Err(CommitFenced)
+  }
   let delta = plan.delta()
   if !self.can_collect(plan, delta) {
     plan.cancel()
     return Err(CommitBusy)
   }
-  let encoded = match
-    @persistence.encode_durable_delta(delta, max_bytes=self.max_delta_bytes) {
-    Ok(value) => value
-    Err(_) => {
-      plan.cancel()
-      return Err(CommitEncoding)
-    }
+  let encoded = match plan {
+    PolicyRecord(record) =>
+      match @persistence.encode_wal_policy_record(record) {
+        Ok(value) => value
+        Err(_) => {
+          plan.cancel()
+          return Err(CommitEncoding)
+        }
+      }
+    PolicyReconcile(value) =>
+      match @persistence.encode_wal_reconcile(value.delta()) {
+        Ok(bytes) => bytes
+        Err(_) => {
+          plan.cancel()
+          return Err(CommitEncoding)
+        }
+      }
+    _ =>
+      match
+        @persistence.encode_durable_delta(delta, max_bytes=self.max_delta_bytes) {
+        Ok(value) => value
+        Err(_) => {
+          plan.cancel()
+          return Err(CommitEncoding)
+        }
+      }
   }
   let frame_overhead = (self.collecting.length().to_int64() + 1L) * 21L + 41L
   if encoded.length().to_int64() >
@@ -516,7 +589,9 @@ pub fn CommitCoordinator::submit(
 
 ///|
 pub fn CommitCoordinator::flush(self : CommitCoordinator) -> Bool {
-  if self.is_fenced() || self.submitted is Some(_) {
+  if self.is_fenced() ||
+    self.submitted is Some(_) ||
+    self.policy_upgrade_pending {
     return false
   }
   if self.collecting.is_empty() {
@@ -586,6 +661,19 @@ pub fn CommitCoordinator::poll(self : CommitCoordinator) -> CommitPollResult {
     return CommitFencedResult("late-completion-after-fence")
   }
   match completion {
+    @persistence.PolicyCapabilityReady => {
+      if !self.policy_upgrade_pending || !self.writer.policy_required() {
+        self.fenced = true
+        return CommitFencedResult("policy-capability-completion")
+      }
+      self.policy_upgrade_pending = false
+      return CommitPolicyCapabilityReady
+    }
+    @persistence.PolicyCapabilityFailed(reason) => {
+      self.policy_upgrade_pending = false
+      self.fenced = true
+      return CommitFencedResult("policy-capability-" + reason)
+    }
     @persistence.CheckpointPublished(lsn, generation) => {
       if lsn > self.last_released_lsn || generation < 1L {
         self.fenced = true

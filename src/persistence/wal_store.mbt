@@ -92,6 +92,7 @@ pub struct WalRecovery {
   batches : Array[WalBatch]
   committed_lsn : Int64
   recovered_tail : Bool
+  policy_required : Bool
 }
 
 ///|
@@ -127,6 +128,7 @@ pub struct WalStore {
   mut disk_dirty : Bool
   mut fault : WalFaultPoint?
   mut committed_lsn : Int64
+  mut policy_state : WalPolicyState?
   mut fenced : Bool
   mut closed : Bool
 }
@@ -256,6 +258,11 @@ pub fn WalStore::committed_lsn(self : WalStore) -> Int64 {
 }
 
 ///|
+pub fn WalStore::policy_state(self : WalStore) -> WalPolicyState? {
+  self.policy_state
+}
+
+///|
 pub fn WalStore::is_fenced(self : WalStore) -> Bool {
   self.fenced
 }
@@ -319,6 +326,7 @@ pub async fn WalStore::bootstrap(
       sealed_segments: [],
       active_segment_id: 1L,
       active_start_lsn: 1L,
+      policy_required: checkpoint.policy is Some(_),
     }
     let manifest_bytes = match encode_wal_manifest(manifest) {
       Ok(value) => value
@@ -359,6 +367,7 @@ pub async fn WalStore::bootstrap(
       disk_dirty: false,
       fault: None,
       committed_lsn: 0L,
+      policy_state: checkpoint.policy,
       fenced: false,
       closed: false,
     })
@@ -395,7 +404,8 @@ pub async fn WalStore::recover(
       Err(error) => raise error
     }
     if checkpoint.generation != manifest.checkpoint_generation ||
-      checkpoint.lsn != manifest.checkpoint_lsn {
+      checkpoint.lsn != manifest.checkpoint_lsn ||
+      (!manifest.policy_required && checkpoint.policy is Some(_)) {
       raise wal_corrupt("checkpoint-manifest-mismatch", 0)
     }
     let batches : Array[WalBatch] = []
@@ -465,6 +475,19 @@ pub async fn WalStore::recover(
       batches,
       committed_lsn: scan.committed_lsn,
       recovered_tail: scan.recovered_tail,
+      policy_required: manifest.policy_required,
+    }
+    let policy_state = match
+      fold_wal_policy_batches(
+        checkpoint.policy,
+        batches,
+        manifest.policy_required,
+      ) {
+      Ok(value) => value
+      Err(error) => {
+        active_file.close()
+        raise error
+      }
     }
     Ok(
       (
@@ -480,6 +503,7 @@ pub async fn WalStore::recover(
           disk_dirty: false,
           fault: None,
           committed_lsn: scan.committed_lsn,
+          policy_state,
           fenced: false,
           closed: false,
         },
@@ -588,6 +612,68 @@ async fn WalStore::rotate(self : WalStore) -> Result[Unit, PersistenceError] {
 }
 
 ///|
+/// Persist the required policy capability before any policy transaction can
+/// be committed. A crash after this manifest switch but before activation is
+/// recoverable by the new reader; an old reader rejects manifest version 2.
+pub async fn WalStore::require_policy_capability(
+  self : WalStore,
+) -> Result[Unit, PersistenceError] {
+  if self.manifest.policy_required {
+    return Ok(())
+  }
+  if self.closed ||
+    self.fenced ||
+    self.manifest.generation == 9223372036854775807L {
+    return Err(InvalidConfiguration("WAL policy capability unavailable"))
+  }
+  let dir = self.snapshot_store.data_dir()
+  let temp = dir + "/" + wal_manifest_temp_name
+  let path = dir + "/" + wal_manifest_name
+  try {
+    if wal_exists(temp) {
+      raise InvalidConfiguration("WAL policy upgrade found orphan manifest")
+    }
+    let next : WalManifest = {
+      ..self.manifest,
+      generation: self.manifest.generation + 1L,
+      policy_required: true,
+    }
+    let encoded = match encode_wal_manifest(next) {
+      Ok(value) => value
+      Err(error) => raise error
+    }
+    if self.disk_dirty {
+      self.disk_bytes = wal_disk_usage(dir)
+      self.disk_dirty = false
+    }
+    if self.disk_bytes >
+      self.disk_max_bytes -
+      self.disk_reserve_bytes -
+      encoded.length().to_int64() {
+      raise LimitExceeded(
+        resource="wal-disk-bytes",
+        actual=self.disk_bytes + encoded.length().to_int64(),
+        limit=self.disk_max_bytes - self.disk_reserve_bytes,
+      )
+    }
+    wal_write_synced_new(temp, encoded)
+    @fs.rename(temp, path, replace=true) catch {
+      _ => raise FileSystem(operation="wal-policy-manifest-rename", path~)
+    }
+    sync_directory(dir)
+    self.manifest = next
+    self.disk_bytes = wal_disk_usage(dir)
+    Ok(())
+  } catch {
+    error => {
+      self.disk_dirty = true
+      self.fenced = true
+      Err(error)
+    }
+  }
+}
+
+///|
 pub async fn WalStore::append_batch(
   self : WalStore,
   batch : WalBatch,
@@ -595,6 +681,21 @@ pub async fn WalStore::append_batch(
 ) -> Result[Int64, PersistenceError] {
   if self.closed || self.fenced || batch.previous_lsn != self.committed_lsn {
     return Err(FileSystem(operation="wal-not-writable", path=self.active_path))
+  }
+  if batch.transactions.length() != 1 &&
+    batch.transactions.any(item => {
+      is_wal_policy_record(item.delta) || is_wal_reconcile_record(item.delta)
+    }) {
+    return Err(InvalidConfiguration("policy WAL mutation must be standalone"))
+  }
+  let next_policy = match
+    fold_wal_policy_batches(
+      self.policy_state,
+      [batch],
+      self.manifest.policy_required,
+    ) {
+    Ok(value) => value
+    Err(error) => return Err(error)
   }
   let encoded = match encode_wal_batch(batch) {
     Ok(value) => value
@@ -692,6 +793,7 @@ pub async fn WalStore::append_batch(
     self.active_bytes += encoded.length().to_int64()
     self.disk_bytes += encoded.length().to_int64()
     self.committed_lsn = batch.transactions[batch.transactions.length() - 1].lsn
+    self.policy_state = next_policy
     Ok(self.committed_lsn)
   } catch {
     error => {
@@ -715,7 +817,9 @@ pub async fn WalStore::publish_checkpoint(
     checkpoint.lsn != self.committed_lsn ||
     self.manifest.checkpoint_generation == 9223372036854775807L ||
     self.manifest.generation == 9223372036854775807L ||
-    checkpoint.generation != self.manifest.checkpoint_generation + 1L {
+    checkpoint.generation != self.manifest.checkpoint_generation + 1L ||
+    (!self.manifest.policy_required && checkpoint.policy is Some(_)) ||
+    checkpoint.policy != self.policy_state {
     return Err(InvalidConfiguration("invalid WAL checkpoint publication"))
   }
   let encoded = match encode_wal_checkpoint_sliced(checkpoint, preempt~) {

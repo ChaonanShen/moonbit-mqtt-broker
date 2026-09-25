@@ -19,6 +19,7 @@ fn wal_store_empty_checkpoint() -> WalCheckpoint {
     generation: 1L,
     lsn: 0L,
     identities: [],
+    policy: None,
     snapshot: { version: 3, sessions: [], retained: [] },
   }
 }
@@ -312,5 +313,245 @@ async test "streaming WAL recovery applies multiple segments without retaining h
     assert_eq(restored.committed_lsn(), 4L)
     assert_eq(restored.state().retained_count(), 4)
     recovered.close()
+  })
+}
+
+///|
+async test "policy WAL transitions survive buffered and streaming recovery" {
+  with_wal_store_dir("policy-replay", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let first = SnapshotStore::open(config).unwrap()
+    let wal = WalStore::bootstrap(first, wal_store_empty_checkpoint()).unwrap()
+    let digest : Array[Byte] = []
+    for _ in 0..<32 {
+      digest.push(7)
+    }
+    let fingerprint = Bytes::from_array(digest)
+    let activated = encode_wal_policy_record({
+      transition: PolicyActivated,
+      sequence: 1L,
+      fingerprint,
+    }).unwrap()
+    let reconciled = encode_wal_policy_record({
+      transition: PolicyReconciled,
+      sequence: 1L,
+      fingerprint,
+    }).unwrap()
+    assert_true(
+      wal.append_batch({
+        previous_lsn: 0L,
+        transactions: [{ lsn: 1L, delta: activated }],
+      })
+      is Err(_),
+    )
+    assert_eq(wal.require_policy_capability(), Ok(()))
+    assert_true(wal.manifest().policy_required)
+    assert_true(
+      wal.append_batch({
+        previous_lsn: 0L,
+        transactions: [
+          { lsn: 1L, delta: activated },
+          { lsn: 2L, delta: reconciled },
+        ],
+      })
+      is Err(_),
+    )
+    assert_eq(
+      wal.append_batch({
+        previous_lsn: 0L,
+        transactions: [{ lsn: 1L, delta: activated }],
+      }),
+      Ok(1L),
+    )
+    assert_eq(
+      wal.append_batch({
+        previous_lsn: 1L,
+        transactions: [{ lsn: 2L, delta: reconciled }],
+      }),
+      Ok(2L),
+    )
+    let policy = wal.policy_state()
+    assert_eq(
+      policy,
+      Some({ sequence: 1L, fingerprint, reconcile_pending: false }),
+    )
+    let incomplete : WalCheckpoint = {
+      ..wal_store_empty_checkpoint(),
+      generation: 2L,
+      lsn: 2L,
+    }
+    assert_true(wal.publish_checkpoint(incomplete) is Err(_))
+    assert_eq(wal.publish_checkpoint({ ..incomplete, policy, }), Ok(()))
+    wal.close()
+    let limits = wal_store_limits()
+    let second = SnapshotStore::open(config).unwrap()
+    let (recovered, replay) = WalStore::recover(second, limits).unwrap()
+    let buffered = replay.restore_state(limits.broker_config(), limits).unwrap()
+    assert_eq(
+      buffered.policy(),
+      Some({ sequence: 1L, fingerprint, reconcile_pending: false }),
+    )
+    recovered.close()
+    let third = SnapshotStore::open(config).unwrap()
+    let (streamed_store, streamed) = WalStore::recover_state(
+      third,
+      limits.broker_config(),
+      limits,
+    ).unwrap()
+    assert_eq(streamed.policy(), buffered.policy())
+    streamed_store.close()
+  })
+}
+
+///|
+async test "policy WAL writer rejects reconciliation without activation" {
+  with_wal_store_dir("policy-order", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let first = SnapshotStore::open(config).unwrap()
+    let wal = WalStore::bootstrap(first, wal_store_empty_checkpoint()).unwrap()
+    let digest : Array[Byte] = []
+    for _ in 0..<32 {
+      digest.push(3)
+    }
+    let invalid = encode_wal_policy_record({
+      transition: PolicyReconciled,
+      sequence: 1L,
+      fingerprint: Bytes::from_array(digest),
+    }).unwrap()
+    assert_eq(wal.require_policy_capability(), Ok(()))
+    assert_true(
+      wal.append_batch({
+        previous_lsn: 0L,
+        transactions: [{ lsn: 1L, delta: invalid }],
+      })
+      is Err(_),
+    )
+    assert_eq(wal.committed_lsn(), 0L)
+    assert_eq(wal.policy_state(), None)
+    wal.close()
+  })
+}
+
+///|
+async test "policy capability upgrade before activation recovers safely" {
+  with_wal_store_dir("policy-upgrade-only", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let first = SnapshotStore::open(config).unwrap()
+    let wal = WalStore::bootstrap(first, wal_store_empty_checkpoint()).unwrap()
+    assert_eq(wal.require_policy_capability(), Ok(()))
+    assert_eq(wal.require_policy_capability(), Ok(()))
+    wal.close()
+    let limits = wal_store_limits()
+    let second = SnapshotStore::open(config).unwrap()
+    let (recovered, state) = WalStore::recover_state(
+      second,
+      limits.broker_config(),
+      limits,
+    ).unwrap()
+    assert_true(state.policy_required())
+    assert_eq(state.policy(), None)
+    assert_eq(state.committed_lsn(), 0L)
+    recovered.close()
+  })
+}
+
+///|
+async test "local policy cleanup replays without a whole Session delta" {
+  with_wal_store_dir("policy-local-reconcile", path => {
+    let config = PersistenceConfig::new(path).unwrap()
+    let first = SnapshotStore::open(config).unwrap()
+    let checkpoint : WalCheckpoint = {
+      generation: 1L,
+      lsn: 0L,
+      identities: [{ client_id: "client-a", generation: 1L }],
+      policy: None,
+      snapshot: {
+        version: 3,
+        sessions: [
+          {
+            client_id: "client-a",
+            owner_principal: "anonymous",
+            detached_at_ms: 0L,
+            next_packet_id: 1,
+            subscriptions: [{ filter: "private/#", qos: 1 }],
+            inbound_qos2: [],
+            inflight: [],
+            pending: [
+              { topic: "safe/value", payload: b"legal", qos: 1, retain: false },
+              {
+                topic: "private/value",
+                payload: b"body",
+                qos: 1,
+                retain: false,
+              },
+            ],
+          },
+        ],
+        retained: [],
+      },
+    }
+    let wal = WalStore::bootstrap(first, checkpoint).unwrap()
+    assert_eq(wal.require_policy_capability(), Ok(()))
+    let digest : Array[Byte] = []
+    for _ in 0..<32 {
+      digest.push(5)
+    }
+    let fingerprint = Bytes::from_array(digest)
+    let payloads = [
+      encode_wal_policy_record({
+        transition: PolicyActivated,
+        sequence: 1L,
+        fingerprint,
+      }).unwrap(),
+      encode_wal_reconcile({
+        client_id: "client-a",
+        expected_generation: 1L,
+        change: @router.DropSubscription("private/#"),
+      }).unwrap(),
+      encode_wal_reconcile({
+        client_id: "client-a",
+        expected_generation: 1L,
+        change: @router.DropPendingAt(1, "private/value", 1, 4),
+      }).unwrap(),
+      encode_wal_policy_record({
+        transition: PolicyReconciled,
+        sequence: 1L,
+        fingerprint,
+      }).unwrap(),
+    ]
+    for index in 0..<payloads.length() {
+      assert_eq(
+        wal.append_batch({
+          previous_lsn: index.to_int64(),
+          transactions: [{ lsn: index.to_int64() + 1L, delta: payloads[index] }],
+        }),
+        Ok(index.to_int64() + 1L),
+      )
+    }
+    wal.close()
+    let limits = wal_store_limits()
+    let second = SnapshotStore::open(config).unwrap()
+    let (recovered, replay) = WalStore::recover(second, limits).unwrap()
+    let buffered = replay.restore_state(limits.broker_config(), limits).unwrap()
+    assert_eq(buffered.state().subscription_count(), 0)
+    assert_eq(buffered.state().pending_qos1_count(), 1)
+    recovered.close()
+    let third = SnapshotStore::open(config).unwrap()
+    let (streamed_store, streamed) = WalStore::recover_state(
+      third,
+      limits.broker_config(),
+      limits,
+    ).unwrap()
+    assert_eq(streamed.state().subscription_count(), 0)
+    assert_eq(streamed.state().pending_qos1_count(), 1)
+    assert_eq(
+      streamed.state().export_snapshot().sessions[0].pending[0].topic,
+      "safe/value",
+    )
+    assert_eq(
+      streamed.policy(),
+      Some({ sequence: 1L, fingerprint, reconcile_pending: false }),
+    )
+    streamed_store.close()
   })
 }

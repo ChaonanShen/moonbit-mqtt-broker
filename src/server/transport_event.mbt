@@ -16,5 +16,6 @@ pub(all) enum DriverEvent {
   ManagementQuery(ManagementQueryEvent)
   ManagementCommand(ManagementCommandEvent)
   ManagementMaintenance
+  ReloadControl(ReloadDriverCommand)
   UnregisterTransport(ConnectionId)
 }

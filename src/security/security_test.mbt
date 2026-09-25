@@ -299,3 +299,31 @@ test "security policy classifies immediate and hash-required authentication" {
     Immediate(_) => fail("password-backed authentication must require hashing")
   }
 }
+
+///|
+test "security generations distinguish credential continuity and ACL changes" {
+  let encoded = "$argon2id$v=19$m=4096,t=2,p=1$MDEyMzQ1Njc4OWFiY2RlZg$L6c7kPn0Q0+pwt7HHxzhhB+QGg1khTPaRz9eiHBu/eM"
+  let one = password_database_fixture("sensor01:" + encoded)
+  let two = password_database_fixture(
+    "sensor01:" + encoded + "\nsensor02:" + encoded,
+  )
+  let old = SecurityPolicy::new(allow_anonymous=true, passwords=one)
+  let same = SecurityPolicy::new(allow_anonymous=true, passwords=one)
+  let added = SecurityPolicy::new(allow_anonymous=true, passwords=two)
+  assert_true(old.same_security(same))
+  assert_false(old.same_security(added))
+  assert_true(added.allows_principal(Principal::User("sensor02")))
+  assert_false(old.allows_principal(Principal::User("sensor02")))
+  assert_true(added.credential_unchanged(old, Principal::User("sensor01")))
+  assert_false(added.credential_unchanged(old, Principal::User("sensor02")))
+  assert_false(old.credential_unchanged(added, Principal::User("sensor02")))
+  let acl = AclPolicy::parse("user sensor01\ntopic read safe/#").unwrap()
+  let acl_only = SecurityPolicy::new(allow_anonymous=true, passwords=one, acl~)
+  assert_false(old.same_security(acl_only))
+  assert_true(acl_only.credential_unchanged(old, Principal::User("sensor01")))
+  let no_anonymous = SecurityPolicy::new(allow_anonymous=false, passwords=one)
+  assert_false(no_anonymous.allows_principal(Principal::Anonymous))
+  assert_false(
+    no_anonymous.credential_unchanged(old, Principal::LegacyAnonymous),
+  )
+}

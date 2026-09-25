@@ -6,7 +6,7 @@
 健康检查、Prometheus 和状态摘要；明细与操作有各自的开关，默认关闭。
 派生明细索引异常时 MQTT 继续运行，明细和写路由返回 503，需修正问题并
 重启。当前没有管理 HTTPS、公网监听、UI、消息载荷查看、批量删除、
-retained 删除、在线令牌轮换或真实配置热重载。
+retained 删除或在线令牌轮换。
 
 ## 启动与角色
 
@@ -55,12 +55,12 @@ max_bytes_total = 33554432
 | `GET /v1/sessions[/{handle}]` | read | 实例身份、生命周期、归属及队列数量/字节 |
 | `GET /v1/sessions/{handle}/subscriptions` | read | 过滤器与 QoS |
 | `GET /v1/retained` | read | Topic、QoS 与载荷字节数，无载荷 |
-| `GET /v1/config` | read | 白名单限制与开关，无令牌路径或秘密 |
+| `GET /v1/config` | config_admin | 启用 reload 时返回当前配置/策略代际与强配置 ETag |
 | `POST /v1/connections/{id}/disconnect` | operator | 精确关闭该连接 |
 | `DELETE /v1/sessions/{handle}` | operator | 只删除离线持久 Session |
 | `GET /v1/operations/{id}` | operator 或 config_admin | 本 token 的进程内 Operation |
 | `GET /v1/audit` | operator 或 config_admin | 本 token 的近期进程内审计 |
-| `POST /v1/config/reload` | config_admin | 尚无协调器时返回 501 `capability_unavailable` |
+| `POST /v1/config/reload` | config_admin | 启用 reload 且请求被接纳时返回 202；禁用时返回 503 `reload_disabled` |
 
 连接阶段为 `await_connect`、`authenticating`、`active`。MQTT 注册之前的 TLS
 握手不在列表中。具名 TCP/TLS/WS/WSS MQTT 监听器共享同一 Broker 状态；管理 HTTP
@@ -72,6 +72,33 @@ Int64 以十进制字符串输出。strict 的 fenced/recovering 强制 `ready=f
 不受仅适用于快照的健康开关放行；事件循环仍健康时只读状态和指标保留。
 Prometheus 的 WAL LSN/待提交 gauge 使用固定名称，不引入 Client ID、Topic
 或文件名标签。
+
+## 配置热更新
+
+启用 reload 后，`config_admin` 令牌即使在明细和普通 Operation 路由
+关闭时也能读取 `GET /v1/config`。响应包含十进制字符串形式的
+`config_epoch`、`policy_epoch` 和与当前 boot 绑定的强 `ETag`。
+调用 `POST /v1/config/reload` 时，将该 ETag 放入 `If-Match`，
+并提供 16–64 字符的 `Idempotency-Key`。请求体可为空、`{}`，
+或使用与 ETag 一致的规范非负 JSON 整数
+`{"expected_generation":0}`。受理返回 202 和 Operation 位置；
+同一 key/请求返回原 Operation，同一 key 改请求返回 409，
+陈旧 ETag 返回 412。发布完整 bundle 后，可按下列顺序调用：
+
+```bash
+curl -i -H "Authorization: Bearer $token" http://127.0.0.1:9091/v1/config
+curl -i -X POST -H "Authorization: Bearer $token" \
+  -H "If-Match: $etag" -H "Idempotency-Key: reload-20260924-0001" \
+  -H "Content-Type: application/json" -d '{"expected_generation":0}' \
+  http://127.0.0.1:9091/v1/config/reload
+curl -i -H "Authorization: Bearer $token" \
+  "http://127.0.0.1:9091/v1/operations/$operation_id"
+```
+
+从首个响应取得 `etag`，从受理响应取得 `operation_id`；将示例代际 0 换成实测 `config_epoch`。应查询 Operation 直至终态：受理并不表示
+激活或清理成功。`config_admin` 可在 `operations_enabled=false`
+时查询自己的 Operation 和审计。SIGHUP 使用同一有界 reload owner；
+即使管理关闭，也会记录本地信号审计。两条路径均不轮换管理令牌文件。
 
 ## 明细、分页与身份
 
@@ -146,7 +173,7 @@ terminal 事件只记录固定结果码和不透明 ID。环形表满时覆盖�
 常见状态：401 缺少/错误 token，403 权限不足，428 缺命令前置条件，
 400 格式错误，404 目标不存在或非本人 Operation，409 在线 Session
 或幂等冲突，410 游标过期或旧 boot Operation，412 陈旧 ETag，422
-单行过大，429 容量/速率限制，501 reload 尚不可用，503 功能关闭、
+单行过大，429 容量/速率限制，503 功能关闭、
 索引降级或正在停机。所有响应使用 `Cache-Control: no-store`。连接、
 请求及命令令牌桶独立于 MQTT 限速，队列/槽位固定；慢读取者直到真实写出
 或取消后才归还请求槽。管理监听器没有自身 TLS，需限制本机访问，转发时

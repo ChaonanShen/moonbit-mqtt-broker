@@ -101,31 +101,49 @@ async test "driver observation event refreshes cache without broker mutation" {
 async test "second listener bind failure releases first listener port" {
   let config = ServerConfig::default()
   let blocker = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
-  let first = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
-  let mqtt_address = first.addr
-  first.close()
   let startup = lifecycle_startup()
   let enabled = @management.ManagementConfig::new(
     enabled=true,
     token_file="/fixture/tokens",
     listen=blocker.addr.to_string(),
   ).unwrap()
-  let completed = @async.with_timeout_opt(1000, () => {
-    let mut failed = false
-    run(
-      mqtt_address.to_string(),
-      config,
-      @router.BrokerState::new(config.broker_config()),
-      management={ config: enabled, tokens: startup.tokens },
-    ) catch {
-      _ => failed = true
+  let mut released = false
+  // A free ephemeral port can be claimed by another test between close and rebind.
+  for _ in 0..<8 {
+    let first = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+    let mqtt_address = first.addr
+    first.close()
+    let mut management_bind_failed = false
+    let completed = @async.with_timeout_opt(1000, () => {
+      run(
+        mqtt_address.to_string(),
+        config,
+        @router.BrokerState::new(config.broker_config()),
+        management={ config: enabled, tokens: startup.tokens },
+      ) catch {
+        ResourceStartupFailure(message) =>
+          management_bind_failed = message == "management listener bind failed"
+        _ => ()
+      }
+    })
+    assert_true(completed is Some(_))
+    if !management_bind_failed {
+      continue
     }
-    assert_true(failed)
-  })
-  assert_true(completed is Some(_))
-  let rebound = @socket.TcpServer(mqtt_address, reuse_addr=true)
-  rebound.close()
+    let rebound = Some(@socket.TcpServer(mqtt_address, reuse_addr=true)) catch {
+      _ => None
+    }
+    match rebound {
+      Some(listener) => {
+        listener.close()
+        released = true
+        break
+      }
+      None => ()
+    }
+  }
   blocker.close()
+  assert_true(released)
 }
 
 ///|

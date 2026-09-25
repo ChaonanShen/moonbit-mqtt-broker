@@ -61,8 +61,8 @@ pub fn LogRecord::new(
 
 ///|
 pub struct Logger {
-  minimum_level : LogLevel
-  format : LogFormat
+  mut minimum_level : LogLevel
+  mut format : LogFormat
   output_enabled : Bool
 }
 
@@ -72,6 +72,18 @@ pub fn Logger::new(
   format? : LogFormat = Text,
 ) -> Logger {
   { minimum_level, format, output_enabled: true }
+}
+
+///|
+/// Applied by the serialized reload publication point. No output or await
+/// occurs between the two settings, so each subsequent record sees one pair.
+pub fn Logger::reconfigure(
+  self : Logger,
+  minimum_level : LogLevel,
+  format : LogFormat,
+) -> Unit {
+  self.minimum_level = minimum_level
+  self.format = format
 }
 
 ///|

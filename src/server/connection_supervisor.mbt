@@ -255,12 +255,19 @@ async fn write_transport(
         return PeerEof
       }
       WriteFrame(frame) => {
-        let ticket = sink.take_frame_ticket(frame)
+        let (ticket, authorization) = sink.take_owned_frame(frame)
         defer release_optional(ticket)
         if sink.ws_closing {
           continue
         }
-        connection.write(frame) catch {
+        if authorization is Some(value) && !sink.authorize(value) {
+          return PolicyRevoked
+        }
+        let gate : (() -> Bool)? = authorization.map(value => {
+          () => sink.authorize(value)
+        })
+        connection.write(frame, still_allowed?=gate) catch {
+          PolicyWriteRevoked => return PolicyRevoked
           _ => return WriteFailure
         }
         if bus is Some(bus) && bus.needs_promotion {
@@ -268,12 +275,19 @@ async fn write_transport(
         }
       }
       WriteFrameThenClose(frame, reason) => {
-        let ticket = sink.take_frame_ticket(frame)
+        let (ticket, authorization) = sink.take_owned_frame(frame)
         defer release_optional(ticket)
         if sink.ws_closing {
           continue
         }
-        connection.write(frame) catch {
+        if authorization is Some(value) && !sink.authorize(value) {
+          return PolicyRevoked
+        }
+        let gate : (() -> Bool)? = authorization.map(value => {
+          () => sink.authorize(value)
+        })
+        connection.write(frame, still_allowed?=gate) catch {
+          PolicyWriteRevoked => return PolicyRevoked
           _ => return WriteFailure
         }
         return reason

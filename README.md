@@ -56,7 +56,7 @@ security example, read the [getting-started guide](docs/getting-started.md).
 | Lifecycle | PING, Keep Alive, QoS 0/1/2 Wills, graceful SIGTERM/SIGINT shutdown |
 | Persistence | Optional checksummed snapshots or explicit strict WAL with commit-before-ACK recovery |
 | Security | Optional Argon2id passwords, allow-only ACLs, Principal-owned Sessions |
-| Operations | TOML configuration, byte budgets and connection/auth/publish rate limits, `$SYS/broker/#` metrics, text/JSON logs |
+| Operations | TOML configuration, optional SIGHUP/config-admin reload, byte budgets and connection/auth/publish rate limits, `$SYS/broker/#` metrics, text/JSON logs |
 
 MQTT 5, shared subscriptions, bridges, plugins, clustering and external
 databases remain out of scope. `--data-dir` defaults to latest-committed
@@ -64,6 +64,11 @@ snapshot recovery; explicit `--persistence-mode strict` adds local WAL commit
 barriers for the documented persistent state. It is not replication or an
 end-to-end delivery guarantee. See the [compatibility matrix](docs/compatibility.md)
 and [persistence contract](docs/persistence.md).
+
+Optional live reload replaces a verified configuration bundle without restarting
+MQTT listeners. It can rotate passwords, ACLs and existing TLS/WSS material;
+see the [reload configuration and deployment contract](docs/configuration.md#live-configuration-reload).
+The feature is disabled by default.
 
 ## Configuration
 

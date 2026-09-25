@@ -308,6 +308,9 @@ pub fn BrokerState::resume_pending(self : BrokerState) -> Array[BrokerAction] {
           session.pending_count() > 0 &&
           session.inflight_count() < self.config.max_inflight_per_session() &&
           self.inflight_count() < self.config.max_inflight_total() {
+      if !self.pending_head_authorized(session) {
+        break
+      }
       let cost = session.pending_head_cost().unwrap()
       let scratch = match
         self.reserve_scratch(

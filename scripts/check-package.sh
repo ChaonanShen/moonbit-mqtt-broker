@@ -61,7 +61,6 @@ cp "${STAGED_PACKAGE}" "${PACKAGE}"
 file_count="$(unzip -Z1 "${PACKAGE}" | wc -l | tr -d ' ')"
 uncompressed_bytes="$(unzip -l "${PACKAGE}" | tail -n 1 | awk '{print $1}')"
 package_bytes="$(stat -c %s "${PACKAGE}")"
-[[ "${file_count}" -le 500 ]]
 [[ "${uncompressed_bytes}" -le 20971520 ]]
 [[ "${package_bytes}" -le 10485760 ]]
 

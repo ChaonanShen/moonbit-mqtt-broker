@@ -17,8 +17,9 @@ pub struct ManagementHttp {
   connection_bucket : @budget.Bucket
   request_bucket : @budget.Bucket
   boot_id : String
-  query_mailbox : ManagementQueryMailbox?
-  command_mailbox : ManagementCommandMailbox?
+  mut query_mailbox : ManagementQueryMailbox?
+  mut command_mailbox : ManagementCommandMailbox?
+  mut reload_generation : GenerationHandle?
   command_bucket : @budget.Bucket
   availability : ManagementAvailability?
   mut next_request_id : Int64
@@ -78,6 +79,7 @@ pub fn ManagementHttp::new(
     boot_id,
     query_mailbox,
     command_mailbox,
+    reload_generation: None,
     command_bucket,
     availability,
     next_request_id: 1L,
@@ -130,6 +132,7 @@ fn ManagementHttp::encode(
   body_type : @http_transport.HttpBodyType,
   allow? : @http_transport.HttpAllow,
   location? : String,
+  etag? : String,
 ) -> Bytes {
   match
     @http_transport.encode_response(
@@ -139,6 +142,7 @@ fn ManagementHttp::encode(
       self.config.max_response_bytes(),
       allow?,
       location?,
+      etag?,
     ) {
     Ok(value) => value
     Err(_) =>
@@ -352,6 +356,7 @@ pub fn ManagementHttp::respond(
       operations_enabled=self.config.operations_enabled(),
       details_available=self.availability is Some(value) &&
         value.details_available,
+      reload_enabled=self.reload_generation is Some(_),
     )
   }
   match body {
@@ -541,6 +546,7 @@ pub async fn ManagementHttp::respond_command(
   head : @http_transport.HttpRequestHead,
   same_read_suffix_bytes : Int,
   now_monotonic_ms : Int64,
+  body? : Bytes,
 ) -> Bytes {
   let request_id = match self.request_id() {
     Some(value) => value
@@ -551,11 +557,25 @@ pub async fn ManagementHttp::respond_command(
         @http_transport.JsonBody,
       )
   }
+  let reload_route = head.target == "/v1/config/reload" &&
+    head.method_name == "POST"
+  if reload_route && head.content_length.unwrap_or(0) > 4096 {
+    return self.reject(
+      @http_transport.BodyTooLarge,
+      "body_too_large",
+      request_id,
+      @management.RejectedParse,
+    )
+  }
   if head.target.contains("%") ||
     head.target.contains("?") ||
     head.target.contains("#") ||
     same_read_suffix_bytes != 0 ||
-    (head.content_length is Some(length) && length != 0) {
+    (!reload_route && head.content_length is Some(length) && length != 0) ||
+    (
+      reload_route &&
+      body.unwrap_or(b"").length() != head.content_length.unwrap_or(0)
+    ) {
     return self.reject(
       @http_transport.BadRequest,
       "bad_request",
@@ -591,7 +611,7 @@ pub async fn ManagementHttp::respond_command(
         @management.RejectedAuth,
       )
   }
-  if head.target == "/v1/config/reload" && head.method_name == "POST" {
+  if reload_route {
     if !actor.allows(@management.ConfigAdmin) {
       return self.reject(
         @http_transport.Forbidden,
@@ -600,14 +620,16 @@ pub async fn ManagementHttp::respond_command(
         @management.RejectedRole,
       )
     }
-    return self.reject(
-      @http_transport.NotImplemented,
-      "capability_unavailable",
-      request_id,
-      @management.RejectedOther,
-    )
+    if self.reload_generation is None {
+      return self.reject(
+        @http_transport.ServiceUnavailable,
+        "reload_disabled",
+        request_id,
+        @management.RejectedOther,
+      )
+    }
   }
-  if !actor.allows(@management.Operator) {
+  if !reload_route && !actor.allows(@management.Operator) {
     return self.reject(
       @http_transport.Forbidden,
       "forbidden",
@@ -665,7 +687,52 @@ pub async fn ManagementHttp::respond_command(
         @management.RejectedParse,
       )
   }
-  if !self.config.operations_enabled() {
+  if reload_route {
+    let content_length = head.content_length.unwrap_or(0)
+    if content_length > 0 {
+      let mut content_type_count = 0
+      for header in head.headers {
+        if header.name == "content-type" {
+          content_type_count += 1
+          if header.value != "application/json" {
+            return self.reject(
+              @http_transport.UnsupportedMediaType,
+              "unsupported_media_type",
+              request_id,
+              @management.RejectedParse,
+            )
+          }
+        }
+      }
+      if content_type_count != 1 {
+        return self.reject(
+          @http_transport.BadRequest,
+          "bad_request",
+          request_id,
+          @management.RejectedParse,
+        )
+      }
+    }
+    let expected = match @management.parse_reload_body(body.unwrap_or(b"")) {
+      Ok(value) => value
+      Err(_) =>
+        return self.reject(
+          @http_transport.BadRequest,
+          "bad_request",
+          request_id,
+          @management.RejectedParse,
+        )
+    }
+    if expected is Some(value) && value.to_string() != spec.target {
+      return self.reject(
+        @http_transport.PreconditionFailed,
+        "precondition_failed",
+        request_id,
+        @management.RejectedParse,
+      )
+    }
+  }
+  if !reload_route && !self.config.operations_enabled() {
     return self.reject(
       @http_transport.ServiceUnavailable,
       "operations_disabled",
@@ -791,7 +858,8 @@ pub async fn ManagementHttp::respond_operation(
       @management.RejectedRate,
     )
   }
-  if !self.config.operations_enabled() {
+  if !self.config.operations_enabled() &&
+    !(self.reload_generation is Some(_) && actor.allows(@management.ConfigAdmin)) {
     return self.reject(
       @http_transport.ServiceUnavailable,
       "operations_disabled",
@@ -874,4 +942,93 @@ pub async fn ManagementHttp::respond_operation(
         @management.RejectedDeadline,
       )
   }
+}
+
+///|
+/// ConfigAdmin reads only the boot-scoped generation identity. Neither source
+/// paths nor policy/material fingerprints enter this response.
+pub fn ManagementHttp::respond_reload_config(
+  self : ManagementHttp,
+  head : @http_transport.HttpRequestHead,
+  same_read_suffix_bytes : Int,
+  now_monotonic_ms : Int64,
+) -> Bytes {
+  let request_id = match self.request_id() {
+    Some(value) => value
+    None =>
+      return self.encode(
+        @http_transport.ServiceUnavailable,
+        b"{\"error\":{\"code\":\"id_exhausted\"}}",
+        @http_transport.JsonBody,
+      )
+  }
+  if head.method_name != "GET" ||
+    head.target != "/v1/config" ||
+    same_read_suffix_bytes != 0 ||
+    (head.content_length is Some(length) && length != 0) {
+    return self.reject(
+      @http_transport.BadRequest,
+      "bad_request",
+      request_id,
+      @management.RejectedParse,
+    )
+  }
+  let actor = match management_header(head, "authorization") {
+    Some(value) =>
+      match management_bearer(value) {
+        Some(token) => self.tokens.authenticate(token)
+        None => None
+      }
+    None => None
+  }
+  let actor = match actor {
+    Some(value) => value
+    None =>
+      return self.reject(
+        @http_transport.Unauthorized,
+        "unauthenticated",
+        request_id,
+        @management.RejectedAuth,
+      )
+  }
+  if !actor.allows(@management.ConfigAdmin) {
+    return self.reject(
+      @http_transport.Forbidden,
+      "forbidden",
+      request_id,
+      @management.RejectedRole,
+    )
+  }
+  if now_monotonic_ms < 0L ||
+    @budget.admit([(self.request_bucket, 1L)], now_monotonic_ms) is Err(_) {
+    return self.reject(
+      @http_transport.TooManyRequests,
+      "rate_limited",
+      request_id,
+      @management.RejectedRate,
+    )
+  }
+  let handle = match self.reload_generation {
+    Some(value) => value
+    None =>
+      return self.reject(
+        @http_transport.ServiceUnavailable,
+        "reload_disabled",
+        request_id,
+        @management.RejectedOther,
+      )
+  }
+  let active = handle.active()
+  let body : Map[String, Json] = Map([
+    ("api_version", "1".to_json()),
+    ("boot_id", self.boot_id.to_json()),
+    ("config_epoch", active.config_epoch().to_string().to_json()),
+    ("policy_epoch", active.policy_epoch().to_string().to_json()),
+  ])
+  self.encode(
+    @http_transport.Ok,
+    @utf8.encode(body.to_json().stringify()),
+    @http_transport.JsonBody,
+    etag=@management.config_etag(self.boot_id, active.config_epoch()),
+  )
 }
