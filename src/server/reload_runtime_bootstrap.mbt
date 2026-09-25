@@ -37,10 +37,15 @@ pub async fn bootstrap_runtime_policy(
           continue
         }
         match issue {
-          @router.EvictSession(_, _) =>
+          @router.EvictSession(_, _) => {
+            let session_incarnation = broker.session_incarnation(id)
             if broker.apply(@router.RemoveSession(id)) is Err(_) {
               raise ResourceStartupFailure("policy startup eviction failed")
             }
+            if session_incarnation is Some(value) {
+              ignore(broker.cancel_wills_for_incarnation(id, value))
+            }
+          }
           @router.DropFilter(_, _, subscription_id, filter) => {
             if broker.policy_subscription_identity(id, filter) !=
               Some(subscription_id) {

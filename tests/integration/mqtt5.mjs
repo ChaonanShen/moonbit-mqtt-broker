@@ -238,6 +238,117 @@ async function checkRetained(port, mode) {
     await closeClient(client)
   }
 }
+async function checkSmallPeer(port, mode) {
+  const id = 'mqtt5-small-' + mode
+  const options = maximumPacketSize => ({
+    clientId: id,
+    clean: false,
+    properties: { sessionExpiryInterval: 30, maximumPacketSize }
+  })
+  let [subscriber, ack] = await connectClient(port, options(40))
+  assert.equal(ack.sessionPresent, false)
+  let received = 0
+  subscriber.on('message', () => { received++ })
+  await subscribe(subscriber, 'mqtt5/small', { qos: 1 })
+  const [publisher] = await connectClient(port, {
+    clientId: 'mqtt5-small-pub-' + mode
+  })
+  try {
+    await publish(publisher, 'mqtt5/small', 'x'.repeat(120), { qos: 1 })
+    await sleep(200)
+    assert.equal(received, 0)
+    assert.equal(subscriber.connected, true)
+    await closeClient(subscriber)
+    ;[subscriber, ack] = await connectClient(port, options(1000))
+    assert.equal(ack.sessionPresent, true)
+    subscriber.on('message', () => { received++ })
+    await sleep(200)
+    assert.equal(received, 0)
+    console.log('M-T09 ' + mode + ' oversized fresh copy discarded')
+  } finally {
+    await closeClient(subscriber)
+    await closeClient(publisher)
+  }
+}
+async function checkReplayTooLarge(port) {
+  async function rawSubscriber(maximumPacketSize) {
+    const socket = net.connect(port, '127.0.0.1')
+    const parser = mqttPacket.parser({ protocolVersion: 5 })
+    const queue = []
+    let waiter = null
+    socket.on('data', bytes => parser.parse(bytes))
+    parser.on('packet', packet => {
+      if (waiter) {
+        const resolve = waiter
+        waiter = null
+        resolve(packet)
+      } else queue.push(packet)
+    })
+    const next = () => Promise.race([
+      queue.length ? Promise.resolve(queue.shift()) :
+        new Promise(resolve => { waiter = resolve }),
+      sleep(5000).then(() => { throw new Error('replay packet timeout') })
+    ])
+    await new Promise(resolve => socket.once('connect', resolve))
+    const send = packet => socket.write(mqttPacket.generate(
+      packet, { protocolVersion: 5 }
+    ))
+    send({
+      cmd: 'connect', protocolVersion: 5,
+      clientId: 'mqtt5-replay-small', clean: false, keepalive: 10,
+      properties: { sessionExpiryInterval: 30, maximumPacketSize }
+    })
+    const ack = await next()
+    assert.equal(ack.cmd, 'connack')
+    assert.equal(ack.reasonCode, 0)
+    return { socket, next, send, ack }
+  }
+  let subscriber = await rawSubscriber(1000)
+  assert.equal(subscriber.ack.sessionPresent, false)
+  subscriber.send({
+    cmd: 'subscribe', messageId: 1,
+    subscriptions: [{ topic: 'mqtt5/replay-size', qos: 1 }],
+    properties: {}
+  })
+  assert.equal((await subscriber.next()).cmd, 'suback')
+  const [publisher] = await connectClient(port, {
+    clientId: 'mqtt5-replay-publisher'
+  })
+  try {
+    const first = subscriber.next()
+    await publish(publisher, 'mqtt5/replay-size', 'y'.repeat(120), {
+      qos: 1
+    })
+    const original = await first
+    assert.equal(original.cmd, 'publish')
+    assert.equal(original.dup, false)
+    subscriber.socket.destroy()
+    await sleep(100)
+    subscriber = await rawSubscriber(40)
+    assert.equal(subscriber.ack.sessionPresent, true)
+    const denied = await subscriber.next()
+    assert.equal(denied.cmd, 'disconnect')
+    assert.equal(denied.reasonCode, 0x95)
+    subscriber.socket.destroy()
+    await sleep(100)
+    subscriber = await rawSubscriber(1000)
+    assert.equal(subscriber.ack.sessionPresent, true)
+    const replay = await subscriber.next()
+    assert.equal(replay.cmd, 'publish')
+    assert.equal(replay.dup, true)
+    assert.equal(replay.messageId, original.messageId)
+    assert.equal(replay.payload.toString(), original.payload.toString())
+    subscriber.send({
+      cmd: 'puback', messageId: replay.messageId,
+      reasonCode: 0, properties: {}
+    })
+    subscriber.socket.destroy()
+    console.log('M-T10 strict oversized inflight closes 95 and replays')
+  } finally {
+    subscriber.socket.destroy()
+    await closeClient(publisher)
+  }
+}
 async function checkCrossVersion(port, mode) {
   const legacy = () => connectClient(port, {
     protocolVersion: 4, clientId: 'mqtt5-cross-' + mode, clean: false
@@ -268,6 +379,8 @@ async function runMode(mode) {
     await checkMalformedConnect(port)
     await checkSharedUnavailable(port)
     await checkPubSub(port, mode)
+    await checkSmallPeer(port, mode)
+    if (mode === 'strict') await checkReplayTooLarge(port)
     await checkSession(port, mode)
     await checkCrossVersion(port, mode)
     if (mode !== 'off') {

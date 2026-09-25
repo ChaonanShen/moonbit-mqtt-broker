@@ -52,6 +52,20 @@ broker --config /etc/moonbit-mqtt-broker.toml
 未知键、重复键、格式错误或类型错误都会在监听端口打开之前使启动失败。
 命令行参数优先于 TOML 中的值。
 
+## 启用 MQTT 5
+
+在启动命令中加入 --mqtt5-enabled true，或在 TOML 的 [protocol] 段设置
+mqtt5_enabled = true。原有 MQTT 3.1.1 客户端仍可使用同一个监听器；
+共享订阅暂不支持。
+
+~~~bash
+scripts/moon-docker.sh run --target native src/cmd/broker -- \
+  --listen 0.0.0.0:1883 --mqtt5-enabled true
+scripts/verify-mqtt5-docker.sh
+~~~
+
+已有持久化数据的部署应先阅读 [MQTT 5 支持说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.zh_CN.md)。
+
 ## 启用重启持久化
 
 传入一个私有数据目录：
@@ -115,7 +129,7 @@ scripts/verify-release-docker.sh
 
 ## 运行边界
 
-当前源码为单机 Linux x86_64 Native 实现，不支持 MQTT 5、
+当前源码为单机 Linux x86_64 Native 实现；MQTT 5 可选开启，不支持共享订阅、
 集群、Bridge、插件、外部数据库、WAL 或零丢失持久化。部署前请查看
 [兼容性矩阵](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.zh_CN.md)。
 

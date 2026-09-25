@@ -423,6 +423,7 @@ pub fn ClientSession::logically_expired(
 pub fn ClientSession::attach(
   self : ClientSession,
   limits : SessionLimits,
+  pubrel_first? : Bool = false,
 ) -> Result[Array[SessionDelivery], SessionError] {
   if self.attached {
     return Err(SessionAlreadyAttached)
@@ -433,11 +434,24 @@ pub fn ClientSession::attach(
   self.bump_policy_revision()
   let deliveries : Array[SessionDelivery] = []
   for item in self.inflight {
-    deliveries.push({
-      packet_id: item.packet_id,
-      message: item.message.map(message => message.copy()),
-      dup: item.phase != AwaitPubcomp,
-    })
+    if !pubrel_first || item.phase == AwaitPubcomp {
+      deliveries.push({
+        packet_id: item.packet_id,
+        message: item.message.map(message => message.copy()),
+        dup: item.phase != AwaitPubcomp,
+      })
+    }
+  }
+  if pubrel_first {
+    for item in self.inflight {
+      if item.phase != AwaitPubcomp {
+        deliveries.push({
+          packet_id: item.packet_id,
+          message: item.message.map(message => message.copy()),
+          dup: true,
+        })
+      }
+    }
   }
   match self.promote_pending(limits) {
     Ok(promoted) => deliveries.append(promoted)

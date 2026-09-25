@@ -67,7 +67,10 @@ pub fn BrokerState::prepare_activation(
     let session = old.unwrap().copy()
     session.detach()
     let deliveries = session
-      .attach(self.session_limits(max_inflight=0))
+      .attach(
+        self.session_limits(max_inflight=0),
+        pubrel_first=v5_retention is Some(_),
+      )
       .unwrap()
     (
       if v5_retention is Some(retention) {

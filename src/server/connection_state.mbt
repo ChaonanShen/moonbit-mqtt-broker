@@ -28,6 +28,7 @@ pub(all) enum CloseReason {
   PolicyRevoked
   SlowConsumer
   EncodeFailure
+  PacketTooLarge
   ResourceExhausted
   RateLimited
   ServerShutdown

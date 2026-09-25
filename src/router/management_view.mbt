@@ -206,8 +206,14 @@ pub fn BrokerState::admin_delete_offline(
   if session.mode() != @session.Persistent || session.is_attached() {
     return Err(AdminSessionActive)
   }
+  let incarnation = self.session_incarnation(identity.client_id)
   match self.apply(RemoveSession(identity.client_id)) {
-    Ok(actions) => Ok(actions)
+    Ok(actions) => {
+      if incarnation is Some(value) {
+        ignore(self.cancel_wills_for_incarnation(identity.client_id, value))
+      }
+      Ok(actions)
+    }
     Err(_) => Err(AdminInvariantViolation)
   }
 }
@@ -244,6 +250,7 @@ pub fn BrokerState::prepare_durable_admin_delete(
       identity.client_id,
       session_generation,
       Delete,
+      cancel_wills=true,
     ) {
     Ok(value) => value
     Err(_) => return Err(AdminInvariantViolation)

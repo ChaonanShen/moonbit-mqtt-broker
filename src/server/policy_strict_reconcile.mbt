@@ -55,8 +55,12 @@ pub fn RouterDriver::apply_policy_issue_strict(
         None => {
           // Clean Sessions have no durable identity or replay obligations.
           if broker.session_mode(client_id) == Some(@session.Clean) {
+            let incarnation = broker.session_incarnation(client_id)
             match broker.apply(@router.RemoveSession(client_id)) {
               Ok(_) => {
+                if incarnation is Some(value) {
+                  ignore(broker.cancel_wills_for_incarnation(client_id, value))
+                }
                 ignore(reconciler.complete_issue(issue))
                 return PolicyIssueSubmitted
               }
@@ -67,7 +71,12 @@ pub fn RouterDriver::apply_policy_issue_strict(
         }
       }
       let plan = match
-        broker.prepare_durable_lifecycle(client_id, generation, @router.Delete) {
+        broker.prepare_durable_lifecycle(
+          client_id,
+          generation,
+          @router.Delete,
+          cancel_wills=true,
+        ) {
         Ok(value) => value
         Err(_) => return PolicyIssueFailed
       }

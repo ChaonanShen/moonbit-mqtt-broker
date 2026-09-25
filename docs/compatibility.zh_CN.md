@@ -39,9 +39,9 @@
 | 文本/JSON 结构化日志 | 支持 | error/warn/info/debug，字段稳定并隐藏 secret/payload |
 | TOML 配置 | 支持 | CLI > TOML > 默认值；未知/重复键致命；支持检查/打印模式 |
 | QoS 2 | 支持 | Method B 入站去重、有界状态、按阶段重连和 V3 恢复 |
-| MQTT 5 | 不支持 | 不在范围内 |
+| MQTT 5 | 可选开启 | 双版本监听器、会话与消息过期、属性、订阅选项、别名、流控和 Will Delay；见 [MQTT 5](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.zh_CN.md) |
 | WebSocket / WSS | 可选支持 | MQTT 二进制帧、mqtt 子协议、Origin 允许列表与有界 Upgrade |
-| 共享订阅 / Bridge / 插件 / 集群 | 不支持 | 仅单机 Broker |
+| 共享订阅 / Bridge / 插件 / 集群 | 不支持 | MQTT 5 宣告共享不可用，共享订阅返回 SUBACK 9E |
 | 在线配置热更新 | 可选支持 | 已核验 bundle；SIGHUP 或 config_admin；密码、ACL、TLS/WSS 和受支持的运行时字段；默认关闭 |
 | 严格本地 WAL | 显式可选支持 | 约定持久状态提交后 ACK；不确定写入时 fenced，不提供复制 |
 | 外部数据库 / 集群 / 端到端零丢失 | 不支持 | 仅单机存储与 MQTT 交换边界 |
@@ -59,7 +59,8 @@ packet 会在产生无界缓冲前关闭连接。
 Broker 不会在保持连接期间周期性重传。Persistent Session 恢复时会重传未确认的
 出站 QoS 1。启用持久化后，retained、持久订阅、inflight/pending QoS 1/2 和入站 QoS 2 ID、原始
 Packet ID 和下一个 Packet ID 可跨 Broker 重启。Clean Session、离线 QoS 0、
-连接、Keep Alive timer 和尚未触发的 Will 不会持久化。
+连接、Keep Alive timer 和临时会话中尚未触发的 Will 不会持久化；
+持久 MQTT 5 会话的 armed/pending Will 遵循 V5 快照或 WAL 边界。
 
 快照模式在崩溃时可能丢失 debounce 窗口内的变更，恢复到最近提交快照。
 strict 模式在放行对应持久状态 ACK 前提交 WAL，且未收到 ACK 的完整提交也

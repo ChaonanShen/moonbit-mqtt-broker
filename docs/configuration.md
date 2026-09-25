@@ -31,6 +31,19 @@ max_inbound_qos2_total = 4096
 persistent_session_expiry = "30d"
 max_session_expirations_per_tick = 128
 
+[protocol]
+mqtt5_enabled = false
+server_receive_maximum = 16
+server_keep_alive = -1
+topic_alias_maximum = 32
+max_property_bytes = 16384
+max_user_properties = 64
+max_subscription_entries = 256
+max_alias_bytes_per_connection = 65536
+max_delayed_wills = 1024
+max_expiry_work_per_turn = 128
+write_timeout_ms = 10000
+
 [persistence]
 mode = "snapshot"
 data_dir = "/var/lib/moonbit-mqtt-broker"
@@ -379,3 +392,12 @@ subscription and 128 per maximum retained entry. The default capacities
 `max_index_bytes` fails startup; it does not silently reduce MQTT limits.
 See [management API](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.md) for the runtime completion and pagination
 contracts.
+
+## MQTT 5 protocol settings
+
+The [protocol] section is restart-only. MQTT 5 stays disabled until
+mqtt5_enabled is true. The same listeners continue to accept MQTT 3.1.1.
+The server_receive_maximum value must fit the configured per-Session inbound
+QoS 2 limit, and max_delayed_wills must fit Session plus connection capacity.
+Maximum Packet Size uses the existing server max_packet_size setting.
+See [MQTT 5 support](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.md) for capability and migration details.

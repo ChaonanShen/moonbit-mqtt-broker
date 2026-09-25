@@ -174,3 +174,78 @@ test "C-T31 V5 durable activation reserves incarnation before WAL" {
   assert_eq(accumulator.snapshot().sessions.length(), 1)
   plan.cancel()
 }
+
+///|
+test "C-T18 V5 reconnect promotes only peer receive window" {
+  let state = BrokerState::new(
+    BrokerConfig::new(
+      8,
+      16,
+      8,
+      max_inflight_per_session=4,
+      max_inflight_total=8,
+    ).unwrap(),
+  )
+  state.enable_v5_storage()
+  let client = @session.ClientId::new("window-resume").unwrap()
+  ignore(
+    state
+    .apply(
+      CreateSessionWith({
+        client_id: client,
+        mode: @session.Persistent,
+        attached: false,
+      }),
+    )
+    .unwrap(),
+  )
+  ignore(
+    state
+    .apply(
+      Subscribe({
+        client_id: client,
+        entries: [
+          {
+            filter: @topic.TopicFilter::new("window/#").unwrap(),
+            qos: @session.QoS1,
+          },
+        ],
+      }),
+    )
+    .unwrap(),
+  )
+  for value in ["one", "two"] {
+    ignore(
+      state
+      .apply(
+        Publish({
+          origin: Internal,
+          topic: @topic.TopicName::new("window/a").unwrap(),
+          payload: @utf8.encode(value),
+          qos: @session.QoS1,
+          retain: false,
+        }),
+      )
+      .unwrap(),
+    )
+  }
+  assert_eq(state.pending_qos1_count(), 2)
+  let plan = state
+    .prepare_durable_activation(
+      client,
+      @session.Persistent,
+      @security.Anonymous,
+      5L,
+      5L,
+      v5_resume=true,
+      v5_retention=@session.InfiniteV5,
+      now_mono_ms=@budget.monotonic_ms(),
+      v5_peer_receive_maximum=1,
+    )
+    .unwrap()
+  let saved = plan.delta_v5(@budget.monotonic_ms(), 1000L).unwrap().session_puts[0].session
+  assert_eq(saved.inflight.length(), 1)
+  assert_eq(saved.pending.length(), 1)
+  plan.cancel()
+  assert_eq(state.pending_qos1_count(), 2)
+}

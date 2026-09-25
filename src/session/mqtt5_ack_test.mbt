@@ -45,3 +45,22 @@ test "C-T14 MQTT5 successful PUBREC holds exchange until PUBCOMP" {
   assert_eq(session.inflight_count(), 0)
   assert_eq(session.check_invariants(limits), Ok(()))
 }
+
+///|
+test "C-T18 MQTT5 replay emits old PUBREL before old PUBLISH" {
+  let session = ClientSession::new_with_retention(
+    ClientId::new("v5-replay-order").unwrap(),
+    InfiniteV5,
+  )
+  let limits = SessionLimits::new(2, 2).unwrap()
+  let publish = q2_stage(session, q2_message("publish", qos=QoS1), limits)
+  let rel = q2_stage(session, q2_message("rel"), limits)
+  assert_eq(session.pubrec(rel.packet_id), Ok(true))
+  session.detach()
+  let replay = session.attach(limits, pubrel_first=true).unwrap()
+  assert_eq(replay.length(), 2)
+  assert_eq(replay[0].packet_id, rel.packet_id)
+  assert_eq(replay[0].message, None)
+  assert_eq(replay[1].packet_id, publish.packet_id)
+  assert_true(replay[1].dup)
+}

@@ -4,9 +4,9 @@
 
 [![CI](https://github.com/ChaonanShen/moonbit-mqtt-broker/actions/workflows/ci.yml/badge.svg)](https://github.com/ChaonanShen/moonbit-mqtt-broker/actions/workflows/ci.yml)
 
-A lightweight, single-node MQTT 3.1.1 broker implemented in MoonBit.
+A lightweight, single-node MQTT 3.1.1 broker with opt-in MQTT 5 support, implemented in MoonBit.
 
-Version `0.3.0` targets Linux x86_64 Native for small deployments,
+The current source targets Linux x86_64 Native for small deployments,
 local development, interoperability testing, and MoonBit MQTT applications. It
 supports TCP, TLS, WS or WSS clients, QoS 0/1/2, wildcard subscriptions, retained
 messages, Wills, Keep Alive, persistent Sessions, optional restart persistence,
@@ -50,7 +50,7 @@ security example, read the [getting-started guide](https://github.com/ChaonanShe
 
 | Area | Current source |
 | --- | --- |
-| Protocol | MQTT 3.1.1 over TCP, TLS, WS or WSS |
+| Protocol | MQTT 3.1.1 and opt-in MQTT 5 over TCP, TLS, WS or WSS |
 | Delivery | QoS 0/1/2 publish/subscribe; phase-aware PUBLISH/PUBREL replay |
 | Topics | `+` and `#` filters, deterministic overlap merge, retained messages |
 | Sessions | Clean and persistent Sessions, Client ID takeover, bounded offline QoS 1/2 |
@@ -59,8 +59,9 @@ security example, read the [getting-started guide](https://github.com/ChaonanShe
 | Security | Optional Argon2id passwords, allow-only ACLs, Principal-owned Sessions |
 | Operations | TOML configuration, optional SIGHUP/config-admin reload, byte budgets and connection/auth/publish rate limits, `$SYS/broker/#` metrics, text/JSON logs |
 
-MQTT 5, shared subscriptions, bridges, plugins, clustering and external
-databases remain out of scope. `--data-dir` defaults to latest-committed
+MQTT 5 is opt-in and shares listeners and Client IDs with MQTT 3.1.1.
+Shared subscriptions, bridges, plugins, clustering and external databases
+remain out of scope. See the [MQTT 5 support guide](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.md). `--data-dir` defaults to latest-committed
 snapshot recovery; explicit `--persistence-mode strict` adds local WAL commit
 barriers for the documented persistent state. It is not replication or an
 end-to-end delivery guarantee. See the [compatibility matrix](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.md)
@@ -154,6 +155,7 @@ scripts/moon-docker.sh fmt --check
 scripts/moon-docker.sh check --target native --deny-warn
 scripts/moon-docker.sh test --target native --deny-warn
 scripts/moon-docker.sh build --target native
+scripts/verify-mqtt5-docker.sh
 scripts/verify-release-docker.sh
 ```
 

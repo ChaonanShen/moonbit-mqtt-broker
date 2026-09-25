@@ -601,10 +601,26 @@ fn RouterDriver::dispatch(
             ignore(sink.tx_window.terminal(value))
           }
           if send.packet is @protocol.PacketV5::Connack5(connack) {
-            sink.resolve_handshake(result is Ok(_) && connack.reason == 0)
+            sink.resolve_handshake(result == Ok(true) && connack.reason == 0)
           }
           if result is Err(reason) {
-            worklist.append(self.transport_failed(send.connection_id, reason))
+            if reason == PacketTooLarge &&
+              send.packet is @protocol.Publish5(_) &&
+              self.runtime.v5_active.get(send.connection_id)
+              is Some({ peer_max_packet_bytes: maximum, .. }) &&
+              maximum >= 4 {
+              worklist.push(
+                SendMqtt5({
+                  expiry_deadline: None,
+                  rx_permit: None,
+                  connection_id: send.connection_id,
+                  packet: @protocol.Disconnect5({ reason: 0x95, properties: [] }),
+                  close_reason: Some(PacketTooLarge),
+                }),
+              )
+            } else {
+              worklist.append(self.transport_failed(send.connection_id, reason))
+            }
           }
         }
       ReleaseV5Credit(release) =>
@@ -944,6 +960,40 @@ fn RouterDriver::handle_runtime_event(
 }
 
 ///|
+fn RouterDriver::skip_oversized_fresh_publish(
+  self : RouterDriver,
+  connection_id : ConnectionId,
+  packet : @protocol.PacketV5,
+  authorization : OutboundAuthorization?,
+) -> Bool {
+  let publish = match packet {
+    @protocol.Publish5(value) if !value.dup => value
+    _ => return false
+  }
+  if publish.qos == @protocol.QoS0 {
+    self.runtime.metrics.record_dropped()
+    return true
+  }
+  let owner = match authorization {
+    Some(value) => value
+    None => return false
+  }
+  let event : WriteNotStartedEvent = {
+    connection_id,
+    client_id: owner.client_id,
+    session_incarnation: owner.session_incarnation,
+    packet_id: publish.packet_id.unwrap(),
+    qos: publish.qos,
+  }
+  if self.strict is Some(_) {
+    self.handle_strict_runtime_event(WriteNotStarted(event), None)
+  } else {
+    self.dispatch(self.runtime.apply(WriteNotStarted(event)))
+  }
+  true
+}
+
+///|
 fn RouterDriver::encode_v5_and_queue(
   self : RouterDriver,
   sink : TransportSink,
@@ -952,7 +1002,7 @@ fn RouterDriver::encode_v5_and_queue(
   connection_id : ConnectionId,
   rx_permit? : RxPermit,
   expiry_deadline? : @session.Deadline,
-) -> Result[Unit, CloseReason] {
+) -> Result[Bool, CloseReason] {
   let rx_permit = match (packet, rx_permit) {
     (Pubcomp5(ack), None) => sink.rx_ledger.permit(ack.packet_id.value())
     _ => rx_permit
@@ -1018,25 +1068,32 @@ fn RouterDriver::encode_v5_and_queue(
       AliasNone => ()
     }
   }
-  let frame = match
-    @protocol.encode_v5(
-      outgoing,
-      @protocol.PacketDirection::ServerToClient,
-      peer_limit,
-    ) {
+  let first = @protocol.encode_v5(
+    outgoing,
+    @protocol.ServerToClient,
+    peer_limit,
+  )
+  let encoded = match first {
+    Err(_) if alias_proposal is AliasDefine(_, _) => {
+      sink.outbound_alias_cancel(alias_proposal)
+      alias_proposal = AliasNone
+      outgoing = packet
+      @protocol.encode_v5(packet, @protocol.ServerToClient, peer_limit)
+    }
+    value => value
+  }
+  let frame = match encoded {
     Ok(value) => value
+    Err(@protocol.WireLimitExceeded(_)) => {
+      sink.outbound_alias_cancel(alias_proposal)
+      if self.skip_oversized_fresh_publish(connection_id, packet, authorization) {
+        return Ok(false)
+      }
+      return Err(PacketTooLarge)
+    }
     Err(_) => {
       sink.outbound_alias_cancel(alias_proposal)
-      if alias_proposal is AliasDefine(_, _) {
-        alias_proposal = AliasNone
-        match
-          @protocol.encode_v5(packet, @protocol.ServerToClient, peer_limit) {
-          Ok(value) => value
-          Err(_) => return Err(EncodeFailure)
-        }
-      } else {
-        return Err(EncodeFailure)
-      }
+      return Err(EncodeFailure)
     }
   }
   let logical_cost = if expiry_deadline is Some(_) {
@@ -1087,7 +1144,7 @@ fn RouterDriver::encode_v5_and_queue(
       expiry_deadline?,
       priority=!(packet is Publish5(_)),
     ) {
-    Ok(())
+    Ok(true)
   } else {
     sink.outbound_alias_cancel(alias_proposal)
     Err(SlowConsumer)

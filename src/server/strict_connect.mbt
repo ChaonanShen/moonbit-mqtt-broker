@@ -156,6 +156,7 @@ pub fn BrokerRuntime::prepare_strict_accepted_connect(
         v5_resume=plan.resume_decision == @session.ResumeExisting,
         v5_retention=plan.retention,
         now_mono_ms=@budget.monotonic_ms(),
+        v5_peer_receive_maximum=plan.peer_receive_maximum,
       )
     None =>
       self.broker_state.prepare_durable_activation(

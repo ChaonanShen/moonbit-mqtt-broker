@@ -70,6 +70,7 @@ pub fn BrokerState::prepare_durable_activation(
   v5_resume? : Bool = false,
   v5_retention? : @session.Retention,
   now_mono_ms? : Int64 = 0L,
+  v5_peer_receive_maximum? : Int = 65535,
 ) -> Result[DurableActivationPlan, RouterError] {
   let old = self.sessions.get(id)
   if old is None && self.sessions.length() >= self.config.max_sessions() {
@@ -162,8 +163,17 @@ pub fn BrokerState::prepare_durable_activation(
     } else {
       self.config.max_inflight_per_session()
     }
+    let replay_inflight_limit = if v5_retention is Some(_) &&
+      v5_peer_receive_maximum < max_inflight {
+      v5_peer_receive_maximum
+    } else {
+      max_inflight
+    }
     let deliveries = match
-      candidate.attach(self.session_limits(max_inflight~)) {
+      candidate.attach(
+        self.session_limits(max_inflight=replay_inflight_limit),
+        pubrel_first=v5_retention is Some(_),
+      ) {
       Ok(value) => value
       Err(error) => {
         scratch.release().unwrap()

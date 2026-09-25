@@ -204,3 +204,19 @@ listener has independent connection, request and command token buckets and
 fixed queue/slot caps; slow readers hold their request slot through the
 actual write. It is loopback HTTP without its own TLS. Restrict local access
 and use a secure channel if forwarding it.
+
+## MQTT 5 observations
+
+Connection detail rows include protocol (3.1.1 or 5), peer Receive Maximum,
+peer Maximum Packet Size, peer Topic Alias Maximum, available transmit
+permits and occupied receive permits. Session rows include last_protocol,
+retention, finite expiry seconds and remaining milliseconds, plus Will count.
+Subscription rows include no_local, retain_as_published, retain_handling and
+subscription_identifier. Int64 values remain decimal JSON strings; UInt32
+Session Expiry is a JSON number.
+
+Status adds aggregate connections_v311, connections_v5, will_armed,
+will_pending, rx_window_used, tx_window_used and alias_entries. Prometheus
+adds the fixed connections_by_version gauge with version labels 311 and 5,
+plus aggregate Will, window and alias gauges. Client IDs, topics, message
+properties, payloads and credentials never become Prometheus labels.

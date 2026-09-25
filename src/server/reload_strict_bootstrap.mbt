@@ -107,17 +107,41 @@ pub async fn bootstrap_strict_policy(
                   )
               }
               let plan = match
-                broker.prepare_durable_lifecycle(id, generation, @router.Delete) {
+                broker.prepare_durable_lifecycle(
+                  id,
+                  generation,
+                  @router.Delete,
+                  cancel_wills=true,
+                ) {
                 Ok(value) => value
                 Err(_) =>
                   raise ResourceStartupFailure("policy eviction prepare failed")
               }
               errdefer plan.cancel()
-              let encoded = match
-                @persistence.encode_durable_delta(plan.delta()) {
-                Ok(value) => value
-                Err(_) =>
-                  raise ResourceStartupFailure("policy eviction encode failed")
+              let encoded = if store.uses_v5_schema() {
+                let delta = match
+                  plan.delta_v5(@budget.monotonic_ms(), @async.now()) {
+                  Ok(value) => value
+                  Err(_) =>
+                    raise ResourceStartupFailure(
+                      "policy eviction V5 delta failed",
+                    )
+                }
+                match @persistence.encode_durable_delta_v5(delta) {
+                  Ok(value) => value
+                  Err(_) =>
+                    raise ResourceStartupFailure(
+                      "policy eviction encode failed",
+                    )
+                }
+              } else {
+                match @persistence.encode_durable_delta(plan.delta()) {
+                  Ok(value) => value
+                  Err(_) =>
+                    raise ResourceStartupFailure(
+                      "policy eviction encode failed",
+                    )
+                }
               }
               append_policy_payload(store, encoded)
               broker.begin_action_scope()
@@ -208,9 +232,20 @@ async fn bootstrap_local_policy_change(
     Err(_) => raise ResourceStartupFailure("policy cleanup prepare failed")
   }
   errdefer plan.cancel()
-  let encoded = match @persistence.encode_wal_reconcile(plan.delta()) {
-    Ok(value) => value
-    Err(_) => raise ResourceStartupFailure("policy cleanup encode failed")
+  let encoded = if store.uses_v5_schema() {
+    let delta = match plan.delta_v5(@budget.monotonic_ms(), @async.now()) {
+      Ok(value) => value
+      Err(_) => raise ResourceStartupFailure("policy cleanup V5 delta failed")
+    }
+    match @persistence.encode_durable_delta_v5(delta) {
+      Ok(value) => value
+      Err(_) => raise ResourceStartupFailure("policy cleanup encode failed")
+    }
+  } else {
+    match @persistence.encode_wal_reconcile(plan.delta()) {
+      Ok(value) => value
+      Err(_) => raise ResourceStartupFailure("policy cleanup encode failed")
+    }
   }
   append_policy_payload(store, encoded)
   broker.begin_action_scope()

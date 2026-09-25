@@ -35,7 +35,7 @@ policy 记录，在绑定监听器前完成未结束的清理。当前 bundle �
 
 规范化后的数据目录权限为 `0700`，其中只使用以下固定文件名：
 
-- `broker.snapshot`：已提交的 Disk V3（兼容读取旧版 V1/V2），权限 `0600`；
+- `broker.snapshot`：已提交的 Disk V3 或 V5（兼容读取旧版 V1/V2），权限 `0600`；
 - `broker.snapshot.tmp`：当前尚未提交的写入，权限 `0600`；
 - `broker.snapshot.lock`：进程排他锁，权限 `0600`。
 
@@ -74,7 +74,8 @@ Will，并在进程退出前强制写入和排空最新内存 revision。进程�
 
 ## strict WAL 模式
 
-strict 复用 `broker.snapshot.lock` 排他锁及 Disk V3 业务状态，另有版本化
+strict 复用 `broker.snapshot.lock` 排他锁；MQTT 3.1.1 目录使用旧 Disk V3，
+启用 MQTT 5 后迁移到 schema 6 业务状态，另有版本化
 checkpoint、`broker.manifest` 和编号 `wal-<id>.log` 段。唯一写者顺序追加完整
 事务帧与批次提交帧，完整 `fsync` 成功后，driver 才安装受影响键的变更并放行
 网络动作。写集互不冲突的事务可以共享一次同步；批次上限为 64 个事务、8 MiB，
@@ -164,3 +165,21 @@ epoch，V2 保留 owner 与 epoch。下一次状态变化或停机提交写 V3�
 导出、排队、编码和实际写入共用 snapshot-work 预算；覆盖旧请求会归还其预算，正在写的请求持票至真实保存完成。恢复会在构造记录/复制 payload 前检查类别、会话和全局字节上限，且不改变 V1/V2/V3 格式。预算不足时保留 dirty 状态并产生受限诊断，最终未提交的快照导致关闭失败；不裁剪既有快照或静默空状态启动。文件类型在大小读取前检查，FIFO、目录和符号链接不作为快照读取。详见[资源契约与诊断指标](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md)。
 
 严格模式的 WAL 写入或同步结果不确定时会隔离业务准入；只读管理诊断仍可用。快照模式的失败重试策略不适用于严格模式。
+
+## MQTT 5 存储迁移
+
+首次启用 MQTT 5 时，Broker 将旧快照或 strict WAL 权威状态迁移到 V5 快照
+封套与 schema 6 WAL。转换保留 Principal 归属、Session/Packet ID、订阅、
+保留消息和离线 QoS 1/2 状态；新记录增加消息属性、稳定投递身份、会话及
+消息到期时钟、订阅选项和持久的 armed/pending Will。strict 模式以带 revision
+校验的 V5 delta 提交业务变更与策略清理。
+
+迁移只发布一种新权威格式。旧程序会拒绝新的封套或 manifest，不会忽略 V5
+字段继续运行。启用前须备份数据目录及对应安全配置；回滚时应还原备份并使用
+旧程序，不能让旧程序直接打开升级后的目录。上文的快照窗口和 WAL fencing
+边界在迁移后继续有效。
+
+临时 MQTT 5 会话的 armed Will 不跨进程崩溃保存。持久会话的 armed/pending
+Will 则按所选模式保存；strict 恢复先持久记录 armed 到 pending 的转换，
+再发布消息。pending Will 在多次重启后沿用原到期时刻；Will 发布与删除
+属于同一个 WAL 事务。

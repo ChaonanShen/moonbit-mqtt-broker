@@ -31,6 +31,19 @@ max_inbound_qos2_total = 4096
 persistent_session_expiry = "30d"
 max_session_expirations_per_tick = 128
 
+[protocol]
+mqtt5_enabled = false
+server_receive_maximum = 16
+server_keep_alive = -1
+topic_alias_maximum = 32
+max_property_bytes = 16384
+max_user_properties = 64
+max_subscription_entries = 256
+max_alias_bytes_per_connection = 65536
+max_delayed_wills = 1024
+max_expiry_work_per_turn = 128
+write_timeout_ms = 10000
+
 [persistence]
 mode = "snapshot"
 data_dir = "/var/lib/moonbit-mqtt-broker"
@@ -362,3 +375,11 @@ Operation、命令和审计容量。逻辑索引费用为每最大 Session 256 �
 容量（1024、128、16384、1024）需要 3,563,520 字节。
 `max_index_bytes` 不足会使启动失败，不会暗中降低 MQTT 限额。
 运行时完成与分页语义见[管理 API](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.zh_CN.md)。
+
+## MQTT 5 协议参数
+
+[protocol] 参数仅在重启后生效。mqtt5_enabled 未设为 true 时仍只接收
+MQTT 3.1.1；开启后相同监听器可同时接收两个版本。server_receive_maximum
+不得超过每会话入站 QoS 2 上限；max_delayed_wills 不得超过会话与连接容量
+之和。服务端 Maximum Packet Size 复用既有 max_packet_size。
+详见 [MQTT 5 支持说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.zh_CN.md)。
