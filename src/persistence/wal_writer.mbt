@@ -271,3 +271,8 @@ pub async fn WalWriter::run(self : WalWriter, wake : () -> Unit) -> Unit {
   }
   self.stopped = true
 }
+
+///|
+pub fn WalWriter::uses_v5_schema(self : WalWriter) -> Bool {
+  self.store.manifest_v5 is Some(_)
+}

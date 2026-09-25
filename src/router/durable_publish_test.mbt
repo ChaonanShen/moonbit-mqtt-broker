@@ -250,3 +250,33 @@ test "current ACL excludes revoked destination before durable fanout" {
   assert_eq(state.session_inflight_count(denied), Some(0))
   assert_eq(state.check_invariants(), Ok(()))
 }
+
+///|
+test "C-T30 strict publish V5 delta carries metadata and stable delivery IDs" {
+  let (state, first, _, generations) = durable_publish_fixture()
+  let metadata : @session.MessageMetadata = {
+    ..@session.MessageMetadata::empty(),
+    content_type: Some("text/plain"),
+    user_properties: [("k", "v")],
+    publisher_client_id: Some(first),
+  }
+  let input : PublishInput = {
+    origin: Client(first),
+    topic: @topic.TopicName::new("data/v5").unwrap(),
+    payload: b"value",
+    qos: @session.QoS1,
+    retain: true,
+  }
+  let plan = state
+    .prepare_durable_publish(input, generations, metadata~)
+    .unwrap()
+  let delta = plan.delta_v5(1000L, 2000L).unwrap()
+  assert_eq(delta.session_puts.length(), 2)
+  assert_eq(delta.retained_puts.length(), 1)
+  assert_eq(
+    delta.retained_puts[0].retained.message.properties.content_type,
+    Some("text/plain"),
+  )
+  assert_true(delta.session_puts[0].session.inflight[0].delivery_id > 0L)
+  plan.cancel()
+}

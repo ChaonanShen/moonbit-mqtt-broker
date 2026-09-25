@@ -836,9 +836,12 @@ pub fn ClientSession::restore_v5(
   inbound_qos2 : Array[SessionPacketId],
   retention : Retention,
   last_protocol : Int,
+  state_revision : Int64,
   expiry_deadline : Deadline?,
 ) -> Result[ClientSession, SessionError] {
-  if retention == DropOnClose || (last_protocol != 4 && last_protocol != 5) {
+  if retention == DropOnClose ||
+    state_revision < 1L ||
+    (last_protocol != 4 && last_protocol != 5) {
     return Err(
       SessionInvariantViolation("invalid durable V5 session retention"),
     )
@@ -859,5 +862,59 @@ pub fn ClientSession::restore_v5(
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  Ok({ ..restored, retention, last_protocol, expiry_deadline })
+  Ok({
+    ..restored,
+    retention,
+    last_protocol,
+    expiry_deadline,
+    policy_revision: state_revision,
+  })
+}
+
+///|
+pub fn ClientSession::materialize_delivery_ids(
+  self : ClientSession,
+  first_id : Int64,
+) -> Result[Int64, SessionError] {
+  if first_id < 1L {
+    return Err(SessionInvariantViolation("invalid delivery floor"))
+  }
+  let mut next = first_id
+  for index in 0..<self.inflight.length() {
+    let item = self.inflight[index]
+    if item.delivery_id == 0L {
+      if next == 9223372036854775807L {
+        return Err(SessionInvariantViolation("delivery identity exhausted"))
+      }
+      let message = item.message.map(value => { ..value, delivery_id: next })
+      self.inflight[index] = { ..item, delivery_id: next, message }
+      next += 1L
+    } else if item.delivery_id >= next {
+      if item.delivery_id == 9223372036854775807L {
+        return Err(SessionInvariantViolation("delivery identity exhausted"))
+      }
+      next = item.delivery_id + 1L
+    }
+  }
+  for index in 0..<self.pending.length() {
+    let item = self.pending[index]
+    if item.delivery_id == 0L {
+      if next == 9223372036854775807L {
+        return Err(SessionInvariantViolation("delivery identity exhausted"))
+      }
+      self.pending[index] = { ..item, delivery_id: next }
+      next += 1L
+    } else if item.delivery_id >= next {
+      if item.delivery_id == 9223372036854775807L {
+        return Err(SessionInvariantViolation("delivery identity exhausted"))
+      }
+      next = item.delivery_id + 1L
+    }
+  }
+  Ok(next)
+}
+
+///|
+pub fn ClientSession::subscription_changed(self : ClientSession) -> Unit {
+  self.bump_policy_revision()
 }

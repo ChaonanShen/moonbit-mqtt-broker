@@ -400,3 +400,103 @@ pub async fn WalStore::migrate_to_v5(
     }
   }
 }
+
+///|
+async fn WalStore::require_policy_capability_v5(
+  self : WalStore,
+) -> Result[Unit, PersistenceError] {
+  let current = match self.manifest_v5 {
+    Some(value) => value
+    None => return Err(InvalidConfiguration("not a V5 WAL store"))
+  }
+  if (current.required_features & feature_policy_gate) != 0U {
+    return Ok(())
+  }
+  if self.closed || self.fenced || current.generation == 9223372036854775807L {
+    return Err(InvalidConfiguration("V5 policy capability unavailable"))
+  }
+  let dir = self.snapshot_store.data_dir()
+  let temp = dir + "/" + wal_manifest_temp_name
+  let path = dir + "/" + wal_manifest_name
+  let mut renamed = false
+  let mut synced = false
+  try {
+    if wal_exists(temp) {
+      raise InvalidConfiguration("orphan V5 policy manifest")
+    }
+    let next : WalManifestV5 = {
+      ..current,
+      generation: current.generation + 1L,
+      required_features: current.required_features | feature_policy_gate,
+    }
+    let encoded = match encode_wal_manifest_v5(next) {
+      Ok(value) => value
+      Err(error) => raise error
+    }
+    if self.disk_dirty {
+      self.disk_bytes = wal_disk_usage(dir)
+      self.disk_dirty = false
+    }
+    if self.disk_bytes >
+      self.disk_max_bytes -
+      self.disk_reserve_bytes -
+      encoded.length().to_int64() {
+      raise LimitExceeded(
+        resource="wal-disk-bytes",
+        actual=self.disk_bytes + encoded.length().to_int64(),
+        limit=self.disk_max_bytes - self.disk_reserve_bytes,
+      )
+    }
+    wal_write_synced_new(temp, encoded)
+    @fs.rename(temp, path, replace=true) catch {
+      _ => raise FileSystem(operation="v5-policy-manifest-rename", path~)
+    }
+    renamed = true
+    sync_directory(dir)
+    synced = true
+    self.manifest_v5 = Some(next)
+    self.manifest = {
+      ..self.manifest,
+      generation: next.generation,
+      policy_required: true,
+    }
+    self.disk_bytes = wal_disk_usage(dir)
+    Ok(())
+  } catch {
+    error => {
+      if !renamed {
+        best_effort_remove(temp)
+      }
+      if renamed && !synced {
+        self.fenced = true
+        Err(DurabilityUncertain(path))
+      } else {
+        Err(error)
+      }
+    }
+  }
+}
+
+///|
+pub async fn wal_manifest_format_version(
+  store : SnapshotStore,
+) -> Result[Int, PersistenceError] {
+  try {
+    let data = bounded_read_regular(
+      store.data_dir() + "/" + wal_manifest_name,
+      32768,
+    )
+    let reader = BinaryReader::new(data)
+    if reader.read_raw(8) != wal_manifest_magic {
+      raise InvalidMagic
+    }
+    Ok(reader.read_u16())
+  } catch {
+    error => Err(error)
+  }
+}
+
+///|
+pub fn WalStore::uses_v5_schema(self : WalStore) -> Bool {
+  self.manifest_v5 is Some(_)
+}

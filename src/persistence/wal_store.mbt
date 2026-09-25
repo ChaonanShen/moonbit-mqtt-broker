@@ -643,6 +643,9 @@ async fn WalStore::rotate(self : WalStore) -> Result[Unit, PersistenceError] {
 pub async fn WalStore::require_policy_capability(
   self : WalStore,
 ) -> Result[Unit, PersistenceError] {
+  if self.manifest_v5 is Some(_) {
+    return self.require_policy_capability_v5()
+  }
   if self.manifest.policy_required {
     return Ok(())
   }

@@ -10,6 +10,11 @@ pub struct DurableActivationPlan {
   persistent_changed : Bool
   reset : Bool
   session_present : Bool
+  proposed_incarnation : Int64?
+  cancel_wills : Array[Int64]
+  trigger_wills : Array[(Int64, @session.Retention)]
+  mut will_transition_mono_ms : Int64
+  mut will_transition_wall_ms : Int64
   desired_inflight : Int64
   desired_pending : Int64
   desired_inbound : Int64
@@ -22,6 +27,15 @@ pub struct DurableActivationPlan {
   replay : Array[BrokerAction]
   delta : DurableDelta
   mut finished : Bool
+}
+
+///|
+pub fn DurableActivationPlan::session_incarnation_after(
+  self : DurableActivationPlan,
+) -> Int64 {
+  self.proposed_incarnation.unwrap_or_else(() => {
+    self.broker.session_incarnation(self.client_id).unwrap()
+  })
 }
 
 ///|
@@ -46,15 +60,45 @@ pub fn BrokerState::prepare_durable_activation(
   owner : @security.Principal,
   old_generation : Int64,
   new_generation : Int64,
+  v5_resume? : Bool = false,
+  v5_retention? : @session.Retention,
+  now_mono_ms? : Int64 = 0L,
 ) -> Result[DurableActivationPlan, RouterError] {
   let old = self.sessions.get(id)
   if old is None && self.sessions.length() >= self.config.max_sessions() {
     return Err(SessionLimitReached(self.config.max_sessions()))
   }
-  let restoring = mode == @session.Persistent &&
+  let restoring = if v5_retention is Some(_) {
+    v5_resume && old is Some(value) && !value.logically_expired(now_mono_ms)
+  } else {
+    mode == @session.Persistent &&
     old is Some(value) &&
     value.mode() == @session.Persistent
+  }
   let old_persistent = old is Some(value) && value.mode() == @session.Persistent
+  let cancel_wills : Array[Int64] = []
+  let trigger_wills : Array[(Int64, @session.Retention)] = []
+  if old is Some(previous) && self.session_incarnation(id) is Some(incarnation) {
+    for will_id, record in self.wills {
+      if record.client_id == id && record.session_incarnation == incarnation {
+        if restoring {
+          cancel_wills.push(will_id)
+        } else if record.state == WillArmed {
+          trigger_wills.push((will_id, previous.retention()))
+        }
+      }
+    }
+  }
+  let proposed_incarnation = if restoring {
+    None
+  } else {
+    if self.next_session_incarnation == 9223372036854775807L {
+      return Err(InvariantViolation("session incarnation exhausted"))
+    }
+    let reserved = self.next_session_incarnation
+    self.next_session_incarnation += 1L
+    Some(reserved)
+  }
   if (old_persistent && old_generation < 1L) ||
     (mode == @session.Persistent && new_generation < 1L) ||
     (restoring && new_generation != old_generation) {
@@ -103,9 +147,28 @@ pub fn BrokerState::prepare_durable_activation(
         return Err(SessionFailure(error))
       }
     }
-    (candidate, deliveries)
+    (
+      if v5_retention is Some(retention) {
+        candidate.with_retention(retention)
+      } else {
+        candidate
+      },
+      deliveries,
+    )
   } else {
-    (@session.ClientSession::new(id, mode~, attached=true, owner~), [])
+    (
+      if v5_retention is Some(retention) {
+        @session.ClientSession::new_with_retention(
+          id,
+          retention,
+          attached=true,
+          owner~,
+        )
+      } else {
+        @session.ClientSession::new(id, mode~, attached=true, owner~)
+      },
+      [],
+    )
   }
   let desired : ResourceUsage = if restoring {
     {
@@ -209,6 +272,11 @@ pub fn BrokerState::prepare_durable_activation(
     persistent_changed: mode == @session.Persistent || old_persistent,
     reset: !restoring,
     session_present: restoring,
+    proposed_incarnation,
+    cancel_wills,
+    trigger_wills,
+    will_transition_mono_ms: 0L,
+    will_transition_wall_ms: 0L,
     desired_inflight: desired.inflight,
     desired_pending: desired.pending,
     desired_inbound: desired.inbound,
@@ -272,8 +340,8 @@ pub fn DurableActivationPlan::commit(
     ignore(self.broker.subscriptions.remove_all(self.client_id))
   }
   self.broker.track_policy_session(self.client_id)
-  if old is None || self.reset {
-    self.broker.assign_session_incarnation(self.client_id)
+  if self.proposed_incarnation is Some(value) {
+    self.broker.session_incarnations.set(self.client_id, value)
   }
   if old is Some(_) && self.reset {
     self.broker.replace_policy_session(self.client_id)
@@ -294,6 +362,22 @@ pub fn DurableActivationPlan::commit(
   if self.persistent_changed {
     self.broker.mark_snapshot_dirty()
   }
+  for will_id in self.cancel_wills {
+    if !self.broker.cancel_will(will_id) {
+      return Err(InvariantViolation("resumed Will cancellation failed"))
+    }
+  }
+  for entry in self.trigger_wills {
+    let (will_id, retention) = entry
+    if !self.broker.trigger_will(
+        will_id,
+        self.will_transition_mono_ms,
+        self.will_transition_wall_ms,
+        retention,
+      ) {
+      return Err(InvariantViolation("replaced Will transition failed"))
+    }
+  }
   self.finished = true
   self.broker.retain_action_lease(self.scratch)
   Ok(self.replay)
@@ -311,4 +395,112 @@ pub fn DurableActivationPlan::cancel(self : DurableActivationPlan) -> Unit {
     self.scratch.release().unwrap()
     self.finished = true
   }
+}
+
+///|
+pub fn DurableActivationPlan::delta_v5(
+  self : DurableActivationPlan,
+  now_mono_ms : Int64,
+  now_wall_ms : Int64,
+) -> Result[DurableDeltaV5, RouterError] {
+  let session_puts : Array[Mqtt5SessionPut] = []
+  let session_deletes : Array[Mqtt5SessionDelete] = []
+  let old = self.broker.sessions.get(self.client_id)
+  let old_persistent = old is Some(value) && value.mode() == @session.Persistent
+  if self.candidate.mode() == @session.Persistent {
+    let incarnation = self.proposed_incarnation.unwrap_or_else(() => {
+      self.broker.session_incarnation(self.client_id).unwrap()
+    })
+    let put = match
+      self.broker.session_put_v5(
+        self.client_id,
+        self.candidate,
+        now_mono_ms,
+        now_wall_ms,
+        proposed_incarnation=incarnation,
+      ) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    session_puts.push({
+      ..put,
+      expected_incarnation: if old_persistent {
+        self.broker.session_incarnation(self.client_id).unwrap()
+      } else {
+        0L
+      },
+      expected_revision: if old_persistent {
+        old.unwrap().policy_revision()
+      } else {
+        0L
+      },
+    })
+  } else if old_persistent {
+    session_deletes.push({
+      client_id: self.client_id.value(),
+      expected_incarnation: self.broker
+      .session_incarnation(self.client_id)
+      .unwrap(),
+      expected_revision: old.unwrap().policy_revision(),
+    })
+  }
+  let id_floors : Array[Mqtt5IdFloor] = []
+  if self.proposed_incarnation is Some(_) {
+    id_floors.push({ kind: 1, new_floor: self.broker.next_session_incarnation })
+  }
+  let will_deletes : Array[Mqtt5WillDelete] = []
+  for id in self.cancel_wills {
+    let record = match self.broker.wills.get(id) {
+      Some(value) => value
+      None =>
+        return Err(InvariantViolation("Will disappeared before activation"))
+    }
+    will_deletes.push({ id, expected_revision: record.revision })
+  }
+  let will_puts : Array[Mqtt5WillPut] = []
+  for entry in self.trigger_wills {
+    let (id, retention) = entry
+    let record = match self.broker.wills.get(id) {
+      Some(value) if value.state == WillArmed => value
+      _ => return Err(InvariantViolation("old Will disappeared"))
+    }
+    let delay = match retention {
+      @session.DropOnClose => 0U
+      @session.FiniteV5(expiry) if expiry < record.template.delay_seconds =>
+        expiry
+      _ => record.template.delay_seconds
+    }
+    let due = match
+      @session.Deadline::from_seconds(now_mono_ms, now_wall_ms, delay) {
+      Ok(value) => value
+      Err(_) => return Err(InvariantViolation("Will transition clock overflow"))
+    }
+    let next = {
+      ..record,
+      state: WillPending,
+      trigger_wall_ms: Some(now_wall_ms),
+      due: Some(due),
+      revision: record.revision + 1L,
+    }
+    let saved = match durable_will_snapshot(next, now_mono_ms, now_wall_ms) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    will_puts.push({ expected_revision: record.revision, will: saved })
+  }
+  self.will_transition_mono_ms = now_mono_ms
+  self.will_transition_wall_ms = now_wall_ms
+  Ok({
+    ..DurableDeltaV5::empty(),
+    will_puts,
+    will_deletes,
+    new_clock_floor: if now_wall_ms > self.broker.clock_floor_wall_ms {
+      Some(now_wall_ms)
+    } else {
+      None
+    },
+    id_floors,
+    session_puts,
+    session_deletes,
+  })
 }

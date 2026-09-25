@@ -6,7 +6,14 @@ pub(all) enum PreparedBrokerMutation {
   Ack(@router.DurableAckPlan)
   Activation(@router.DurableActivationPlan)
   ActivationWithWill(@router.DurableActivationPlan, @budget.Ticket?)
+  V5ActivationWithWill(
+    @router.DurableActivationPlan,
+    @router.PreparedMqtt5Will,
+    @router.BrokerState
+  )
   Lifecycle(@router.DurableLifecyclePlan)
+  Will(@router.DurableWillPlan)
+  LifecycleWithV5Will(@router.DurableLifecyclePlan, @router.DurableWillPlan)
   Subscribe(@router.DurableSubscribePlan)
   Unsubscribe(@router.DurableUnsubscribePlan)
   PolicyRecord(@persistence.WalPolicyRecord)
@@ -24,10 +31,70 @@ fn PreparedBrokerMutation::delta(
     Ack(value) => value.delta()
     Activation(value) => value.delta()
     ActivationWithWill(value, _) => value.delta()
+    V5ActivationWithWill(value, _, _) => value.delta()
     Lifecycle(value) => value.delta()
+    Will(_) => @router.DurableDelta::empty()
+    LifecycleWithV5Will(value, _) => value.delta()
     Subscribe(value) => value.delta()
     Unsubscribe(value) => value.delta()
     PolicyRecord(_) | PolicyReconcile(_) => @router.DurableDelta::empty()
+  }
+}
+
+///|
+fn PreparedBrokerMutation::delta_v5(
+  self : PreparedBrokerMutation,
+  now_mono_ms : Int64,
+  now_wall_ms : Int64,
+) -> Result[@router.DurableDeltaV5, @router.RouterError] {
+  match self {
+    Noop | PolicyRecord(_) => Ok(@router.DurableDeltaV5::empty())
+    PolicyReconcile(value) => value.delta_v5(now_mono_ms, now_wall_ms)
+    Publish(value) | PublishWithWill(value, _) =>
+      value.delta_v5(now_mono_ms, now_wall_ms)
+    Ack(value) => value.delta_v5(now_mono_ms, now_wall_ms)
+    Activation(value) | ActivationWithWill(value, _) =>
+      value.delta_v5(now_mono_ms, now_wall_ms)
+    V5ActivationWithWill(value, will, _) => {
+      let delta = match value.delta_v5(now_mono_ms, now_wall_ms) {
+        Ok(result) => result
+        Err(error) => return Err(error)
+      }
+      let will_delta = match
+        will.delta_v5(
+          value.session_incarnation_after(),
+          now_mono_ms,
+          now_wall_ms,
+        ) {
+        Ok(result) => result
+        Err(error) => return Err(error)
+      }
+      delta.id_floors.append(will_delta.id_floors)
+      delta.will_puts.append(will_delta.will_puts)
+      Ok(delta)
+    }
+    Lifecycle(value) => value.delta_v5(now_mono_ms, now_wall_ms)
+    Will(value) => value.delta_v5(now_mono_ms, now_wall_ms)
+    LifecycleWithV5Will(value, will) => {
+      let delta = match value.delta_v5(now_mono_ms, now_wall_ms) {
+        Ok(result) => result
+        Err(error) => return Err(error)
+      }
+      let will_delta = match will.delta_v5(now_mono_ms, now_wall_ms) {
+        Ok(result) => result
+        Err(error) => return Err(error)
+      }
+      delta.id_floors.append(will_delta.id_floors)
+      delta.session_puts.append(will_delta.session_puts)
+      delta.session_deletes.append(will_delta.session_deletes)
+      delta.retained_puts.append(will_delta.retained_puts)
+      delta.retained_deletes.append(will_delta.retained_deletes)
+      delta.will_puts.append(will_delta.will_puts)
+      delta.will_deletes.append(will_delta.will_deletes)
+      Ok(delta)
+    }
+    Subscribe(value) => value.delta_v5(now_mono_ms, now_wall_ms)
+    Unsubscribe(value) => value.delta_v5(now_mono_ms, now_wall_ms)
   }
 }
 
@@ -42,7 +109,28 @@ fn PreparedBrokerMutation::commit(
     Ack(value) => value.commit()
     Activation(value) => value.commit()
     ActivationWithWill(value, _) => value.commit()
+    V5ActivationWithWill(value, will, broker) => {
+      let actions = match value.commit() {
+        Ok(result) => result
+        Err(error) => return Err(error)
+      }
+      ignore(broker.commit_prepared_will(will))
+      Ok(actions)
+    }
     Lifecycle(value) => value.commit()
+    Will(value) => value.commit()
+    LifecycleWithV5Will(value, will) => {
+      let actions = match value.commit() {
+        Ok(result) => result
+        Err(error) => return Err(error)
+      }
+      let will_actions = match will.commit() {
+        Ok(result) => result
+        Err(error) => return Err(error)
+      }
+      actions.append(will_actions)
+      Ok(actions)
+    }
     Subscribe(value) => value.commit()
     Unsubscribe(value) => value.commit()
     PolicyRecord(_) => Ok([])
@@ -65,7 +153,16 @@ fn PreparedBrokerMutation::cancel(self : PreparedBrokerMutation) -> Unit {
       value.cancel()
       release_optional(ticket)
     }
+    V5ActivationWithWill(value, will, broker) => {
+      value.cancel()
+      broker.cancel_prepared_will(will)
+    }
     Lifecycle(value) => value.cancel()
+    Will(value) => value.cancel()
+    LifecycleWithV5Will(value, will) => {
+      value.cancel()
+      will.cancel()
+    }
     Subscribe(value) => value.cancel()
     Unsubscribe(value) => value.cancel()
     PolicyRecord(_) => ()
@@ -135,6 +232,7 @@ pub struct CommitCoordinator {
   mut submitted : PendingBatch?
   mut policy_upgrade_pending : Bool
   mut fenced : Bool
+  v5_schema : Bool
 }
 
 ///|
@@ -177,6 +275,7 @@ pub fn CommitCoordinator::new(
     submitted: None,
     policy_upgrade_pending: false,
     fenced: false,
+    v5_schema: writer.uses_v5_schema(),
   })
 }
 
@@ -430,6 +529,10 @@ fn CommitCoordinator::can_collect(
   plan : PreparedBrokerMutation,
   delta : @router.DurableDelta,
 ) -> Bool {
+  if self.v5_schema && !self.collecting.is_empty() {
+    return false
+  }
+
   if self.collecting.is_empty() {
     return true
   }
@@ -531,20 +634,67 @@ pub fn CommitCoordinator::submit(
         }
       }
     PolicyReconcile(value) =>
-      match @persistence.encode_wal_reconcile(value.delta()) {
-        Ok(bytes) => bytes
-        Err(_) => {
-          plan.cancel()
-          return Err(CommitEncoding)
+      if self.v5_schema {
+        let v5_delta = match
+          value.delta_v5(@budget.monotonic_ms(), @async.now()) {
+          Ok(result) => result
+          Err(_) => {
+            plan.cancel()
+            return Err(CommitEncoding)
+          }
+        }
+        match
+          @persistence.encode_durable_delta_v5(
+            v5_delta,
+            max_bytes=self.max_delta_bytes,
+          ) {
+          Ok(bytes) => bytes
+          Err(_) => {
+            plan.cancel()
+            return Err(CommitEncoding)
+          }
+        }
+      } else {
+        match @persistence.encode_wal_reconcile(value.delta()) {
+          Ok(bytes) => bytes
+          Err(_) => {
+            plan.cancel()
+            return Err(CommitEncoding)
+          }
         }
       }
     _ =>
-      match
-        @persistence.encode_durable_delta(delta, max_bytes=self.max_delta_bytes) {
-        Ok(value) => value
-        Err(_) => {
-          plan.cancel()
-          return Err(CommitEncoding)
+      if self.v5_schema {
+        let v5_delta = match
+          plan.delta_v5(@budget.monotonic_ms(), @async.now()) {
+          Ok(value) => value
+          Err(_) => {
+            plan.cancel()
+            return Err(CommitEncoding)
+          }
+        }
+        match
+          @persistence.encode_durable_delta_v5(
+            v5_delta,
+            max_bytes=self.max_delta_bytes,
+          ) {
+          Ok(value) => value
+          Err(_) => {
+            plan.cancel()
+            return Err(CommitEncoding)
+          }
+        }
+      } else {
+        match
+          @persistence.encode_durable_delta(
+            delta,
+            max_bytes=self.max_delta_bytes,
+          ) {
+          Ok(value) => value
+          Err(_) => {
+            plan.cancel()
+            return Err(CommitEncoding)
+          }
         }
       }
   }
@@ -579,7 +729,8 @@ pub fn CommitCoordinator::submit(
   self.collecting_bytes += encoded.length().to_int64()
   if self.collecting.length() >= 64 ||
     self.collecting_bytes >= 8388608L ||
-    !batchable_plan(plan) {
+    !batchable_plan(plan) ||
+    self.v5_schema {
     if !self.flush() {
       return Err(CommitWriterUnavailable)
     }
@@ -626,6 +777,20 @@ pub fn CommitCoordinator::flush(self : CommitCoordinator) -> Bool {
   self.collecting.clear()
   self.collecting_bytes = 0L
   true
+}
+
+///|
+pub fn CommitCoordinator::submit_checkpoint_v5(
+  self : CommitCoordinator,
+  checkpoint : @persistence.WalCheckpointV5,
+) -> Bool {
+  if self.is_fenced() ||
+    self.has_pending() ||
+    checkpoint.lsn != self.last_released_lsn ||
+    !self.v5_schema {
+    return false
+  }
+  self.writer.submit_checkpoint_v5(checkpoint)
 }
 
 ///|

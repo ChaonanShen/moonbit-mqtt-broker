@@ -2089,14 +2089,31 @@ async fn run_main() -> Unit {
           }
         }
         let (wal_store, initial_state, identities, committed_lsn) = if has_manifest {
-          let (wal_store, restored) = match
+          let format = match @persistence.wal_manifest_format_version(store) {
+            Ok(value) => value
+            Err(error) => {
+              store.close()
+              raise CliError("WAL manifest: " + error.category())
+            }
+          }
+          let recovery = if format == 3 {
+            @persistence.WalStore::recover_state_v5(
+              store,
+              broker_config,
+              limits,
+              disk_max_bytes=wal_disk_max_bytes,
+              disk_reserve_bytes=wal_disk_reserve_bytes,
+            )
+          } else {
             @persistence.WalStore::recover_state(
               store,
               broker_config,
               limits,
               disk_max_bytes=wal_disk_max_bytes,
               disk_reserve_bytes=wal_disk_reserve_bytes,
-            ) {
+            )
+          }
+          let (wal_store, restored) = match recovery {
             Ok(value) => value
             Err(error) => {
               store.close()
@@ -2118,28 +2135,77 @@ async fn run_main() -> Unit {
               raise CliError("snapshot import: " + error.category())
             }
           }
-          let snapshot = initial_state.export_snapshot()
-          let identities : Array[@persistence.WalSessionIdentity] = []
-          for index in 0..<snapshot.sessions.length() {
-            identities.push({
-              client_id: snapshot.sessions[index].client_id,
-              generation: index.to_int64() + 1L,
-            })
-          }
-          let wal_store = match
-            @persistence.WalStore::bootstrap(
-              store,
-              { generation: 1L, lsn: 0L, identities, policy: None, snapshot },
-              disk_max_bytes=wal_disk_max_bytes,
-              disk_reserve_bytes=wal_disk_reserve_bytes,
-            ) {
-            Ok(value) => value
-            Err(error) => {
+          if config.protocol_config().mqtt5_enabled ||
+            initial_state.uses_v5_storage() {
+            initial_state.enable_v5_storage()
+            if !initial_state.materialize_delivery_ids() {
               store.close()
-              raise CliError("WAL bootstrap: " + error.category())
+              raise CliError("V5 delivery identity migration failed")
             }
+            let snapshot = match
+              initial_state.export_snapshot_v5(
+                @budget.monotonic_ms(),
+                @async.now(),
+              ) {
+              Ok(value) => value
+              Err(_) => {
+                store.close()
+                raise CliError("V5 strict snapshot preparation failed")
+              }
+            }
+            let identities : Array[@persistence.WalSessionIdentity] = []
+            for session in snapshot.sessions {
+              identities.push({
+                client_id: session.client_id,
+                generation: session.incarnation,
+              })
+            }
+            let checkpoint : @persistence.WalCheckpointV5 = {
+              generation: 1L,
+              lsn: 0L,
+              identities,
+              required_features: @persistence.feature_mqtt5_model,
+              policy: None,
+              snapshot,
+            }
+            let wal_store = match
+              @persistence.WalStore::bootstrap_v5(
+                store,
+                checkpoint,
+                disk_max_bytes=wal_disk_max_bytes,
+                disk_reserve_bytes=wal_disk_reserve_bytes,
+              ) {
+              Ok(value) => value
+              Err(error) => {
+                store.close()
+                raise CliError("V5 WAL bootstrap: " + error.category())
+              }
+            }
+            (wal_store, initial_state, identities, 0L)
+          } else {
+            let snapshot = initial_state.export_snapshot()
+            let identities : Array[@persistence.WalSessionIdentity] = []
+            for index in 0..<snapshot.sessions.length() {
+              identities.push({
+                client_id: snapshot.sessions[index].client_id,
+                generation: index.to_int64() + 1L,
+              })
+            }
+            let wal_store = match
+              @persistence.WalStore::bootstrap(
+                store,
+                { generation: 1L, lsn: 0L, identities, policy: None, snapshot },
+                disk_max_bytes=wal_disk_max_bytes,
+                disk_reserve_bytes=wal_disk_reserve_bytes,
+              ) {
+              Ok(value) => value
+              Err(error) => {
+                store.close()
+                raise CliError("WAL bootstrap: " + error.category())
+              }
+            }
+            (wal_store, initial_state, identities, 0L)
           }
-          (wal_store, initial_state, identities, 0L)
         }
         let (identities, committed_lsn) = if wal_store.manifest().policy_required ||
           reload_enabled {
@@ -2169,6 +2235,42 @@ async fn run_main() -> Unit {
             }
           }
           (boot.identities, boot.committed_lsn)
+        } else {
+          (identities, committed_lsn)
+        }
+        let (identities, committed_lsn) = if config.protocol_config().mqtt5_enabled &&
+          !wal_store.uses_v5_schema() {
+          initial_state.enable_v5_storage()
+          if !initial_state.materialize_delivery_ids() {
+            wal_store.close()
+            raise CliError("V5 delivery identity migration failed")
+          }
+          let snapshot = match
+            initial_state.export_snapshot_v5(
+              @budget.monotonic_ms(),
+              @async.now(),
+            ) {
+            Ok(value) => value
+            Err(_) => {
+              wal_store.close()
+              raise CliError("V5 strict migration snapshot failed")
+            }
+          }
+          let next_identities : Array[@persistence.WalSessionIdentity] = []
+          for session in snapshot.sessions {
+            next_identities.push({
+              client_id: session.client_id,
+              generation: session.incarnation,
+            })
+          }
+          match wal_store.migrate_to_v5(snapshot, next_identities) {
+            Ok(_) => ()
+            Err(error) => {
+              wal_store.close()
+              raise CliError("V5 strict migration: " + error.category())
+            }
+          }
+          (next_identities, wal_store.committed_lsn())
         } else {
           (identities, committed_lsn)
         }

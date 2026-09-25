@@ -137,6 +137,9 @@ pub fn DurableUnsubscribePlan::commit(
       index.remove_subscription(self.client_id, filter)
     }
   }
+  if !self.remove_filters.is_empty() {
+    self.broker.sessions.get(self.client_id).unwrap().subscription_changed()
+  }
   let owner = self.broker.resources.owners.get(self.client_id).unwrap()
   owner.usage = { ..owner.usage, subscriptions: self.subscription_bytes }
   if !self.remove_filters.is_empty() &&
@@ -157,4 +160,51 @@ pub fn DurableUnsubscribePlan::cancel(self : DurableUnsubscribePlan) -> Unit {
     self.scratch.release().unwrap()
     self.finished = true
   }
+}
+
+///|
+pub fn DurableUnsubscribePlan::delta_v5(
+  self : DurableUnsubscribePlan,
+  now_mono_ms : Int64,
+  now_wall_ms : Int64,
+) -> Result[DurableDeltaV5, RouterError] {
+  let session_puts : Array[Mqtt5SessionPut] = []
+  if !self.remove_filters.is_empty() &&
+    self.broker.session_is_persistent(self.client_id) {
+    let original = self.broker.sessions.get(self.client_id).unwrap()
+    let bindings : Array[SubscriptionBinding] = []
+    for binding in self.broker.subscriptions.bindings_for(self.client_id) {
+      if !self.remove_filters.contains(binding.filter) {
+        bindings.push(binding)
+      }
+    }
+    let saved = match
+      self.broker.snapshot_session_v5_candidate(
+        self.client_id,
+        original,
+        now_mono_ms,
+        now_wall_ms,
+        bindings~,
+      ) {
+      Ok(value) => value
+      Err(_) =>
+        return Err(InvariantViolation("cannot export V5 unsubscribe Session"))
+    }
+    session_puts.push({
+      expected_incarnation: self.broker
+      .session_incarnation(self.client_id)
+      .unwrap(),
+      expected_revision: original.policy_revision(),
+      session: { ..saved, state_revision: original.policy_revision() + 1L },
+    })
+  }
+  Ok({
+    ..DurableDeltaV5::empty(),
+    new_clock_floor: if now_wall_ms > self.broker.clock_floor_wall_ms {
+      Some(now_wall_ms)
+    } else {
+      None
+    },
+    session_puts,
+  })
 }

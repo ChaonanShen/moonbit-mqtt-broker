@@ -316,13 +316,28 @@ fn RouterDriver::handle_strict_runtime_event(
           return
         }
       }
-      if packet.packet is @protocol.PacketV5::Connect5(_) &&
-        self.runtime.config.protocol_config().mqtt5_enabled {
-        self.dispatch(
-          self.runtime.reject_mqtt5_connect(packet.connection_id, 0x83),
-        )
-      } else {
-        self.dispatch(self.runtime.apply(Mqtt5PacketReceived(packet)))
+      let plan = match self.runtime.connections.get(packet.connection_id) {
+        Some({ phase: AwaitConnect, .. }) =>
+          self.runtime.prepare_strict_v5_connect(
+            packet,
+            self.strict_generations,
+            coordinator.committed_lsn() + 1L,
+          )
+        Some({ phase: Active(_), .. }) =>
+          self.runtime.prepare_strict_v5_active_packet(
+            packet,
+            self.strict_generations,
+          )
+        _ => StrictClose(packet.connection_id, ProtocolError)
+      }
+      if !self.strict_submit_packet_plan(packet.connection_id, plan) {
+        if !coordinator.flush() {
+          self.strict_fence("group-commit-submit")
+        } else if self.enqueue_strict_event(event, ticket) {
+          transferred = true
+        } else {
+          self.strict_fence("commit-queue-limit")
+        }
       }
     }
     PacketReceived(packet) => {
@@ -468,6 +483,69 @@ fn RouterDriver::handle_strict_runtime_event(
         }
       }
       if !coordinator.has_pending() && !self.strict_fenced {
+        match
+          self.runtime
+          .broker_state()
+          .next_armed_will(client_id => {
+            self.runtime.active_by_client.contains(client_id)
+          }) {
+          None => ()
+          Some(id) => {
+            let retention = self.runtime
+              .broker_state()
+              .will_session_retention(id)
+              .unwrap_or(@session.DropOnClose)
+            match
+              self.runtime
+              .broker_state()
+              .prepare_durable_will_trigger(
+                id,
+                @budget.monotonic_ms(),
+                @async.now(),
+                retention,
+              ) {
+              Ok(plan) =>
+                ignore(
+                  self.strict_submit_packet_plan(
+                    ConnectionId::new(0L),
+                    StrictPrepared(Will(plan), actions => {
+                      self.runtime.map_broker_actions(actions)
+                    }),
+                  ),
+                )
+              Err(_) => self.strict_fence("orphan-will-trigger")
+            }
+          }
+        }
+      }
+      if !coordinator.has_pending() && !self.strict_fenced {
+        match
+          self.runtime.broker_state().next_due_will(@budget.monotonic_ms()) {
+          None => ()
+          Some(id) =>
+            match
+              self.runtime
+              .broker_state()
+              .prepare_durable_will_publish(
+                id,
+                @budget.monotonic_ms(),
+                @async.now(),
+                self.strict_generations,
+              ) {
+              Ok(plan) =>
+                ignore(
+                  self.strict_submit_packet_plan(
+                    ConnectionId::new(0L),
+                    StrictPrepared(Will(plan), actions => {
+                      self.runtime.map_broker_actions(actions)
+                    }),
+                  ),
+                )
+              Err(_) => self.strict_fence("due-will-publish")
+            }
+        }
+      }
+      if !coordinator.has_pending() && !self.strict_fenced {
         match self.runtime.broker_state().next_durable_promotion() {
           None => ()
           Some(client_id) => {
@@ -517,6 +595,58 @@ fn RouterDriver::poll_strict_checkpoint(self : RouterDriver) -> Unit {
     return
   }
   let now_ms = @async.now()
+  if coordinator.v5_schema {
+    if coordinator.has_pending() ||
+      now_ms < self.strict_checkpoint_next_ms ||
+      self.strict_held.length() > 0 ||
+      self.strict_management_held.length() > 0 {
+      return
+    }
+    let snapshot = match
+      self.runtime
+      .broker_state()
+      .export_snapshot_v5(@budget.monotonic_ms(), now_ms) {
+      Ok(value) => value
+      Err(_) => {
+        self.strict_checkpoint_degraded = true
+        self.strict_checkpoint_next_ms = now_ms + 1000L
+        return
+      }
+    }
+    let identities : Array[@persistence.WalSessionIdentity] = []
+    for session in snapshot.sessions {
+      identities.push({
+        client_id: session.client_id,
+        generation: session.incarnation,
+      })
+    }
+    let features = @persistence.feature_mqtt5_model |
+      (if coordinator.policy_state() is Some(_) {
+        @persistence.feature_policy_gate
+      } else {
+        0U
+      }) |
+      (if snapshot.groups.is_empty() {
+        0U
+      } else {
+        @persistence.feature_shared_records
+      })
+    let checkpoint : @persistence.WalCheckpointV5 = {
+      generation: coordinator.checkpoint_generation() + 1L,
+      lsn: coordinator.applied_lsn(),
+      identities,
+      required_features: features,
+      policy: coordinator.policy_state(),
+      snapshot,
+    }
+    if coordinator.submit_checkpoint_v5(checkpoint) {
+      self.strict_checkpoint_inflight = true
+    } else {
+      self.strict_checkpoint_degraded = true
+      self.strict_checkpoint_next_ms = now_ms + 1000L
+    }
+    return
+  }
   if self.strict_checkpoint_cursor is None {
     if coordinator.has_pending() ||
       now_ms < self.strict_checkpoint_next_ms ||

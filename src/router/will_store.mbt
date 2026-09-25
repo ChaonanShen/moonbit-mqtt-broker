@@ -37,6 +37,53 @@ pub struct PreparedMqtt5Will {
 }
 
 ///|
+pub fn PreparedMqtt5Will::id(self : PreparedMqtt5Will) -> Int64 {
+  self.record.id
+}
+
+///|
+pub fn PreparedMqtt5Will::delta_v5(
+  self : PreparedMqtt5Will,
+  incarnation : Int64,
+  now_mono_ms : Int64,
+  now_wall_ms : Int64,
+) -> Result[DurableDeltaV5, RouterError] {
+  if self.finished || incarnation < 1L {
+    return Err(InvariantViolation("invalid prepared Will"))
+  }
+  let template = @session.SessionMessage::new(
+    self.record.template.topic,
+    self.record.template.payload,
+    self.record.template.retain,
+    qos=self.record.template.qos,
+    metadata=self.record.template.metadata,
+  )
+  let message = match v5_snapshot_message(template, now_mono_ms, now_wall_ms) {
+    Ok(value) => value
+    Err(_) => return Err(InvariantViolation("cannot snapshot prepared Will"))
+  }
+  let will : SnapshotWillV5 = {
+    id: self.record.id,
+    owner_principal: self.record.owner.storage_value(),
+    client_id: self.record.client_id.value(),
+    session_incarnation: incarnation,
+    state: 0,
+    message_template: message,
+    delay_seconds: self.record.template.delay_seconds,
+    will_message_expiry_seconds: self.record.template.message_expiry_seconds,
+    trigger_wall_ms: None,
+    due_clock: None,
+    policy_sequence: self.record.policy_sequence,
+    revision: self.record.revision,
+  }
+  Ok({
+    ..DurableDeltaV5::empty(),
+    id_floors: [{ kind: 5, new_floor: self.record.id + 1L }],
+    will_puts: [{ expected_revision: 0L, will }],
+  })
+}
+
+///|
 pub fn BrokerState::will_count(self : BrokerState) -> Int {
   self.wills.length()
 }
@@ -270,4 +317,16 @@ pub fn BrokerState::cancel_wills_for_session(
     ignore(self.cancel_will(id))
   }
   ids.length()
+}
+
+///|
+pub fn BrokerState::will_session_retention(
+  self : BrokerState,
+  id : Int64,
+) -> @session.Retention? {
+  let record = match self.wills.get(id) {
+    Some(value) => value
+    None => return None
+  }
+  self.session_retention(record.client_id)
 }

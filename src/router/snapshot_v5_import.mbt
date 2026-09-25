@@ -108,6 +108,7 @@ pub fn BrokerState::from_snapshot_v5(
   now_mono_ms : Int64,
   now_wall_ms : Int64,
   ledger? : @budget.Ledger,
+  recover_armed_wills? : Bool = true,
 ) -> Result[BrokerState, SnapshotError] {
   if now_mono_ms < 0L || now_wall_ms < 0L || !saved.groups.is_empty() {
     return Err(InvalidState("unsupported V5 snapshot state"))
@@ -248,6 +249,7 @@ pub fn BrokerState::from_snapshot_v5(
         inbound_qos2,
         session.retention,
         session.last_protocol,
+        session.state_revision,
         expiry_deadline,
       ) {
       Ok(value) => value
@@ -392,7 +394,7 @@ pub fn BrokerState::from_snapshot_v5(
   }
   state.next_will_id = saved.next_will_id
   for will in saved.wills {
-    if will.state == 0 {
+    if recover_armed_wills && will.state == 0 {
       let client_id = @session.ClientId::new(will.client_id).unwrap()
       let retention = state.sessions.get(client_id).unwrap().retention()
       if !state.trigger_will(will.id, now_mono_ms, now_wall_ms, retention) {

@@ -123,6 +123,9 @@ fn BrokerState::subscribe_v5(
       }
     }
   }
+  if changed {
+    self.sessions.get(client_id).unwrap().subscription_changed()
+  }
   if persistent && (changed || delivery_changed) {
     self.mark_snapshot_dirty()
   }

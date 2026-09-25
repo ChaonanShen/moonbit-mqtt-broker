@@ -26,6 +26,58 @@ pub fn DurableReconcilePlan::delta(
 }
 
 ///|
+pub fn DurableReconcilePlan::delta_v5(
+  self : DurableReconcilePlan,
+  now_mono_ms : Int64,
+  now_wall_ms : Int64,
+) -> Result[DurableDeltaV5, RouterError] {
+  let current = match self.broker.sessions.get(self.client_id) {
+    Some(value) => value
+    None => return Err(SessionNotFound(self.client_id))
+  }
+  let candidate = current.copy()
+  let bindings : Array[SubscriptionBinding] = []
+  for binding in self.broker.subscriptions.bindings_for(self.client_id) {
+    if self.filter != Some(binding.filter) {
+      bindings.push(binding)
+    }
+  }
+  match self.delta.change {
+    DropSubscription(_) => candidate.subscription_changed()
+    DropPendingAt(_, _, _, _) =>
+      if !candidate.discard_pending_item_prepared(
+          self.pending_index,
+          self.head.unwrap(),
+          self.remaining,
+        ) {
+        return Err(InvariantViolation("V5 reconcile pending item changed"))
+      }
+    DropPendingHead(_, _, _) =>
+      return Err(InvariantViolation("unreachable policy head conversion"))
+  }
+  let put = match
+    self.broker.session_put_v5(
+      self.client_id,
+      candidate,
+      now_mono_ms,
+      now_wall_ms,
+      bindings~,
+    ) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  Ok({
+    ..DurableDeltaV5::empty(),
+    new_clock_floor: if now_wall_ms > self.broker.clock_floor_wall_ms {
+      Some(now_wall_ms)
+    } else {
+      None
+    },
+    session_puts: [put],
+  })
+}
+
+///|
 /// Prepare one local cleanup without serializing the entire Session queue.
 pub fn BrokerState::prepare_durable_reconcile(
   self : BrokerState,
@@ -212,6 +264,7 @@ pub fn DurableReconcilePlan::commit(
     DropSubscription(_) => {
       let filter = self.filter.unwrap()
       ignore(self.broker.subscriptions.remove(self.client_id, filter))
+      session.subscription_changed()
       if self.broker.admin_sessions is Some(index) {
         index.remove_subscription(self.client_id, filter)
       }

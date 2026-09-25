@@ -2,6 +2,8 @@
 pub struct DurablePublishPlan {
   broker : BrokerState
   input : PublishInput
+  metadata : @session.MessageMetadata
+  delivery_floor_before : Int64
   updates : Map[@session.ClientId, @session.ClientSession]
   inflight_added : Int
   pending_added : Int
@@ -28,6 +30,7 @@ pub fn BrokerState::prepare_durable_publish(
   source : PublishInput,
   generations : Map[@session.ClientId, Int64],
   inbound_packet_id? : @session.SessionPacketId,
+  metadata? : @session.MessageMetadata = @session.MessageMetadata::empty(),
 ) -> Result[DurablePublishPlan, RouterError] {
   if source.retain &&
     source.payload.length() > 0 &&
@@ -90,6 +93,7 @@ pub fn BrokerState::prepare_durable_publish(
     ..source,
     payload: copy_router_bytes(source.payload),
   }
+  let delivery_floor_before = self.next_delivery_id
   let old_retained = self.retained.peek(input.topic)
   let old_retained_cost = self.retained.cost_at(input.topic)
   let retained_target_bytes = self.resources.retained_bytes -
@@ -103,7 +107,7 @@ pub fn BrokerState::prepare_durable_publish(
   let strict = input.origin is Client(_)
   let planned = match
     self.preflight_deliveries(
-      self.delivery_candidates(input),
+      self.delivery_candidates(input, metadata~),
       strict,
       retained_delta~,
     ) {
@@ -169,7 +173,7 @@ pub fn BrokerState::prepare_durable_publish(
       topic: input.topic,
       payload: input.payload,
       qos: input.qos,
-      metadata: @session.MessageMetadata::empty(),
+      metadata,
     })
   }
   let retained_puts : Array[SnapshotRetainedV3] = []
@@ -224,6 +228,8 @@ pub fn BrokerState::prepare_durable_publish(
   Ok({
     broker: self,
     input,
+    metadata: metadata.copy(),
+    delivery_floor_before,
     updates: prepared.updates,
     inflight_added: prepared.inflight_added,
     pending_added: prepared.pending_added,
@@ -268,6 +274,7 @@ pub fn DurablePublishPlan::commit(
           self.input.payload,
           self.input.qos,
           self.broker.config.max_retained_messages(),
+          metadata=self.metadata,
         ),
       )
       if previous is None && self.broker.admin_sessions is Some(index) {
@@ -308,4 +315,78 @@ pub fn DurablePublishPlan::cancel(self : DurablePublishPlan) -> Unit {
     self.delivery_scratch.release().unwrap()
     self.finished = true
   }
+}
+
+///|
+pub fn DurablePublishPlan::delta_v5(
+  self : DurablePublishPlan,
+  now_mono_ms : Int64,
+  now_wall_ms : Int64,
+) -> Result[DurableDeltaV5, RouterError] {
+  let session_puts : Array[Mqtt5SessionPut] = []
+  for id, candidate in self.updates {
+    if candidate.mode() != @session.Persistent {
+      continue
+    }
+    match self.broker.session_put_v5(id, candidate, now_mono_ms, now_wall_ms) {
+      Ok(value) => session_puts.push(value)
+      Err(error) => return Err(error)
+    }
+  }
+  session_puts.sort_by(fn(left, right) {
+    compare_utf8_for_sort(left.session.client_id, right.session.client_id)
+  })
+  let id_floors : Array[Mqtt5IdFloor] = []
+  if self.broker.next_delivery_id > self.delivery_floor_before {
+    id_floors.push({ kind: 3, new_floor: self.broker.next_delivery_id })
+  }
+  let retained_puts : Array[Mqtt5RetainedPut] = []
+  let retained_deletes : Array[Mqtt5RetainedDelete] = []
+  if self.retained_changed {
+    let expected = self.broker.retained.revision(self.input.topic).unwrap_or(0L)
+    if self.input.payload.length() == 0 {
+      retained_deletes.push({
+        topic: self.input.topic.value(),
+        expected_revision: expected,
+      })
+    } else {
+      let revision = self.broker.retained.next_revision()
+      if revision == 9223372036854775807L {
+        return Err(InvariantViolation("retained revision exhausted"))
+      }
+      id_floors.push({ kind: 6, new_floor: revision + 1L })
+      let message = @session.SessionMessage::new(
+        self.input.topic,
+        self.input.payload,
+        true,
+        qos=self.input.qos,
+        metadata=self.metadata,
+      )
+      let saved = match v5_snapshot_message(message, now_mono_ms, now_wall_ms) {
+        Ok(value) => value
+        Err(_) =>
+          return Err(InvariantViolation("cannot encode V5 retained message"))
+      }
+      retained_puts.push({
+        expected_revision: expected,
+        retained: { revision, message: saved },
+      })
+    }
+  }
+  Ok({
+    new_clock_floor: if now_wall_ms > self.broker.clock_floor_wall_ms {
+      Some(now_wall_ms)
+    } else {
+      None
+    },
+    id_floors,
+    session_puts,
+    session_deletes: [],
+    group_puts: [],
+    group_deletes: [],
+    retained_puts,
+    retained_deletes,
+    will_puts: [],
+    will_deletes: [],
+  })
 }
