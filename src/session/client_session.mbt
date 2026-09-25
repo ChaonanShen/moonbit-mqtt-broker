@@ -5,6 +5,7 @@ pub struct ClientSession {
   client_id : ClientId
   mode : SessionMode
   retention : Retention
+  mut expiry_deadline : Deadline?
   mut attached : Bool
   allocator : PacketIdAllocator
   mut inflight : Array[OutboundInflight]
@@ -32,6 +33,7 @@ pub fn ClientSession::new(
     } else {
       LegacyBrokerPolicy
     },
+    expiry_deadline: None,
     attached,
     allocator: PacketIdAllocator::new().unwrap(),
     inflight: [],
@@ -120,6 +122,7 @@ pub fn ClientSession::restore(
     client_id,
     mode: Persistent,
     retention: LegacyBrokerPolicy,
+    expiry_deadline: None,
     attached: false,
     allocator,
     inflight: stored_inflight,
@@ -157,6 +160,23 @@ pub fn ClientSession::mode(self : ClientSession) -> SessionMode {
 ///|
 pub fn ClientSession::retention(self : ClientSession) -> Retention {
   self.retention
+}
+
+///|
+pub fn ClientSession::with_retention(
+  self : ClientSession,
+  retention : Retention,
+) -> ClientSession {
+  {
+    ..self,
+    mode: if retention == DropOnClose {
+      Clean
+    } else {
+      Persistent
+    },
+    retention,
+    expiry_deadline: None,
+  }
 }
 
 ///|
@@ -321,7 +341,51 @@ pub fn ClientSession::detach(
 ) -> Unit {
   self.attached = false
   self.detached_at_ms = Some(detached_at_ms)
+  self.expiry_deadline = None
   self.bump_policy_revision()
+}
+
+///|
+pub fn ClientSession::detach_v5(
+  self : ClientSession,
+  now_mono_ms : Int64,
+  now_wall_ms : Int64,
+) -> Result[Unit, RetentionError] {
+  let deadline = match self.retention {
+    FiniteV5(seconds) =>
+      match Deadline::from_seconds(now_mono_ms, now_wall_ms, seconds) {
+        Ok(value) => Some(value)
+        Err(error) => return Err(error)
+      }
+    _ => None
+  }
+  self.detach(detached_at_ms=now_wall_ms)
+  self.expiry_deadline = deadline
+  Ok(())
+}
+
+///|
+pub fn ClientSession::expiry_deadline(self : ClientSession) -> Deadline? {
+  self.expiry_deadline
+}
+
+///|
+pub fn ClientSession::logically_expired(
+  self : ClientSession,
+  now_mono_ms : Int64,
+) -> Bool {
+  if self.attached {
+    return false
+  }
+  match self.retention {
+    DropOnClose => true
+    FiniteV5(_) =>
+      match self.expiry_deadline {
+        Some(deadline) => deadline.remaining_at(now_mono_ms) == 0L
+        None => true
+      }
+    _ => false
+  }
 }
 
 ///|
@@ -334,6 +398,7 @@ pub fn ClientSession::attach(
   }
   self.attached = true
   self.detached_at_ms = None
+  self.expiry_deadline = None
   self.bump_policy_revision()
   let deliveries : Array[SessionDelivery] = []
   for item in self.inflight {

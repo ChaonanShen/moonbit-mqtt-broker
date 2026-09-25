@@ -1,6 +1,7 @@
 import {
   "ChaonanShen/moonbit-mqtt-broker/resource_budget" @budget,
   "ChaonanShen/moonbit-mqtt-broker/router",
+  "ChaonanShen/moonbit-mqtt-broker/session",
   "ChaonanShen/moonbit-mqtt-broker/observability",
   "moonbitlang/async",
   "moonbitlang/async/fs",

@@ -5,6 +5,7 @@ fn RouterDriver::strict_held_connection(
 ) -> Unit {
   let id = match event {
     PacketReceived(packet) => Some(packet.connection_id)
+    Mqtt5PacketReceived(packet) => Some(packet.connection_id)
     TransportClosed(closed) => Some(closed.connection_id)
     _ => None
   }
@@ -23,6 +24,7 @@ fn RouterDriver::strict_released_connection(
 ) -> Unit {
   let id = match event {
     PacketReceived(packet) => Some(packet.connection_id)
+    Mqtt5PacketReceived(packet) => Some(packet.connection_id)
     TransportClosed(closed) => Some(closed.connection_id)
     _ => None
   }
@@ -295,6 +297,27 @@ fn RouterDriver::handle_strict_runtime_event(
     return
   }
   match event {
+    Mqtt5PacketReceived(packet) => {
+      if packet.packet is @protocol.PacketV5::Connect5(_) &&
+        self.runtime.connections.get(packet.connection_id)
+        is Some({ phase: AwaitConnect, .. }) {
+        if self.sinks.get(packet.connection_id) is Some(sink) &&
+          !sink.prepare_handshake(
+            self.runtime.config
+            .broker_config()
+            .resources()
+            .get("control_reserve_bytes"),
+            frame_bytes=5L,
+            scratch_bytes=10L,
+          ) {
+          self.dispatch(
+            self.transport_failed(packet.connection_id, ResourceExhausted),
+          )
+          return
+        }
+      }
+      self.dispatch(self.runtime.apply(Mqtt5PacketReceived(packet)))
+    }
     PacketReceived(packet) => {
       if packet.packet is Connect(_) &&
         self.management_closing.contains(packet.connection_id) {

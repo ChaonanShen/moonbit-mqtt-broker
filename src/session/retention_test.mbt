@@ -48,3 +48,17 @@ test "C-T08 client session keeps retention separate from resume mode" {
     LegacyBrokerPolicy,
   )
 }
+
+///|
+test "C-T08 finite MQTT5 expiry gates resume before physical GC" {
+  let id = ClientId::new("finite-expiry").unwrap()
+  let session = ClientSession::new_with_retention(id, FiniteV5(2U))
+  assert_false(session.logically_expired(3000L))
+  assert_eq(session.detach_v5(1000L, 10000L), Ok(()))
+  assert_false(session.logically_expired(2999L))
+  assert_true(session.logically_expired(3000L))
+  assert_eq(session.expiry_deadline().unwrap().wall_due_ms, 12000L)
+  let infinite = ClientSession::new_with_retention(id, InfiniteV5)
+  assert_eq(infinite.detach_v5(1000L, 10000L), Ok(()))
+  assert_false(infinite.logically_expired(999999L))
+}

@@ -504,6 +504,20 @@ fn RouterDriver::dispatch(
             worklist.append(self.transport_failed(send.connection_id, reason))
           }
         }
+      SendMqtt5(send) =>
+        if self.sinks.get(send.connection_id) is Some(sink) {
+          let result = self.encode_v5_and_queue(
+            sink,
+            send.packet,
+            send.close_reason,
+          )
+          if send.packet is @protocol.PacketV5::Connack5(connack) {
+            sink.resolve_handshake(result is Ok(_) && connack.reason == 0)
+          }
+          if result is Err(reason) {
+            worklist.append(self.transport_failed(send.connection_id, reason))
+          }
+        }
       CloseTransport(close) =>
         match self.sinks.get(close.connection_id) {
           None => ()
@@ -772,6 +786,26 @@ fn RouterDriver::handle_runtime_event(
   self : RouterDriver,
   event : RuntimeEvent,
 ) -> Unit {
+  if event is Mqtt5PacketReceived(packet) {
+    if packet.packet is @protocol.PacketV5::Connect5(_) &&
+      self.runtime.connections.get(packet.connection_id)
+      is Some({ phase: AwaitConnect, .. }) {
+      if self.sinks.get(packet.connection_id) is Some(sink) &&
+        !sink.prepare_handshake(
+          self.runtime.config
+          .broker_config()
+          .resources()
+          .get("control_reserve_bytes"),
+          frame_bytes=5L,
+          scratch_bytes=10L,
+        ) {
+        self.dispatch(
+          self.transport_failed(packet.connection_id, ResourceExhausted),
+        )
+        return
+      }
+    }
+  }
   if event is PacketReceived(packet) {
     if packet.packet is Connect(_) &&
       self.management_closing.contains(packet.connection_id) {
@@ -819,6 +853,50 @@ fn RouterDriver::handle_runtime_event(
         self.runtime.broker_state().resume_pending(),
       ),
     )
+  }
+}
+
+///|
+fn RouterDriver::encode_v5_and_queue(
+  self : RouterDriver,
+  sink : TransportSink,
+  packet : @protocol.PacketV5,
+  close : CloseReason?,
+) -> Result[Unit, CloseReason] {
+  if packet is @protocol.PacketV5::Publish5(_) {
+    return Err(EncodeFailure)
+  }
+  let frame = match
+    @protocol.encode_v5(
+      packet,
+      @protocol.PacketDirection::ServerToClient,
+      self.runtime.config.max_packet_size(),
+    ) {
+    Ok(value) => value
+    Err(_) => return Err(EncodeFailure)
+  }
+  let prepared = if packet is @protocol.PacketV5::Connack5(_) {
+    let value = sink.handshake
+    sink.handshake = None
+    value
+  } else {
+    None
+  }
+  let reservation = match prepared {
+    Some((frame_reservation, scratch)) => {
+      scratch.release().unwrap()
+      Some(frame_reservation)
+    }
+    None =>
+      match sink.reserve_frame(frame.length().to_int64(), true) {
+        Ok(value) => value
+        Err(_) => return Err(SlowConsumer)
+      }
+  }
+  if sink.enqueue_frame(frame, reservation, close) {
+    Ok(())
+  } else {
+    Err(SlowConsumer)
   }
 }
 

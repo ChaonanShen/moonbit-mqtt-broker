@@ -152,6 +152,30 @@ fn map_section(
         add_boolean(args, "--rate-limits-enabled", entry, full_key)
       "limits.per_ip_enabled" =>
         add_boolean(args, "--per-ip-limits-enabled", entry, full_key)
+      "protocol.mqtt5_enabled" =>
+        add_boolean(args, "--mqtt5-enabled", entry, full_key)
+      "protocol.server_receive_maximum" =>
+        add_integer(args, "--mqtt5-server-receive-maximum", entry, full_key)
+      "protocol.server_keep_alive" =>
+        add_integer(args, "--mqtt5-server-keep-alive", entry, full_key)
+      "protocol.topic_alias_maximum" =>
+        add_integer(args, "--mqtt5-topic-alias-maximum", entry, full_key)
+      "protocol.max_property_bytes" =>
+        add_integer(args, "--mqtt5-max-property-bytes", entry, full_key)
+      "protocol.max_user_properties" =>
+        add_integer(args, "--mqtt5-max-user-properties", entry, full_key)
+      "protocol.max_subscription_entries" =>
+        add_integer(args, "--mqtt5-max-subscription-entries", entry, full_key)
+      "protocol.max_alias_bytes_per_connection" =>
+        add_integer(
+          args, "--mqtt5-max-alias-bytes-per-connection", entry, full_key,
+        )
+      "protocol.max_delayed_wills" =>
+        add_integer(args, "--mqtt5-max-delayed-wills", entry, full_key)
+      "protocol.max_expiry_work_per_turn" =>
+        add_integer(args, "--mqtt5-max-expiry-work-per-turn", entry, full_key)
+      "protocol.write_timeout_ms" =>
+        add_integer(args, "--mqtt5-write-timeout-ms", entry, full_key)
       "server.listen" => add_string(args, "--listen", entry, full_key)
       "server.max_connections" =>
         add_integer(args, "--max-connections", entry, full_key)
@@ -399,8 +423,8 @@ pub fn parse_config_file(
   }
   let args : Array[String] = []
   let sections = [
-    "server", "broker", "persistence", "tls", "security", "observability", "resources",
-    "limits", "management", "reload", "listeners",
+    "server", "protocol", "broker", "persistence", "tls", "security", "observability",
+    "resources", "limits", "management", "reload", "listeners",
   ]
   for section in sections {
     match root.get(section) {

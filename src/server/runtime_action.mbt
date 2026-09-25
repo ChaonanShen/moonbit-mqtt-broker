@@ -12,6 +12,13 @@ pub(all) struct SendPacketThenCloseAction {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct SendMqtt5Action {
+  connection_id : ConnectionId
+  packet : @protocol.PacketV5
+  close_reason : CloseReason?
+} derive(Eq, Debug)
+
+///|
 pub(all) struct CloseTransportAction {
   connection_id : ConnectionId
   reason : CloseReason
@@ -31,6 +38,7 @@ pub(all) struct CancelAuthenticationAction {
 pub(all) enum RuntimeAction {
   SendPacket(SendPacketAction)
   SendPacketThenClose(SendPacketThenCloseAction)
+  SendMqtt5(SendMqtt5Action)
   CloseTransport(CloseTransportAction)
   StartAuthentication(StartAuthenticationAction)
   CancelAuthentication(CancelAuthenticationAction)
