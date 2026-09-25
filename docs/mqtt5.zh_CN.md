@@ -74,7 +74,8 @@ off 只保留内存状态。snapshot 恢复最近一次完成写入的 V5 快照
 写入指标标签。
 
 运行 scripts/verify-mqtt5-docker.sh 可验证单测、三种持久化模式与
-TCP/TLS/WS/WSS 网络矩阵。脚本输出远端 MQTT5_EVIDENCE_DIR。
+TCP/TLS/WS/WSS 网络矩阵，以及 Mosquitto 2.0.18 客户端的双版本互操作。
+脚本输出远端 MQTT5_EVIDENCE_DIR。
 其他保证见[兼容性](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/compatibility.zh_CN.md)与[持久化](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/persistence.zh_CN.md)。
 
 ## 固定硬件性能对照

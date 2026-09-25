@@ -84,8 +84,9 @@ contain only fixed aggregate version, Will, window and alias counts; payloads,
 credentials and User Properties are never metric labels.
 
 Run scripts/verify-mqtt5-docker.sh to check the unit suite and the network
-matrix across off, snapshot and strict modes and TCP/TLS/WS/WSS. The test
-prints its remote MQTT5_EVIDENCE_DIR. See [compatibility](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/compatibility.md)
+matrix across off, snapshot and strict modes and TCP/TLS/WS/WSS, plus
+Mosquitto 2.0.18 client interoperability in both protocol directions. The
+test prints its remote MQTT5_EVIDENCE_DIR. See [compatibility](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/compatibility.md)
 and [persistence](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/persistence.md) for other broker guarantees.
 
 ## Fixed-hardware performance comparison
