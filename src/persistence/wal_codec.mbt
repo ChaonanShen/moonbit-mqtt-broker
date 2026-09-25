@@ -37,7 +37,10 @@ pub fn encode_wal_segment_header(
     if header.segment_id < 1L ||
       header.first_lsn < 1L ||
       header.first_lsn - 1L != header.previous_lsn ||
-      header.logical_schema != 3 {
+      (
+        header.logical_schema != 3 &&
+        header.logical_schema != mqtt5_wal_logical_schema
+      ) {
       raise wal_corrupt("segment-header", 0)
     }
     let writer = BinaryWriter::new(max_bytes=40)
@@ -69,7 +72,7 @@ pub fn decode_wal_segment_header(
       raise UnsupportedEnvelopeVersion(version)
     }
     let logical_schema = reader.read_u16()
-    if logical_schema != 3 {
+    if logical_schema != 3 && logical_schema != mqtt5_wal_logical_schema {
       raise wal_corrupt("logical-schema", 10)
     }
     let segment_id = reader.read_positive_i64("wal-segment-id")

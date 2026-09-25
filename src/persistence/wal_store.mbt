@@ -119,6 +119,7 @@ pub fn WalRecovery::recovered_tail(self : WalRecovery) -> Bool {
 pub struct WalStore {
   snapshot_store : SnapshotStore
   mut manifest : WalManifest
+  mut manifest_v5 : WalManifestV5?
   mut active_file : @fs.File
   mut active_path : String
   mut active_bytes : Int64
@@ -358,6 +359,7 @@ pub async fn WalStore::bootstrap(
     Ok({
       snapshot_store,
       manifest,
+      manifest_v5: None,
       active_file,
       active_path,
       active_bytes: 40L,
@@ -494,6 +496,7 @@ pub async fn WalStore::recover(
         {
           snapshot_store,
           manifest,
+          manifest_v5: None,
           active_file,
           active_path,
           active_bytes: scan.committed_bytes.to_int64(),
@@ -551,7 +554,11 @@ async fn WalStore::rotate(self : WalStore) -> Result[Unit, PersistenceError] {
         segment_id: next_id,
         first_lsn: self.committed_lsn + 1L,
         previous_lsn: self.committed_lsn,
-        logical_schema: 3,
+        logical_schema: if self.manifest_v5 is Some(_) {
+          mqtt5_wal_logical_schema
+        } else {
+          3
+        },
       }) {
       Ok(value) => value
       Err(error) => raise error
@@ -572,9 +579,26 @@ async fn WalStore::rotate(self : WalStore) -> Result[Unit, PersistenceError] {
       active_segment_id: next_id,
       active_start_lsn: self.committed_lsn + 1L,
     }
-    let encoded = match encode_wal_manifest(next_manifest) {
-      Ok(value) => value
-      Err(error) => raise error
+    let next_v5 = self.manifest_v5.map(value => WalManifestV5::{
+      generation: next_manifest.generation,
+      checkpoint_generation: next_manifest.checkpoint_generation,
+      checkpoint_lsn: next_manifest.checkpoint_lsn,
+      sealed_segments: next_manifest.sealed_segments,
+      active_segment_id: next_manifest.active_segment_id,
+      active_start_lsn: next_manifest.active_start_lsn,
+      required_features: value.required_features,
+    })
+    let encoded = match next_v5 {
+      Some(value) =>
+        match encode_wal_manifest_v5(value) {
+          Ok(bytes) => bytes
+          Err(error) => raise error
+        }
+      None =>
+        match encode_wal_manifest(next_manifest) {
+          Ok(bytes) => bytes
+          Err(error) => raise error
+        }
     }
     self.fail_if(RotateBeforeManifest, "wal-rotate-manifest", temp_path)
     wal_write_synced_new(temp_path, encoded)
@@ -600,6 +624,7 @@ async fn WalStore::rotate(self : WalStore) -> Result[Unit, PersistenceError] {
     self.active_path = next_path
     self.active_bytes = 40L
     self.manifest = next_manifest
+    self.manifest_v5 = next_v5
     self.disk_bytes = wal_disk_usage(dir)
     Ok(())
   } catch {

@@ -18,6 +18,7 @@ pub(all) enum WalCompletion {
 pub(all) enum WalWork {
   WriteBatch(WalSubmission)
   WriteCheckpoint(WalCheckpoint)
+  WriteCheckpointV5(WalCheckpointV5)
   UpgradePolicyCapability
 }
 
@@ -71,6 +72,19 @@ pub fn WalWriter::submit_checkpoint(
     return false
   }
   self.requests.try_put(WriteCheckpoint(checkpoint)) catch {
+    _ => false
+  }
+}
+
+///|
+pub fn WalWriter::submit_checkpoint_v5(
+  self : WalWriter,
+  checkpoint : WalCheckpointV5,
+) -> Bool {
+  if self.closed || self.fenced || self.stopped {
+    return false
+  }
+  self.requests.try_put(WriteCheckpointV5(checkpoint)) catch {
     _ => false
   }
 }
@@ -189,6 +203,37 @@ pub async fn WalWriter::run(self : WalWriter, wake : () -> Unit) -> Unit {
         wake()
         let result = @async.protect_from_cancel(() => {
           self.store.publish_checkpoint(checkpoint, preempt=() => {
+            if self.preempted_work is Some(_) {
+              return true
+            }
+            let queued = self.requests.try_get() catch { _ => None }
+            match queued {
+              Some(value) => {
+                self.preempted_work = Some(value)
+                true
+              }
+              None => false
+            }
+          })
+        })
+        self.checkpoint_active = false
+        match result {
+          Ok(_) => CheckpointPublished(checkpoint.lsn, checkpoint.generation)
+          Err(FileSystem(operation="wal-checkpoint-preempted", ..)) =>
+            CheckpointFailed("preempted", false)
+          Err(error) => {
+            if self.store.is_fenced() {
+              self.fenced = true
+            }
+            CheckpointFailed(error.category(), self.fenced)
+          }
+        }
+      }
+      WriteCheckpointV5(checkpoint) => {
+        self.checkpoint_active = true
+        wake()
+        let result = @async.protect_from_cancel(() => {
+          self.store.publish_checkpoint_v5(checkpoint, preempt=() => {
             if self.preempted_work is Some(_) {
               return true
             }
