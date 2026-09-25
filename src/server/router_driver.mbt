@@ -466,7 +466,23 @@ fn RouterDriver::dispatch(
     index = index + 1
     match action {
       SendPacket(send) =>
-        if self.sinks.get(send.connection_id) is Some(sink) {
+        if self.runtime.v5_active.contains(send.connection_id) {
+          if self.sinks.get(send.connection_id) is Some(sink) {
+            let packet = match legacy_packet_to_v5(send.packet) {
+              Some(value) => value
+              None => {
+                worklist.append(
+                  self.transport_failed(send.connection_id, EncodeFailure),
+                )
+                continue
+              }
+            }
+            if self.encode_v5_and_queue(sink, packet, None, send.connection_id)
+              is Err(reason) {
+              worklist.append(self.transport_failed(send.connection_id, reason))
+            }
+          }
+        } else if self.sinks.get(send.connection_id) is Some(sink) {
           match
             self.encode_and_queue(
               sink,
@@ -510,6 +526,7 @@ fn RouterDriver::dispatch(
             sink,
             send.packet,
             send.close_reason,
+            send.connection_id,
           )
           if send.packet is @protocol.PacketV5::Connack5(connack) {
             sink.resolve_handshake(result is Ok(_) && connack.reason == 0)
@@ -862,19 +879,48 @@ fn RouterDriver::encode_v5_and_queue(
   sink : TransportSink,
   packet : @protocol.PacketV5,
   close : CloseReason?,
+  connection_id : ConnectionId,
 ) -> Result[Unit, CloseReason] {
-  if packet is @protocol.PacketV5::Publish5(_) {
-    return Err(EncodeFailure)
+  let authorization : OutboundAuthorization? = match packet {
+    Publish5(publish) => {
+      let client_id = match self.runtime.connections.get(connection_id) {
+        Some({ phase: Active(value), .. }) => value
+        _ => return Err(PolicyRevoked)
+      }
+      let topic = match @topic.TopicName::new(publish.topic) {
+        Ok(value) => value
+        Err(_) => return Err(EncodeFailure)
+      }
+      let value : OutboundAuthorization = {
+        connection_id,
+        client_id,
+        session_incarnation: self.runtime
+        .broker_state()
+        .policy_session_incarnation(client_id),
+        topic,
+      }
+      if !self.runtime.authorize_outbound(value) {
+        return Err(PolicyRevoked)
+      }
+      Some(value)
+    }
+    _ => None
   }
+  let peer_limit = self.runtime.v5_active
+    .get(connection_id)
+    .map(plan => plan.peer_max_packet_bytes)
+    .unwrap_or(self.runtime.config.max_packet_size())
   let frame = match
     @protocol.encode_v5(
       packet,
       @protocol.PacketDirection::ServerToClient,
-      self.runtime.config.max_packet_size(),
+      peer_limit,
     ) {
     Ok(value) => value
     Err(_) => return Err(EncodeFailure)
   }
+  let charged = frame.length().to_int64() +
+    authorization.map(value => value.cost()).unwrap_or(0L)
   let prepared = if packet is @protocol.PacketV5::Connack5(_) {
     let value = sink.handshake
     sink.handshake = None
@@ -885,15 +931,22 @@ fn RouterDriver::encode_v5_and_queue(
   let reservation = match prepared {
     Some((frame_reservation, scratch)) => {
       scratch.release().unwrap()
+      if frame_reservation.ticket.replace([
+          frame_reservation.pool.allocation(charged),
+        ])
+        is Err(_) {
+        frame_reservation.ticket.release().unwrap()
+        return Err(SlowConsumer)
+      }
       Some(frame_reservation)
     }
     None =>
-      match sink.reserve_frame(frame.length().to_int64(), true) {
+      match sink.reserve_frame(charged, authorization is None) {
         Ok(value) => value
         Err(_) => return Err(SlowConsumer)
       }
   }
-  if sink.enqueue_frame(frame, reservation, close) {
+  if sink.enqueue_frame(frame, reservation, close, authorization?) {
     Ok(())
   } else {
     Err(SlowConsumer)

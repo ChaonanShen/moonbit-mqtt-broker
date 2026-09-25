@@ -42,10 +42,16 @@ import {
 } for "test"
 
 options(
-  "native-stub": [ "websocket_native.c", "tls_material_native.c" ],
+  "native-stub": [
+    "websocket_native.c",
+    "tls_material_native.c",
+    "mqtt5_identity_native.c",
+  ],
   targets: {
     "connection_server.mbt": [ "native" ],
     "websocket_native.mbt": [ "native" ],
+    "mqtt5_identity_native.mbt": [ "native" ],
+    "mqtt5_identity_native_test.mbt": [ "native" ],
     "tls_material_native.mbt": [ "native" ],
     "reload_tls_prepare.mbt": [ "native" ],
     "reload_prepare.mbt": [ "native" ],

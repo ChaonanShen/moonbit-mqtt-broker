@@ -20,6 +20,8 @@ pub struct BrokerRuntime {
   config : ServerConfig
   broker_state : @router.BrokerState
   connections : Map[ConnectionId, ConnectionMeta]
+  v5_pending : Map[ConnectionId, PreparedMqtt5Connect]
+  v5_active : Map[ConnectionId, PreparedMqtt5Connect]
   active_by_client : Map[@session.ClientId, ConnectionId]
   mut security : @security.SecurityPolicy
   mut policy_epoch : Int64
@@ -57,6 +59,8 @@ pub fn BrokerRuntime::new(
     broker_state: initial_state,
     connections: Map([]),
     active_by_client: Map([]),
+    v5_pending: Map([]),
+    v5_active: Map([]),
     security,
     policy_epoch: initial_policy_epoch,
     retired_security: Map([]),
@@ -317,17 +321,38 @@ fn BrokerRuntime::reject_connect(
       reason=connect_return_code_name(code),
     ),
   )
+  let v5_plan = self.v5_pending.get(connection_id)
+  self.v5_pending.remove(connection_id)
   let will_ticket = self.will_tickets.get(connection_id)
   self.will_tickets.remove(connection_id)
   defer release_optional(will_ticket)
   self.connections.remove(connection_id)
-  [
-    SendPacketThenClose({
-      connection_id,
-      packet: rejected_connack_packet(code),
-      reason: ConnectRejected,
-    }),
-  ]
+  match v5_plan {
+    Some(plan) =>
+      if plan.peer_max_packet_bytes < 5 {
+        [CloseTransport({ connection_id, reason: ConnectRejected })]
+      } else {
+        [
+          SendMqtt5({
+            connection_id,
+            packet: Connack5({
+              session_present: false,
+              reason: mqtt5_rejection_reason(code),
+              properties: [],
+            }),
+            close_reason: Some(ConnectRejected),
+          }),
+        ]
+      }
+    None =>
+      [
+        SendPacketThenClose({
+          connection_id,
+          packet: rejected_connack_packet(code),
+          reason: ConnectRejected,
+        }),
+      ]
+  }
 }
 
 ///|
@@ -461,6 +486,8 @@ fn BrokerRuntime::terminate(
   }
   let will_ticket = self.will_tickets.get(connection_id)
   self.will_tickets.remove(connection_id)
+  self.v5_pending.remove(connection_id)
+  self.v5_active.remove(connection_id)
   defer release_optional(will_ticket)
   self.connections.remove(connection_id)
   if meta.phase is Active(_) {
@@ -746,6 +773,7 @@ fn BrokerRuntime::finalize_connect(
   received_at_ms : Int64,
   principal : @security.Principal,
 ) -> Array[RuntimeAction] {
+  let v5_plan = self.v5_pending.get(connection_id)
   let accepted_at_ms = match self.connections.get(connection_id) {
     Some(meta) => meta.accepted_at_ms
     None => received_at_ms
@@ -839,13 +867,39 @@ fn BrokerRuntime::finalize_connect(
       })
     }
   }
-  let mode = if packet.clean_session {
+  if v5_plan is Some(plan) &&
+    @protocol.encode_v5(
+      mqtt5_connack(plan, self.config, false),
+      @protocol.ServerToClient,
+      plan.peer_max_packet_bytes,
+    )
+    is Err(_) {
+    return self.reject_connect(connection_id, ServerUnavailable)
+  }
+  let mode = if v5_plan is Some(plan) {
+    if plan.retention == @session.DropOnClose {
+      @session.Clean
+    } else {
+      @session.Persistent
+    }
+  } else if packet.clean_session {
     @session.SessionMode::Clean
   } else {
     @session.SessionMode::Persistent
   }
-  let activation = match
-    self.broker_state.prepare_activation(client_id, mode, principal) {
+  let activation = match v5_plan {
+    Some(plan) =>
+      self.broker_state.prepare_activation(
+        client_id,
+        mode,
+        principal,
+        v5_resume=plan.resume_decision == @session.ResumeExisting,
+        v5_retention=plan.retention,
+        now_mono_ms=@budget.monotonic_ms(),
+      )
+    None => self.broker_state.prepare_activation(client_id, mode, principal)
+  }
+  let activation = match activation {
     Err(_) => return self.reject_connect(connection_id, ServerUnavailable)
     Ok(activation) => activation
   }
@@ -886,7 +940,9 @@ fn BrokerRuntime::finalize_connect(
     phase: Active(client_id),
     accepted_at_ms,
     last_control_at_ms: received_at_ms,
-    keep_alive_seconds: packet.keep_alive,
+    keep_alive_seconds: v5_plan
+    .map(plan => plan.keep_alive_seconds)
+    .unwrap_or(packet.keep_alive),
     will: stored_will,
     principal: Some(principal),
     policy_epoch: self.policy_epoch,
@@ -902,12 +958,24 @@ fn BrokerRuntime::finalize_connect(
       snapshot_revision=self.broker_state.snapshot_revision().to_string(),
     ),
   )
-  actions.push(
-    SendPacket({
-      connection_id,
-      packet: accepted_connack_packet(session_present),
-    }),
-  )
+  if v5_plan is Some(plan) {
+    self.v5_pending.remove(connection_id)
+    self.v5_active.set(connection_id, plan)
+    actions.push(
+      SendMqtt5({
+        connection_id,
+        packet: mqtt5_connack(plan, self.config, session_present),
+        close_reason: None,
+      }),
+    )
+  } else {
+    actions.push(
+      SendPacket({
+        connection_id,
+        packet: accepted_connack_packet(session_present),
+      }),
+    )
+  }
   actions.append(self.map_broker_actions(session_actions))
   if old_will is Some(will) {
     actions.append(self.publish_stored_will(client_id, will))
