@@ -87,3 +87,21 @@ Run scripts/verify-mqtt5-docker.sh to check the unit suite and the network
 matrix across off, snapshot and strict modes and TCP/TLS/WS/WSS. The test
 prints its remote MQTT5_EVIDENCE_DIR. See [compatibility](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/compatibility.md)
 and [persistence](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/persistence.md) for other broker guarantees.
+
+## Fixed-hardware performance comparison
+
+The baseline comparison is a separate user-run test because CI runners do
+not provide a stable storage/CPU baseline. Put the released 0.3.0 executable
+on the remote host, then run the paired three-round benchmark against the
+candidate executable on the same host. The script checks 3.1.1 throughput
+ratio at least 0.90 and ACK P99 no higher than the larger of baseline times
+1.25 or baseline plus 5 ms. It reports MQTT 5 strict ACK latency separately.
+
+~~~bash
+BASELINE_BROKER=/absolute/path/to/0.3.0/broker   PERF_WARM_SECONDS=10 PERF_MEASURE_SECONDS=60 PERF_REPEATS=3   scripts/run-mqtt5-performance.sh
+~~~
+
+The runner prints a unique RUN_DIR with raw ACK samples, RSS time series,
+binary hashes, environment details, summary thresholds, logs, timestamps
+and exit code. A short PERF_FIXTURE=1 run checks wiring only; it does not
+establish performance acceptance.

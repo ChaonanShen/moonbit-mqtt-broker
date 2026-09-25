@@ -149,6 +149,41 @@ async function openRawV5(port, clientId, properties = {}, clean = true) {
   assert.equal(ack.reasonCode, 0)
   return { socket, parser, queue, next, send, ack }
 }
+async function checkFraming(port, mode) {
+  const connect = mqttPacket.generate({
+    cmd: 'connect', protocolVersion: 5,
+    clientId: 'mqtt5-sticky-' + mode, clean: true,
+    keepalive: 10, properties: {}
+  }, { protocolVersion: 5 })
+  const ping = mqttPacket.generate(
+    { cmd: 'pingreq' }, { protocolVersion: 5 }
+  )
+  const socket = net.connect(port, '127.0.0.1')
+  const parser = mqttPacket.parser({ protocolVersion: 5 })
+  const packets = []
+  socket.on('data', bytes => parser.parse(bytes))
+  parser.on('packet', packet => packets.push(packet))
+  await new Promise(resolve => socket.once('connect', resolve))
+  socket.write(Buffer.concat([connect, ping]))
+  for (let index = 0; index < 100 && packets.length < 2; index++) {
+    await sleep(20)
+  }
+  assert.equal(packets[0]?.cmd, 'connack')
+  assert.equal(packets[1]?.cmd, 'pingresp')
+  socket.destroy()
+  const split = net.connect(port, '127.0.0.1')
+  const splitParser = mqttPacket.parser({ protocolVersion: 5 })
+  const reply = new Promise(resolve => splitParser.once('packet', resolve))
+  split.on('data', bytes => splitParser.parse(bytes))
+  await new Promise(resolve => split.once('connect', resolve))
+  for (const byte of connect) split.write(Buffer.from([byte]))
+  assert.equal((await Promise.race([
+    reply,
+    sleep(5000).then(() => { throw new Error('split CONNECT timeout') })
+  ])).cmd, 'connack')
+  split.destroy()
+  console.log('M-T01 ' + mode + ' split and sticky MQTT5 framing')
+}
 async function checkMalformedConnect(port) {
   const malformed = Buffer.from('101100044d5154540502000003210000000161', 'hex')
   const reply = await rawPacket(port, malformed)
@@ -797,6 +832,40 @@ async function checkDisconnectExpiry(port, mode) {
   resumed.socket.destroy()
   console.log('M-T08 ' + mode + ' DISCONNECT Session Expiry override')
 }
+async function checkCrossProtocolExpiry(port) {
+  const topic = 'mqtt5/to-v311'
+  const [publisher] = await connectClient(port, {
+    clientId: 'mqtt5-v311-expiry-publisher'
+  })
+  await publish(publisher, topic, 'visible', {
+    qos: 1, retain: true,
+    properties: {
+      contentType: 'text/plain',
+      messageExpiryInterval: 1
+    }
+  })
+  const [legacy] = await connectClient(port, {
+    protocolVersion: 4, clientId: 'mqtt5-v311-first'
+  })
+  const first = nextMessage(legacy)
+  await subscribe(legacy, topic, { qos: 1 })
+  const delivered = await first
+  assert.equal(delivered.payload, 'visible')
+  assert.equal(delivered.packet.properties, undefined)
+  await closeClient(legacy)
+  await sleep(1300)
+  const [late] = await connectClient(port, {
+    protocolVersion: 4, clientId: 'mqtt5-v311-late'
+  })
+  let stale = 0
+  late.on('message', () => { stale++ })
+  await subscribe(late, topic, { qos: 1 })
+  await sleep(150)
+  assert.equal(stale, 0)
+  await closeClient(late)
+  await closeClient(publisher)
+  console.log('M-T13 V5-to-V311 strips properties but keeps TTL')
+}
 async function checkWillDelay(port) {
   const [subscriber] = await connectClient(port, {
     clientId: 'mqtt5-will-observer'
@@ -919,6 +988,7 @@ async function runMode(mode) {
   let running = await startBroker(mode, port, dataDir, logPath)
   try {
     await checkMalformedConnect(port)
+    if (mode !== 'snapshot') await checkFraming(port, mode)
     await checkSharedUnavailable(port)
     await checkPubSub(port, mode)
     await checkMessageExpiry(port, mode)
@@ -936,6 +1006,7 @@ async function runMode(mode) {
     await checkDisconnectExpiry(port, mode)
     await checkCrossVersion(port, mode)
     if (mode === 'strict') {
+      await checkCrossProtocolExpiry(port)
       await checkWillDelay(port)
       await checkWillCancellation(port)
       await checkWillTakeoverAndDisconnect04(port)
@@ -956,6 +1027,32 @@ async function runMode(mode) {
     await checkRetained(port, mode)
   } finally {
     if (running.child.exitCode === null) await stopBroker(running)
+  }
+}
+async function runDisabled() {
+  const port = await freePort()
+  const dir = path.join(evidenceRoot, 'disabled')
+  fs.mkdirSync(dir, { recursive: true })
+  const running = await startBroker(
+    'off', port, '', path.join(dir, 'broker.log'),
+    [brokerPath, '--listen', '127.0.0.1:' + port]
+  )
+  try {
+    const rejected = await rawPacket(port, mqttPacket.generate({
+      cmd: 'connect', protocolVersion: 5,
+      clientId: 'mqtt5-disabled', clean: true,
+      keepalive: 10, properties: {}
+    }, { protocolVersion: 5 }))
+    assert.equal(rejected.cmd, 'connack')
+    assert.equal(rejected.reasonCode, 0x84)
+    const [legacy, accepted] = await connectClient(port, {
+      protocolVersion: 4, clientId: 'mqtt5-disabled-v311'
+    })
+    assert.equal(accepted.returnCode, 0)
+    await closeClient(legacy)
+    console.log('M-T01/M-T26 default-off V5 reject and V311 continuity')
+  } finally {
+    await stopBroker(running)
   }
 }
 async function runReceiveLimit() {
@@ -1186,6 +1283,7 @@ async function runTransportMatrix() {
   }
 }
 try {
+  await runDisabled()
   for (const mode of ['off', 'snapshot', 'strict']) await runMode(mode)
   await runTransportMatrix()
   await runReceiveLimit()

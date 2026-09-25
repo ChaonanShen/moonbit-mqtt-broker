@@ -1,13 +1,15 @@
 import mqtt from 'mqtt'
 
 const [stage, port] = process.argv.slice(2)
+const mqtt5Reload = process.env.MQTT5_RELOAD === '1'
 if (!['seed', 'verify'].includes(stage) || !port) {
   throw new Error('usage: node reload_durability.mjs seed|verify PORT')
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const connect = clientId => new Promise((resolve, reject) => {
   const client = mqtt.connect('mqtt://127.0.0.1:' + port, {
-    clientId, clean: false, protocolVersion: 4,
+    clientId, clean: false, protocolVersion: mqtt5Reload ? 5 : 4,
+    ...(mqtt5Reload ? { properties: { sessionExpiryInterval: 30 } } : {}),
     reconnectPeriod: 0, connectTimeout: 3000
   })
   client.once('error', reject)

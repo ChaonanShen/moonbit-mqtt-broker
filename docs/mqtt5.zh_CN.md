@@ -76,3 +76,18 @@ off 只保留内存状态。snapshot 恢复最近一次完成写入的 V5 快照
 运行 scripts/verify-mqtt5-docker.sh 可验证单测、三种持久化模式与
 TCP/TLS/WS/WSS 网络矩阵。脚本输出远端 MQTT5_EVIDENCE_DIR。
 其他保证见[兼容性](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/compatibility.zh_CN.md)与[持久化](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/persistence.zh_CN.md)。
+
+## 固定硬件性能对照
+
+CI runner 的 CPU/磁盘条件不稳定，0.3.0 基线对照由用户在同一远端硬件
+运行。将 0.3.0 可执行文件放在远端，再对候选运行三轮配对测试。
+3.1.1 吞吐比门槛为 0.90；ACK P99 不高于
+max(基线×1.25，基线+5ms)。MQTT 5 strict ACK 延迟单独报告。
+
+~~~bash
+BASELINE_BROKER=/absolute/path/to/0.3.0/broker   PERF_WARM_SECONDS=10 PERF_MEASURE_SECONDS=60 PERF_REPEATS=3   scripts/run-mqtt5-performance.sh
+~~~
+
+脚本输出唯一 RUN_DIR，保存原始 ACK 样本、RSS 时序、二进制哈希、环境、
+阈值汇总、日志、时间及退出码。PERF_FIXTURE=1 只验证夹具接线，
+不能作为正式性能通过。

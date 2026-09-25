@@ -474,3 +474,9 @@ Broker 镜像不安装客户端测试库。
 启用 V5 的数据目录采用 V5 快照或 schema 6 WAL 权威格式。发行证据需记录
 受测 SHA 及备份/回滚边界。MQTT 5 验证不替代既有 strict soak、故障注入
 与正式发布验收。
+
+可选的 RELEASE_SOAK=1 路径执行 strict 模式 600 秒、至少 20,000 条
+已接纳消息的 MQTT 3.1.1/MQTT 5 混合 QoS 1/2 和 V5 属性负载。
+2 秒/20 条短夹具只用于验证接线。固定硬件的 0.3.0 性能对照使用
+scripts/run-mqtt5-performance.sh，与 CI 门禁分开；详见
+[MQTT 5 支持说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.zh_CN.md)。

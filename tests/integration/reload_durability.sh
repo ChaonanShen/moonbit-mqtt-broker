@@ -30,6 +30,10 @@ cleanup() {
 }
 trap cleanup EXIT
 port="$(node -e 'const n=require("net");const s=n.createServer();s.listen(0,"127.0.0.1",()=>{console.log(s.address().port);s.close()})')"
+protocol_settings=""
+if [[ -v MQTT5_RELOAD && "$MQTT5_RELOAD" == "1" ]]; then
+  protocol_settings=$'[protocol]\nmqtt5_enabled = true\nmax_delayed_wills = 128'
+fi
 write_config() {
   cat >"$work/config.toml" <<EOF
 [server]
@@ -37,6 +41,7 @@ listen = "127.0.0.1:$port"
 [broker]
 max_sessions = 16
 max_subscriptions_total = 32
+$protocol_settings
 [persistence]
 mode = "strict"
 data_dir = "$work/data"

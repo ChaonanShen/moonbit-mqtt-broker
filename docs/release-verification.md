@@ -432,3 +432,10 @@ A V5-enabled data directory uses V5 snapshot or schema-6 WAL authority.
 The tested artifact SHA and the backup/rollback boundary must be recorded
 with the distribution evidence. MQTT 5 verification does not replace the
 existing strict soak, fault injection or release acceptance gates.
+
+The optional RELEASE_SOAK=1 path runs the strict 600-second, 20,000-publication
+mixed MQTT 3.1.1/MQTT 5 soak with QoS 1/2 and V5 properties. A short
+two-second, 20-publication fixture checks the test wiring only. The
+fixed-hardware 0.3.0 performance comparison uses
+scripts/run-mqtt5-performance.sh and is kept separate from the CI gate;
+see [MQTT 5 support](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.md).

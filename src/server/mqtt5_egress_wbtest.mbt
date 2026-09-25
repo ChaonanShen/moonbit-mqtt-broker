@@ -23,6 +23,7 @@ async test "C-T21 expired fresh MQTT5 write reports not started" {
   @async.with_task_group() <| group => {
     let config = ServerConfig::default()
     let state = @router.BrokerState::new(config.broker_config())
+    let baseline = state.resource_ledger().occupied()
     let data : @async.Queue[DriverEvent] = @async.Queue(kind=Blocking(4))
     let bus = EventBus::new(config, state.resource_ledger(), data).unwrap()
     let sink = TransportSink::new(4)
@@ -88,6 +89,7 @@ async test "C-T21 expired fresh MQTT5 write reports not started" {
     assert_eq(client.read_some(), None)
     bus.close()
     data.close(clear=true)
+    assert_eq(state.resource_ledger().occupied(), baseline)
   }
 }
 
