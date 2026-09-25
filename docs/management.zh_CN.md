@@ -1,6 +1,6 @@
 # 管理 API
 
-**中文** | [English](management.md)
+**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.md)
 
 管理端口仅接受 `127.0.0.1:PORT` 的 HTTP/1.1。开启管理功能后即可使用
 健康检查、Prometheus 和状态摘要；明细与操作有各自的开关，默认关闭。
@@ -41,7 +41,7 @@ max_bytes_total = 33554432
 将父池设为 32 MiB；只读部署仍沿用 8 MiB 默认值。请求、缓存、索引、查询、
 游标、Operation 和审计共享一个普通资源父池，也受 Broker 全局普通预算
 约束。`--check-config` 会在监听前校验参数、依赖关系和令牌文件。
-完整键见[配置](configuration.zh_CN.md)和[资源预算](resource-budgets.md)。
+完整键见[配置](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.zh_CN.md)和[资源预算](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md)。
 
 ## 路由
 

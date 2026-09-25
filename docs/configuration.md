@@ -1,6 +1,6 @@
 # Configuration
 
-[中文](configuration.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.zh_CN.md) | **English**
 
 Precedence is CLI over TOML over built-in defaults. The Broker uses maintained
 `bobzhang/toml`; malformed TOML, duplicate keys, unknown sections/keys, and
@@ -80,7 +80,7 @@ The disk maximum must exceed the reserve by at least one 64 MiB segment.
 The default WAL transaction encoding cap is 4 MiB; an oversized persistent
 result is refused before append. The batch cap is 64 transactions or 8 MiB,
 with an approximately 2 ms collection delay. Checkpoints are attempted every
-60 seconds. See [strict commit and recovery](persistence.md#strict-wal-mode).
+60 seconds. See [strict commit and recovery](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.md#strict-wal-mode).
 `--print-effective-config` also applies CLI overrides and prints canonical TOML
 with private-key/password-file values replaced by `<redacted>`.
 
@@ -91,7 +91,7 @@ absolute, private version 1 bundle manifest. The manifest lists the effective
 config and every referenced password, ACL, and MQTT TLS/WSS certificate/key
 file, each with its absolute path and SHA-256 digest. Publish the complete
 material set and manifest before sending SIGHUP or requesting a
-[config-admin reload](management.md). `scripts/build-config-bundle.sh`
+[config-admin reload](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.md). `scripts/build-config-bundle.sh`
 stages an immutable version directory and manifest; its four arguments are
 `SOURCE_DIR VERSION_DIR CONFIG_TARGET MANIFEST_TARGET`. The target paths must
 match the paths the running Broker reads. Keep prior material available for
@@ -131,8 +131,8 @@ A no-change request does not advance the config epoch. SIGHUP works with
 management disabled; the HTTP route requires an enabled management listener
 and a `config_admin` token. Existing TLS connections retain their material
 lease while new handshakes use the new generation. See
-[security revocation](security.md#live-security-revocation) and
-[persistence recovery](persistence.md#reload-and-recovery).
+[security revocation](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.md#live-security-revocation) and
+[persistence recovery](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.md#reload-and-recovery).
 
 ## Named MQTT listeners and WS/WSS
 
@@ -240,7 +240,7 @@ draining native work after the 10000 ms grace observation point.
 
 ## Byte budgets and rate admission
 
-See the [accounting and ownership contract](resource-budgets.md). Bytes are logical quotas, not RSS limits; existing count limits also apply.
+See the [accounting and ownership contract](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md). Bytes are logical quotas, not RSS limits; existing count limits also apply.
 
 ```toml
 [limits]
@@ -310,7 +310,7 @@ Unless explicitly configured, retained-message and per-connection Will limits fo
 ## Management listener
 
 `[management]` is optional and disabled by default. See the
-[management API guide](management.md) for token generation and route behavior.
+[management API guide](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.md) for token generation and route behavior.
 CLI switches use the same key with a `--management-` prefix and hyphens.
 For example, `[management] snapshot_max_age_ms` maps to
 `--management-snapshot-max-age-ms`. CLI overrides TOML.
@@ -377,5 +377,5 @@ is 256 bytes per maximum Session, 192 per MQTT connection, 192 per maximum
 subscription and 128 per maximum retained entry. The default capacities
 (1024, 128, 16384, 1024) require 3,563,520 bytes. A smaller
 `max_index_bytes` fails startup; it does not silently reduce MQTT limits.
-See [management API](management.md) for the runtime completion and pagination
+See [management API](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.md) for the runtime completion and pagination
 contracts.

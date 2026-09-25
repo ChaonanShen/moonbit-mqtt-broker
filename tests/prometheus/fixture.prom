@@ -1,6 +1,6 @@
 # HELP moonbit_mqtt_broker_build_info Broker build information
 # TYPE moonbit_mqtt_broker_build_info gauge
-moonbit_mqtt_broker_build_info{version="0.2.0",target="native"} 1
+moonbit_mqtt_broker_build_info{version="0.3.0",target="native"} 1
 # HELP moonbit_mqtt_broker_uptime_seconds Process uptime in seconds
 # TYPE moonbit_mqtt_broker_uptime_seconds gauge
 moonbit_mqtt_broker_uptime_seconds 2

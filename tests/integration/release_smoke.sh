@@ -17,7 +17,7 @@ grep -q '^Usage: broker \[OPTIONS\]$' <<<"${help_output}"
 grep -q -- '--max-pending-qos1-total' <<<"${help_output}"
 grep -q -- '--snapshot-retry-ms' <<<"${help_output}"
 grep -q -- '--tls-handshake-timeout-ms' <<<"${help_output}"
-[[ "${version_output}" = '0.2.0' ]]
+[[ "${version_output}" = '0.3.0' ]]
 [[ -z "$(find "${side_effect_dir}" -mindepth 1 -print -quit)" ]]
 
 examples/basic_pubsub.sh

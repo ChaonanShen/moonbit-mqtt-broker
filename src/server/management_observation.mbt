@@ -71,7 +71,7 @@ pub fn RouterDriver::capture_observation(
   }
   {
     boot_id: context.boot_id,
-    version: "0.2.0",
+    version: "0.3.0",
     boot_monotonic_ms: context.boot_monotonic_ms,
     captured_monotonic_ms: now_monotonic_ms,
     captured_unix_ms: now_unix_ms,

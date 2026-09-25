@@ -23,7 +23,7 @@ struct ListenerDraft {
 }
 
 ///|
-const RELEASE_VERSION : String = "0.2.0"
+const RELEASE_VERSION : String = "0.3.0"
 
 ///|
 fn print_help() -> Unit {

@@ -2,7 +2,7 @@
 fn sample_observation() -> ObservationSnapshot {
   {
     boot_id: "fixture-boot",
-    version: "0.2.0",
+    version: "0.3.0",
     boot_monotonic_ms: 0L,
     captured_monotonic_ms: 1000L,
     captured_unix_ms: 123000L,

@@ -1,6 +1,6 @@
 # 配置
 
-**中文** | [English](configuration.md)
+**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.md)
 
 配置优先级为：命令行参数 > TOML > 内置默认值。Broker 使用维护中的
 `bobzhang/toml`；TOML 格式错误、重复键、未知 section/键和类型错误均为
@@ -77,7 +77,7 @@ wal_disk_reserve_bytes = 268435456
 
 磁盘硬上限须比保留空间至少多一个 64 MiB 段。单事务 delta 默认最多
 4 MiB，超出的持久结果在追加前拒绝；批次上限 64 个事务或 8 MiB，收集延迟
-约 2 ms。每 60 秒尝试 checkpoint。详见[严格提交与恢复](persistence.zh_CN.md#strict-wal-模式)。
+约 2 ms。每 60 秒尝试 checkpoint。详见[严格提交与恢复](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.zh_CN.md#strict-wal-模式)。
 
 `--print-effective-config` 还会应用命令行覆盖，并以规范 TOML 输出最终配置；
 私钥和密码文件的值会替换为 `<redacted>`。
@@ -87,7 +87,7 @@ wal_disk_reserve_bytes = 268435456
 热更新默认关闭。启动时使用绝对路径的 `--config` 和私有的版本 1
 bundle manifest。manifest 列出有效配置及其引用的密码库、ACL、MQTT
 TLS/WSS 证书与私钥的绝对路径和 SHA-256 摘要。完整发布材料和 manifest
-后，再发 SIGHUP 或调用[配置管理热更新](management.zh_CN.md)。
+后，再发 SIGHUP 或调用[配置管理热更新](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.zh_CN.md)。
 `scripts/build-config-bundle.sh` 可生成不可变版本目录与 manifest，
 四个参数依次是 `SOURCE_DIR VERSION_DIR CONFIG_TARGET MANIFEST_TARGET`；
 目标路径必须与运行中 Broker 读取的路径一致。保留旧材料以便回滚和
@@ -123,8 +123,8 @@ Broker 在准备候选前捕获并核验整个 bundle；无效或读取中变化
 混合热字段与需重启字段的修改会整次拒绝；无变化请求不推进配置代际。
 管理关闭时 SIGHUP 仍可用；HTTP 路由要求已启用管理监听器和
 `config_admin` 令牌。旧 TLS 连接持有原材料 lease，新握手使用新代际。
-详见[安全撤权](security.zh_CN.md#在线安全撤权)及
-[持久化恢复](persistence.zh_CN.md#热更新与恢复)。
+详见[安全撤权](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.zh_CN.md#在线安全撤权)及
+[持久化恢复](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.zh_CN.md#热更新与恢复)。
 
 ## 具名 MQTT 监听器与 WS/WSS
 
@@ -227,7 +227,7 @@ grace 观测点，也会继续 drain 原生任务，不提前释放其内存。
 
 ## 资源预算与限流
 
-[完整计费与生命周期契约](resource-budgets.md)。字节是逻辑费用，不是 RSS 上限；现有条数限制同时生效。
+[完整计费与生命周期契约](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md)。字节是逻辑费用，不是 RSS 上限；现有条数限制同时生效。
 
 ```toml
 [limits]
@@ -297,7 +297,7 @@ per_ip_enabled = true
 ## 管理端口
 
 `[management]` 可选，默认关闭。令牌生成与路由语义见
-[管理 API 指南](management.zh_CN.md)。CLI 名称是在同一键名前加
+[管理 API 指南](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.zh_CN.md)。CLI 名称是在同一键名前加
 `--management-` 并把下划线换成连字符。例如
 `[management] snapshot_max_age_ms` 对应
 `--management-snapshot-max-age-ms`。CLI 优先于 TOML。
@@ -361,4 +361,4 @@ Operation、命令和审计容量。逻辑索引费用为每最大 Session 256 �
 每 MQTT 连接 192、每最大订阅 192、每最大 retained 条目 128。默认
 容量（1024、128、16384、1024）需要 3,563,520 字节。
 `max_index_bytes` 不足会使启动失败，不会暗中降低 MQTT 限额。
-运行时完成与分页语义见[管理 API](management.zh_CN.md)。
+运行时完成与分页语义见[管理 API](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.zh_CN.md)。
