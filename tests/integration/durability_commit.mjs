@@ -6,6 +6,7 @@ import mqtt from 'mqtt'
 const [mode, url, armPath, markerPath, releasePath, outputPath] = process.argv.slice(2)
 assert.ok(mode === 'barrier' || mode === 'verify')
 const port = Number(new URL(url).port)
+const mqtt5Case = process.env.MQTT5_CASE === '1'
 const clients = new Set()
 const overall = setTimeout(() => {
   console.error(`DURABILITY_COMMIT_TIMEOUT mode=${mode}`)
@@ -15,7 +16,9 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 function connect(clientId, clean, onMessage = () => {}) {
   return new Promise((resolve, reject) => {
     const client = mqtt.connect(url, {
-      protocolVersion: 4, clientId, clean, reconnectPeriod: 0,
+      protocolVersion: mqtt5Case ? 5 : 4, clientId, clean, reconnectPeriod: 0,
+      ...(mqtt5Case && !clean
+        ? { properties: { sessionExpiryInterval: 30 } } : {}),
       connectTimeout: 3000
     })
     clients.add(client)
@@ -92,7 +95,10 @@ try {
     fs.writeFileSync(armPath, 'arm\n')
     let acked = false
     const publishAck = new Promise((resolve, reject) => publisher.publish(
-      'durability/barrier', 'barrier-committed', { qos: 1, retain: true },
+      'durability/barrier', 'barrier-committed', {
+        qos: 1, retain: true,
+        ...(mqtt5Case ? { properties: { contentType: 'text/plain' } } : {})
+      },
       error => {
         if (error) reject(error)
         else { acked = true; resolve() }

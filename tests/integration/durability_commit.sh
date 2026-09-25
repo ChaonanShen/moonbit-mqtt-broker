@@ -29,9 +29,13 @@ trap cleanup EXIT
 start_broker() {
   local phase="$1"
   shift
+  local protocol_args=()
+  if [[ -v MQTT5_CASE && "$MQTT5_CASE" == "1" ]]; then
+    protocol_args=(--mqtt5-enabled true)
+  fi
   setsid stdbuf -oL env "$@" "$BROKER" \
     --listen "127.0.0.1:$port" --data-dir "$RUN_DIR/data" \
-    --persistence-mode strict --keep-alive-check-interval-ms 20 \
+    --persistence-mode strict "${protocol_args[@]}" --keep-alive-check-interval-ms 20 \
     >"$RUN_DIR/$phase.broker.log" 2>&1 &
   broker_pid=$!
   for _ in $(seq 1 400); do

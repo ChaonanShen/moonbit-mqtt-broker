@@ -21,3 +21,58 @@ test "C-T22 alias budget prevents uncharged definitions" {
   assert_eq(sink.propose_outbound_alias("other/topic", 4, 74), AliasNone)
   sink.close()
 }
+
+///|
+test "C-T27 alias byte quota is shared across inbound and outbound tables" {
+  let sink = TransportSink::new(4)
+  let connection_id = ConnectionId::new(61L)
+  let inbound : Map[ConnectionId, Map[Int, String]] = Map([])
+  inbound.set(connection_id, Map([(1, "in/a")]))
+  let outbound : Map[ConnectionId, Int] = Map([])
+  sink.bind_alias_budget(connection_id, inbound, outbound)
+  assert_eq(
+    sink.propose_outbound_alias("out/a", 2, 137),
+    AliasDefine(1, "out/a"),
+  )
+  sink.outbound_alias_written(AliasDefine(1, "out/a"))
+  assert_eq(outbound.get(connection_id), Some(69))
+  assert_eq(sink.propose_outbound_alias("out/b", 2, 200), AliasNone)
+  sink.close()
+  assert_eq(outbound.get(connection_id), None)
+
+  let base = ServerConfig::default()
+  let config : ServerConfig = {
+    ..base,
+    protocol_config: @config.ProtocolConfig::new(
+      mqtt5_enabled=true,
+      max_alias_bytes_per_connection=100,
+    ).unwrap(),
+  }
+  let runtime = BrokerRuntime::new(
+    config,
+    @router.BrokerState::new(config.broker_config()),
+  )
+  runtime.inbound_aliases.set(connection_id, Map([]))
+  runtime.outbound_alias_bytes.set(connection_id, 69)
+  let client_id = @session.ClientId::new("alias-budget").unwrap()
+  let packet : @protocol.PublishV5 = {
+    topic: "in/a",
+    payload: b"x",
+    qos: @protocol.QoS0,
+    packet_id: None,
+    dup: false,
+    retain: false,
+    properties: [{ id: 0x23, value: @protocol.TwoByteValue(1) }],
+  }
+  assert_eq(
+    runtime.normalize_mqtt5_publish(
+      connection_id,
+      client_id,
+      packet,
+      @budget.monotonic_ms(),
+      1000L,
+    ),
+    Err({ reason: 0x97 }),
+  )
+  assert_eq(runtime.inbound_aliases.get(connection_id).unwrap().length(), 0)
+}

@@ -810,6 +810,11 @@ fn RouterDriver::handle_scoped(
       register.sink.set_writer_gate(authorization => {
         self.runtime.authorize_outbound(authorization)
       })
+      register.sink.bind_alias_budget(
+        register.connection_id,
+        self.runtime.inbound_aliases,
+        self.runtime.outbound_alias_bytes,
+      )
       self.sinks.set(register.connection_id, register.sink)
       if self.management_connections is Some(index) {
         if index.put(register.connection_id.value().to_string())

@@ -48,6 +48,9 @@ pub struct TransportSink {
   mut deferred_command : OutboundCommand?
   max_outbound : Int
   outbound_aliases : Map[String, Int]
+  mut shared_inbound_aliases : Map[ConnectionId, Map[Int, String]]?
+  mut shared_outbound_alias_bytes : Map[ConnectionId, Int]?
+  mut alias_connection_id : ConnectionId?
   pending_outbound_aliases : Map[Int, String]
   mut next_outbound_alias : Int
   mut outbound_alias_bytes : Int
@@ -78,6 +81,9 @@ pub fn TransportSink::new(
     deferred_command: None,
     max_outbound,
     outbound_aliases: Map([]),
+    shared_inbound_aliases: None,
+    shared_outbound_alias_bytes: None,
+    alias_connection_id: None,
     pending_outbound_aliases: Map([]),
     next_outbound_alias: 1,
     outbound_alias_bytes: 0,
@@ -215,8 +221,24 @@ pub fn TransportSink::close(self : TransportSink) -> Unit {
   self.deferred_v5.clear()
   self.priority_frames.clear()
   self.deferred_command = None
+  if self.shared_outbound_alias_bytes is Some(usage) &&
+    self.alias_connection_id is Some(id) {
+    usage.remove(id)
+  }
   self.outbound_aliases.clear()
   self.pending_outbound_aliases.clear()
+}
+
+///|
+fn TransportSink::bind_alias_budget(
+  self : TransportSink,
+  connection_id : ConnectionId,
+  inbound : Map[ConnectionId, Map[Int, String]],
+  outbound_bytes : Map[ConnectionId, Int],
+) -> Unit {
+  self.alias_connection_id = Some(connection_id)
+  self.shared_inbound_aliases = Some(inbound)
+  self.shared_outbound_alias_bytes = Some(outbound_bytes)
 }
 
 ///|

@@ -35,3 +35,23 @@ test "restart scalar comparison treats implicit snapshot mode as effective" {
   )
   assert_false(implicit.same_values(strict))
 }
+
+///|
+test "C-T25 MQTT5 protocol settings require restart" {
+  let baseline = effective_restart_scalars("", [])
+  let enabled = effective_restart_scalars(
+    "[protocol]\nmqtt5_enabled = true\n",
+    [],
+  )
+  assert_false(baseline.same_values(enabled))
+  let window = effective_restart_scalars(
+    "[protocol]\nserver_receive_maximum = 1\n",
+    [],
+  )
+  assert_false(baseline.same_values(window))
+  let alias_setting = effective_restart_scalars(
+    "[protocol]\ntopic_alias_maximum = 0\n",
+    [],
+  )
+  assert_false(baseline.same_values(alias_setting))
+}

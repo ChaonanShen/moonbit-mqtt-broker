@@ -13,3 +13,4 @@ test -x "$BROKER"
 readonly BASE="${MQTT5_EVIDENCE_DIR:-${RELEASE_ARTIFACT_DIR:-$REPO_ROOT/.local/mqtt5-integration}/run-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 mkdir -p "$BASE"
 MQTT5_EVIDENCE_DIR="$BASE" timeout 180 node tests/integration/mqtt5.mjs "$BROKER"
+MQTT5_EVIDENCE_DIR="$BASE" tests/integration/mqtt5_migration.sh --prepared

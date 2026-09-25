@@ -29,6 +29,8 @@ mode = "strict"
 data_dir = "$RUN_DIR/data"
 [server]
 max_connections = 32
+[protocol]
+mqtt5_enabled = true
 [[listeners]]
 id = "tcp"
 transport = "tcp"
@@ -108,7 +110,7 @@ if [[ "${RELEASE_SOAK:-0}" == 1 ]]; then
   soak_seconds="${RELEASE_SOAK_SECONDS:-600}"
   soak_publications="${STRICT_SOAK_PUBLICATIONS:-20000}"
   start_broker soak
-  timeout -k 2 "$((soak_seconds + 40))" node \
+  MQTT5_SOAK=1 timeout -k 2 "$((soak_seconds + 40))" node \
     tests/integration/durability_soak.mjs \
     "mqtt://127.0.0.1:$TCP_PORT" "$soak_seconds" "$soak_publications" \
     "$RUN_DIR/soak.json" >"$RUN_DIR/soak.client.log" 2>&1

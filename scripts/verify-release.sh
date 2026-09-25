@@ -10,6 +10,7 @@ tests/integration/configuration.sh
 tests/integration/transports.sh
 tests/integration/durability_transports.sh
 tests/integration/durability_commit.sh
+MQTT5_CASE=1 tests/integration/durability_commit.sh
 tests/integration/durability_migration.sh
 tests/integration/management_crypto.sh
 tests/integration/management_read.sh --prepared

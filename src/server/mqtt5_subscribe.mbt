@@ -1,4 +1,32 @@
 ///|
+fn BrokerRuntime::mqtt5_ack_fits(
+  self : BrokerRuntime,
+  connection_id : ConnectionId,
+  packet : @protocol.PacketV5,
+) -> Bool {
+  let maximum = self.v5_active
+    .get(connection_id)
+    .map(value => value.peer_max_packet_bytes)
+    .unwrap_or(self.config.max_packet_size())
+  @protocol.encode_v5(packet, @protocol.ServerToClient, maximum) is Ok(_)
+}
+
+///|
+fn mqtt5_packet_too_large_reply(
+  connection_id : ConnectionId,
+) -> Array[RuntimeAction] {
+  [
+    SendMqtt5({
+      expiry_deadline: None,
+      rx_permit: None,
+      connection_id,
+      packet: Disconnect5({ reason: 0x95, properties: [] }),
+      close_reason: Some(PacketTooLarge),
+    }),
+  ]
+}
+
+///|
 fn BrokerRuntime::handle_v5_subscribe(
   self : BrokerRuntime,
   connection_id : ConnectionId,
@@ -11,6 +39,16 @@ fn BrokerRuntime::handle_v5_subscribe(
       @session.SessionPacketId::new(packet.packet_id.value()).unwrap(),
     ) {
     return self.terminate(connection_id, ProtocolError)
+  }
+  if !self.mqtt5_ack_fits(
+      connection_id,
+      Suback5({
+        packet_id: packet.packet_id,
+        properties: [],
+        reasons: Array::make(packet.subscriptions.length(), 0x80),
+      }),
+    ) {
+    return mqtt5_packet_too_large_reply(connection_id)
   }
   let mut subscription_id : Int? = None
   for property in packet.properties {
@@ -120,6 +158,16 @@ fn BrokerRuntime::handle_v5_unsubscribe(
   client_id : @session.ClientId,
   packet : @protocol.UnsubscribeV5,
 ) -> Array[RuntimeAction] {
+  if !self.mqtt5_ack_fits(
+      connection_id,
+      Unsuback5({
+        packet_id: packet.packet_id,
+        properties: [],
+        reasons: Array::make(packet.topic_filters.length(), 0x11),
+      }),
+    ) {
+    return mqtt5_packet_too_large_reply(connection_id)
+  }
   let filters : Array[@topic.TopicFilter] = []
   for text in packet.topic_filters {
     let filter = match @topic.TopicFilter::new(text) {

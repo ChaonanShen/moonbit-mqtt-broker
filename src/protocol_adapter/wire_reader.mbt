@@ -103,6 +103,12 @@ pub fn WireReader::vbi(self : WireReader) -> Int raise WireError {
 }
 
 ///|
+fn WireReader::skip(self : WireReader, count : Int) -> Unit raise WireError {
+  self.require(count)
+  self.offset += count
+}
+
+///|
 pub fn WireReader::raw(self : WireReader, count : Int) -> Bytes raise WireError {
   self.require(count)
   let start = self.offset
