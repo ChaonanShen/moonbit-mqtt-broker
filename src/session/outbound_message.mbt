@@ -9,6 +9,7 @@ pub(all) struct SessionMessage {
   payload : Bytes
   retain : Bool
   qos : DeliveryQoS
+  metadata : MessageMetadata
 } derive(Eq, Debug)
 
 ///|
@@ -17,8 +18,15 @@ pub fn SessionMessage::new(
   payload : Bytes,
   retain : Bool,
   qos? : DeliveryQoS = QoS1,
+  metadata? : MessageMetadata = MessageMetadata::empty(),
 ) -> SessionMessage {
-  { topic, payload: copy_session_bytes(payload), retain, qos }
+  {
+    topic,
+    payload: copy_session_bytes(payload),
+    retain,
+    qos,
+    metadata: metadata.copy(),
+  }
 }
 
 ///|
@@ -96,7 +104,13 @@ pub(all) enum SessionAck {
 
 ///|
 pub fn SessionMessage::copy(self : SessionMessage) -> SessionMessage {
-  SessionMessage::new(self.topic, self.payload, self.retain, qos=self.qos)
+  SessionMessage::new(
+    self.topic,
+    self.payload,
+    self.retain,
+    qos=self.qos,
+    metadata=self.metadata,
+  )
 }
 
 ///|
@@ -106,7 +120,10 @@ pub fn OutboundInflight::copy(self : OutboundInflight) -> OutboundInflight {
 
 ///|
 pub fn SessionMessage::cost(self : SessionMessage) -> Int64 {
-  @budget.message_cost(self.topic.value(), self.payload.length().to_int64()).unwrap()
+  @budget.checked_add(
+    @budget.message_cost(self.topic.value(), self.payload.length().to_int64()).unwrap(),
+    self.metadata.cost(),
+  ).unwrap()
 }
 
 ///|

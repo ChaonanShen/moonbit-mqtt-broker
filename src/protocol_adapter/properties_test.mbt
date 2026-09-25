@@ -31,7 +31,11 @@ test "C-T02 MQTT5 properties preserve ordered duplicate User Property" {
   let bytes = writer.finish()
   assert_eq(
     checked_properties(bytes, ConnectProperties, ClientToServer, 100, 3),
-    Ok(values),
+    Ok([
+      { id: 0x21, value: PropertyValue::TwoByteValue(1) },
+      { id: 0x26, value: PropertyValue::StringPair("a", "1") },
+      { id: 0x26, value: PropertyValue::StringPair("a", "2") },
+    ]),
   )
   assert_true(
     checked_properties(bytes, ConnectProperties, ClientToServer, 100, 2)
@@ -111,4 +115,29 @@ test "C-T02 MQTT5 property location value and repetition rules" {
     ),
     Ok([{ id: 0x0b, value: PropertyValue::VariableValue(1) }]),
   )
+}
+
+///|
+test "C-T02 property encoding sorts IDs and keeps duplicate order" {
+  let writer = WireWriter::new(100)
+  encode_properties(
+    writer,
+    [
+      { id: 0x26, value: PropertyValue::StringPair("k", "first") },
+      { id: 0x21, value: PropertyValue::TwoByteValue(1) },
+      { id: 0x26, value: PropertyValue::StringPair("k", "second") },
+    ],
+    ConnectProperties,
+    ClientToServer,
+  )
+  let decoded = checked_properties(
+    writer.finish(),
+    ConnectProperties,
+    ClientToServer,
+    100,
+    3,
+  ).unwrap()
+  assert_eq(decoded[0].id, 0x21)
+  assert_eq(decoded[1].value, PropertyValue::StringPair("k", "first"))
+  assert_eq(decoded[2].value, PropertyValue::StringPair("k", "second"))
 }

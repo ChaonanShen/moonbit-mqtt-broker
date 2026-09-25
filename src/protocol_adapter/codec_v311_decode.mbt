@@ -67,6 +67,11 @@ fn legacy_codec_error(error : WireError) -> CodecError {
     WireInvalidFlags(_) => InvalidFlags("invalid fixed or CONNECT flags")
     WireInvalidPacketId(_) =>
       InvalidPacketId("packet identifier must be nonzero")
+    WireInvalidProtocolName(_) =>
+      InvalidProtocolName("protocol name is not MQTT")
+    WireInvalidProtocolLevel(_) =>
+      InvalidProtocolLevel("protocol level is not 4")
+    WireUnsupportedQoS(_) => UnsupportedQoS("PUBLISH QoS bits are invalid")
   }
 }
 
@@ -85,7 +90,7 @@ fn read_legacy_qos(value : Int, position : Int) -> QoS raise WireError {
     0 => QoS0
     1 => QoS1
     2 => QoS2
-    _ => raise InvalidWireValue(position)
+    _ => raise WireUnsupportedQoS(position)
   }
 }
 
@@ -102,10 +107,10 @@ fn decode_v311_body(
   match kind {
     1 => {
       if reader.utf8() != "MQTT" {
-        raise InvalidWireValue(reader.position())
+        raise WireInvalidProtocolName(reader.position())
       }
       if reader.u8() != 4 {
-        raise InvalidWireValue(reader.position())
+        raise WireInvalidProtocolLevel(reader.position())
       }
       let connect_flags = reader.u8()
       if (connect_flags & 1) != 0 ||
@@ -155,7 +160,10 @@ fn decode_v311_body(
       let ack_flags = reader.u8()
       let code = reader.u8()
       reader.finish()
-      if ack_flags > 1 || code > 5 || (code != 0 && ack_flags != 0) {
+      if ack_flags > 1 || (code != 0 && ack_flags != 0) {
+        raise WireInvalidFlags(reader.position())
+      }
+      if code > 5 {
         raise InvalidWireValue(reader.position())
       }
       let return_code = match code {

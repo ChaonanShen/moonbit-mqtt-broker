@@ -4,6 +4,7 @@ pub struct ClientSession {
   priv mut pending_cost : Int64
   client_id : ClientId
   mode : SessionMode
+  retention : Retention
   mut attached : Bool
   allocator : PacketIdAllocator
   mut inflight : Array[OutboundInflight]
@@ -26,6 +27,11 @@ pub fn ClientSession::new(
     pending_cost: 0L,
     client_id,
     mode,
+    retention: if mode == Clean {
+      DropOnClose
+    } else {
+      LegacyBrokerPolicy
+    },
     attached,
     allocator: PacketIdAllocator::new().unwrap(),
     inflight: [],
@@ -39,6 +45,18 @@ pub fn ClientSession::new(
       Some(0L)
     },
   }
+}
+
+///|
+pub fn ClientSession::new_with_retention(
+  client_id : ClientId,
+  retention : Retention,
+  attached? : Bool = true,
+  owner? : @security.Principal = @security.Principal::Anonymous,
+) -> ClientSession {
+  let mode = if retention == DropOnClose { Clean } else { Persistent }
+  let session = ClientSession::new(client_id, mode~, attached~, owner~)
+  { ..session, retention, }
 }
 
 ///|
@@ -101,6 +119,7 @@ pub fn ClientSession::restore(
     pending_cost,
     client_id,
     mode: Persistent,
+    retention: LegacyBrokerPolicy,
     attached: false,
     allocator,
     inflight: stored_inflight,
@@ -133,6 +152,11 @@ fn ClientSession::bump_policy_revision(self : ClientSession) -> Unit {
 ///|
 pub fn ClientSession::mode(self : ClientSession) -> SessionMode {
   self.mode
+}
+
+///|
+pub fn ClientSession::retention(self : ClientSession) -> Retention {
+  self.retention
 }
 
 ///|

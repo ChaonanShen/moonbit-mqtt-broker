@@ -255,7 +255,20 @@ pub fn encode_properties(
 ) -> Unit raise WireError {
   validate_properties(properties, location, direction, 65535)
   let body = WireWriter::new(writer.max_bytes)
-  for property in properties {
+  let order : Array[Int] = []
+  for index in 0..<properties.length() {
+    order.push(index)
+  }
+  order.sort_by(fn(left, right) {
+    let id_order = properties[left].id - properties[right].id
+    if id_order == 0 {
+      left - right
+    } else {
+      id_order
+    }
+  })
+  for index in order {
+    let property = properties[index]
     body.u8(property.id)
     match property.value {
       ByteValue(value) => body.u8(value)
