@@ -783,6 +783,7 @@ fn BrokerState::preflight_deliveries(
         let session_inflight = session.inflight_count() + extra_inflight
         let session_pending = session.pending_count() + extra_pending
         if session.is_attached() &&
+          session.last_protocol() != 5 &&
           session_pending == 0 &&
           inflight_fits &&
           session_inflight < self.config.max_inflight_per_session() &&

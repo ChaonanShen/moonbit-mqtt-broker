@@ -305,11 +305,15 @@ pub fn BrokerState::cancel_wills_for_session(
   self : BrokerState,
   client_id : @session.ClientId,
   incarnation : Int64,
+  now_mono_ms? : Int64 = @budget.monotonic_ms(),
 ) -> Int {
   let ids : Array[Int64] = []
   for id, record in self.wills {
     if record.client_id == client_id &&
-      record.session_incarnation == incarnation {
+      record.session_incarnation == incarnation &&
+      !(record.state == WillPending &&
+      record.due is Some(due) &&
+      due.remaining_at(now_mono_ms) == 0L) {
       ids.push(id)
     }
   }
@@ -329,4 +333,36 @@ pub fn BrokerState::will_session_retention(
     None => return None
   }
   self.session_retention(record.client_id)
+}
+
+///|
+pub fn BrokerState::will_effective_delay_zero(
+  self : BrokerState,
+  id : Int64,
+  retention : @session.Retention,
+) -> Bool {
+  let record = match self.wills.get(id) {
+    Some(value) if value.state == WillArmed => value
+    _ => return false
+  }
+  match retention {
+    @session.DropOnClose => true
+    @session.FiniteV5(expiry) if expiry < record.template.delay_seconds =>
+      expiry == 0U
+    _ => record.template.delay_seconds == 0U
+  }
+}
+
+///|
+pub fn BrokerState::will_counts(self : BrokerState) -> (Int, Int) {
+  let mut armed = 0
+  let mut pending = 0
+  for _, record in self.wills {
+    if record.state == WillArmed {
+      armed += 1
+    } else {
+      pending += 1
+    }
+  }
+  (armed, pending)
 }

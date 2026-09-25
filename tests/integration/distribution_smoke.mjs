@@ -10,10 +10,10 @@ const tls = url.startsWith('mqtts:')
 const clients = new Set()
 const deadline = setTimeout(() => { console.error('distribution MQTT smoke timed out'); process.exit(1) }, 30000)
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
-function connect(suffix, credentials = authenticated ? { username: 'sensor01', password: 'correct horse' } : {}) {
+function connect(suffix, credentials = authenticated ? { username: 'sensor01', password: 'correct horse' } : {}, version = 4) {
   return new Promise((resolve, reject) => {
     const client = mqtt.connect(url, {
-      protocolVersion: 4, reconnectPeriod: 0, connectTimeout: 1000,
+      protocolVersion: version, reconnectPeriod: 0, connectTimeout: 1000,
       clientId: `distribution-${suffix}`, clean: true,
       ...(tls ? { ca: fs.readFileSync('/artifact/server.crt'), rejectUnauthorized: true } : {}),
       ...credentials
@@ -41,6 +41,26 @@ try {
   const publisher = await connect('publisher')
   await new Promise((resolve, reject) => publisher.publish('distribution/smoke', 'packaged-runtime-ok', { qos: 1 }, error => error ? reject(error) : resolve()))
   assert.deepEqual(await received, ['distribution/smoke', 'packaged-runtime-ok'])
+  const subscriber5 = await connect('v5-subscriber', undefined, 5)
+  await new Promise((resolve, reject) => subscriber5.subscribe(
+    'distribution/v5', { qos: 1 },
+    (error, grants) => error ? reject(error) : (assert.equal(grants[0].qos, 1), resolve())
+  ))
+  const received5 = new Promise(resolve => subscriber5.once(
+    'message',
+    (topic, payload, packet) => resolve({
+      topic, payload: payload.toString(), contentType: packet.properties?.contentType
+    })
+  ))
+  const publisher5 = await connect('v5-publisher', undefined, 5)
+  await new Promise((resolve, reject) => publisher5.publish(
+    'distribution/v5', 'packaged-v5-ok',
+    { qos: 1, properties: { contentType: 'text/plain' } },
+    error => error ? reject(error) : resolve()
+  ))
+  assert.deepEqual(await received5, {
+    topic: 'distribution/v5', payload: 'packaged-v5-ok', contentType: 'text/plain'
+  })
   if (authenticated) {
     for (const [name, credentials, expected] of [
       ['bad-password', { username: 'sensor01', password: 'wrong' }, 4],

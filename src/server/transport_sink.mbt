@@ -2,6 +2,8 @@
 pub(all) enum OutboundCommand {
   WriteFrame(Bytes)
   WriteFrameThenClose(Bytes, CloseReason)
+  CloseAfterPending(CloseReason)
+  WritePriorityWake
   WriteWsWake
   WriteWsClose(Bytes)
 } derive(Eq, Debug)
@@ -32,6 +34,8 @@ priv struct OwnedFrame {
   authorization : OutboundAuthorization?
   rx_permit : RxPermit?
   alias_proposal : OutboundAliasProposal
+  logical_v5 : @protocol.PacketV5?
+  expiry_deadline : @session.Deadline?
 }
 
 ///|
@@ -40,6 +44,9 @@ pub struct TransportSink {
   rx_ledger : WireRxLedger
   mut tx_window : TxWindow
   deferred_v5 : @deque.Deque[SendMqtt5Action]
+  priority_frames : @deque.Deque[OutboundCommand]
+  mut deferred_command : OutboundCommand?
+  max_outbound : Int
   outbound_aliases : Map[String, Int]
   pending_outbound_aliases : Map[Int, String]
   mut next_outbound_alias : Int
@@ -67,6 +74,9 @@ pub fn TransportSink::new(
     rx_ledger: WireRxLedger::new(receive_maximum),
     tx_window: TxWindow::new(65535),
     deferred_v5: @deque.Deque([]),
+    priority_frames: @deque.Deque([]),
+    deferred_command: None,
+    max_outbound,
     outbound_aliases: Map([]),
     pending_outbound_aliases: Map([]),
     next_outbound_alias: 1,
@@ -90,6 +100,49 @@ pub fn TransportSink::outbound(
   self : TransportSink,
 ) -> @async.Queue[OutboundCommand] {
   self.outbound
+}
+
+///|
+async fn TransportSink::next_outbound_command(
+  self : TransportSink,
+  prefer_data : Bool,
+) -> (OutboundCommand, Bool) {
+  if !prefer_data {
+    if self.priority_frames.pop_front() is Some(command) {
+      return (command, true)
+    }
+  }
+  if self.deferred_command is Some(command) {
+    if command is CloseAfterPending(_) &&
+      self.priority_frames.pop_front() is Some(priority) {
+      return (priority, true)
+    }
+    self.deferred_command = None
+    return (command, false)
+  }
+  for ;; {
+    let immediate = self.outbound.try_get() catch { _ => None }
+    let command = match immediate {
+      Some(value) => value
+      None =>
+        match self.priority_frames.pop_front() {
+          Some(priority) => return (priority, true)
+          None => self.outbound.get()
+        }
+    }
+    if command is WritePriorityWake {
+      if self.priority_frames.pop_front() is Some(priority) {
+        return (priority, true)
+      }
+      continue
+    }
+    if (!prefer_data || command is CloseAfterPending(_)) &&
+      self.priority_frames.pop_front() is Some(priority) {
+      self.deferred_command = Some(command)
+      return (priority, true)
+    }
+    return (command, false)
+  }
 }
 
 ///|
@@ -128,6 +181,16 @@ pub fn TransportSink::close_signal(
 }
 
 ///|
+fn TransportSink::try_close_after_pending(
+  self : TransportSink,
+  reason : CloseReason,
+) -> Unit {
+  if !(self.outbound.try_put(CloseAfterPending(reason)) catch { _ => false }) {
+    self.try_close(reason)
+  }
+}
+
+///|
 pub fn TransportSink::close(self : TransportSink) -> Unit {
   if self.handshake is Some((frame, scratch)) {
     frame.ticket.release().unwrap()
@@ -150,6 +213,8 @@ pub fn TransportSink::close(self : TransportSink) -> Unit {
   self.rx_ledger.close()
   self.tx_window.close()
   self.deferred_v5.clear()
+  self.priority_frames.clear()
+  self.deferred_command = None
   self.outbound_aliases.clear()
   self.pending_outbound_aliases.clear()
 }
@@ -216,17 +281,42 @@ fn TransportSink::enqueue_frame(
   authorization? : OutboundAuthorization,
   rx_permit? : RxPermit,
   alias_proposal? : OutboundAliasProposal = AliasNone,
+  logical_v5? : @protocol.PacketV5,
+  expiry_deadline? : @session.Deadline,
+  priority? : Bool = false,
 ) -> Bool {
   let command = match close {
     None => WriteFrame(frame)
     Some(reason) => WriteFrameThenClose(frame, reason)
   }
-  let accepted = self.outbound.try_put(command) catch { _ => false }
+  let accepted = if priority {
+    if self.priority_frames.length() >= self.max_outbound {
+      false
+    } else {
+      let wake = self.priority_frames.is_empty()
+      self.priority_frames.push_back(command)
+      if wake {
+        ignore(self.outbound.try_put(WritePriorityWake)) catch {
+          _ => ()
+        }
+      }
+      true
+    }
+  } else {
+    self.outbound.try_put(command) catch {
+      _ => false
+    }
+  }
   let ticket = match reservation {
     Some(r) =>
       if accepted {
         let cost = frame.length().to_int64() +
-          authorization.map(value => value.cost()).unwrap_or(0L)
+          authorization.map(value => value.cost()).unwrap_or(0L) +
+          (if logical_v5 is Some(_) {
+            frame.length().to_int64() * 2L + 128L
+          } else {
+            0L
+          })
         r.ticket.replace([r.pool.allocation(cost)]).unwrap()
         r.ticket.commit().unwrap()
         Some(r.ticket)
@@ -237,7 +327,15 @@ fn TransportSink::enqueue_frame(
     None => None
   }
   if accepted {
-    self.owned.push({ frame, ticket, authorization, rx_permit, alias_proposal })
+    self.owned.push({
+      frame,
+      ticket,
+      authorization,
+      rx_permit,
+      alias_proposal,
+      logical_v5,
+      expiry_deadline,
+    })
   }
   accepted
 }
@@ -266,6 +364,8 @@ fn TransportSink::enqueue_ws_control(
         authorization: None,
         rx_permit: None,
         alias_proposal: AliasNone,
+        logical_v5: None,
+        expiry_deadline: None,
       })
     } else {
       r.ticket.release().unwrap()
@@ -293,6 +393,8 @@ fn TransportSink::enqueue_ws_close(self : TransportSink, frame : Bytes) -> Bool 
         authorization: None,
         rx_permit: None,
         alias_proposal: AliasNone,
+        logical_v5: None,
+        expiry_deadline: None,
       })
     } else {
       r.ticket.release().unwrap()
@@ -319,7 +421,14 @@ fn TransportSink::take_ws_control(self : TransportSink) -> Bytes? {
 fn TransportSink::take_owned_frame(
   self : TransportSink,
   frame : Bytes,
-) -> (@budget.Ticket?, OutboundAuthorization?, RxPermit?, OutboundAliasProposal) {
+) -> (
+  @budget.Ticket?,
+  OutboundAuthorization?,
+  RxPermit?,
+  OutboundAliasProposal,
+  @protocol.PacketV5?,
+  @session.Deadline?,
+) {
   for index in 0..<self.owned.length() {
     if physical_equal(self.owned[index].frame, frame) {
       let owned = self.owned[index]
@@ -335,10 +444,12 @@ fn TransportSink::take_owned_frame(
         owned.authorization,
         owned.rx_permit,
         owned.alias_proposal,
+        owned.logical_v5,
+        owned.expiry_deadline,
       )
     }
   }
-  (None, None, None, AliasNone)
+  (None, None, None, AliasNone, None, None)
 }
 
 ///|

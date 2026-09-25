@@ -42,6 +42,13 @@ pub(all) struct ObservationSnapshot {
   driver_progress_monotonic_ms : Int64
   connections_registered : Int64
   connections_active : Int64
+  connections_v311 : Int64
+  connections_v5 : Int64
+  will_armed : Int64
+  will_pending : Int64
+  rx_window_used : Int64
+  tx_window_used : Int64
+  alias_entries : Int64
   auth_tasks_outstanding : Int64
   sessions_total : Int64
   subscriptions_total : Int64

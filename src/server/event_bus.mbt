@@ -19,6 +19,7 @@ priv struct ControlSlot {
   mut registered : Bool
   mut waiters : Int
   mut pending_packets : Int
+  write_skipped : @deque.Deque[(WriteNotStartedEvent, @budget.Ticket)]
   mut terminal : TransportClosedEvent?
   mut terminal_delivered : Bool
 }
@@ -270,6 +271,7 @@ fn EventBus::register(
     registered: false,
     waiters: 0,
     pending_packets: 0,
+    write_skipped: @deque.Deque([]),
     terminal: None,
     terminal_delivered: false,
   })
@@ -353,6 +355,28 @@ async fn EventBus::post_v5_packet(
       return false
     }
   }
+}
+
+///|
+fn EventBus::post_write_not_started(
+  self : EventBus,
+  event : WriteNotStartedEvent,
+) -> Bool {
+  let slot = match self.slots.get(event.connection_id) {
+    Some(value) if !self.closed && !value.terminal_delivered => value
+    _ => return false
+  }
+  if slot.write_skipped.length() >= self.config.max_outbound_queue() {
+    return false
+  }
+  let ticket = match slot.budget.control_events.reserve(64L) {
+    Ok(value) => value
+    Err(_) => return false
+  }
+  ticket.commit().unwrap()
+  slot.write_skipped.push_back((event, ticket))
+  self.signal()
+  true
 }
 
 ///|
@@ -503,6 +527,9 @@ fn EventBus::take_control(self : EventBus) -> DriverEvent? {
       slot.registered = true
       return Some(RegisterTransport(slot.registration))
     }
+    if slot.write_skipped.pop_front() is Some((event, ticket)) {
+      return Some(Accounted(WriteNotStarted(event), ticket))
+    }
     // An asynchronous terminal cannot overtake packets already admitted from
     // the same connection. Rejected/unfinished reads were never enqueued.
     if slot.pending_packets == 0 && slot.terminal is Some(terminal) {
@@ -651,6 +678,12 @@ fn EventBus::close(self : EventBus) -> Unit {
   self.data.close(clear=true)
   self.wake.close(clear=true)
   for _, slot in self.slots {
+    for ;; {
+      match slot.write_skipped.pop_front() {
+        Some((_, ticket)) => ticket.release().unwrap()
+        None => break
+      }
+    }
     slot.ready.close(clear=true)
     slot.registration.sink.close()
     slot.budget.metadata.release().unwrap()

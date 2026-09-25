@@ -30,4 +30,5 @@ tests/integration/reload_shutdown.sh
 for mode in off snapshot strict; do
   RELOAD_TEST_MODE="$mode" tests/integration/reload_security.sh
 done
+tests/integration/mqtt5.sh --prepared
 echo 'RELEASE verification passed'

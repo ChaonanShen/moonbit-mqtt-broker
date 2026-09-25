@@ -69,6 +69,29 @@ pub fn RouterDriver::capture_observation(
         Some(runtime.committed_revision())
       }
   }
+  let mut connections_v311 = 0L
+  let mut connections_v5 = 0L
+  let mut rx_window_used = 0L
+  let mut tx_window_used = 0L
+  let mut alias_entries = 0L
+  for connection_id, meta in runtime.connections {
+    if meta.phase is Active(_) {
+      if runtime.v5_active.contains(connection_id) {
+        connections_v5 += 1L
+        if self.sinks.get(connection_id) is Some(sink) {
+          rx_window_used += sink.rx_ledger.count().to_int64()
+          tx_window_used += sink.tx_window.used().to_int64()
+          alias_entries += sink.outbound_aliases.length().to_int64()
+        }
+        if runtime.inbound_aliases.get(connection_id) is Some(table) {
+          alias_entries += table.length().to_int64()
+        }
+      } else {
+        connections_v311 += 1L
+      }
+    }
+  }
+  let (armed_wills, pending_wills) = state.will_counts()
   {
     boot_id: context.boot_id,
     version: "0.3.0",
@@ -78,6 +101,13 @@ pub fn RouterDriver::capture_observation(
     driver_progress_monotonic_ms: self.last_progress_monotonic_ms,
     connections_registered: base.connections_registered,
     connections_active: base.clients_connected,
+    connections_v311,
+    connections_v5,
+    will_armed: armed_wills.to_int64(),
+    will_pending: pending_wills.to_int64(),
+    rx_window_used,
+    tx_window_used,
+    alias_entries,
     auth_tasks_outstanding: base.auth_tasks_outstanding,
     sessions_total: base.sessions_total,
     subscriptions_total: base.subscriptions_total,

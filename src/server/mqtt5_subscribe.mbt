@@ -24,6 +24,7 @@ fn BrokerRuntime::handle_v5_subscribe(
     if subscription.no_local && subscription.topic_filter.has_prefix("$share/") {
       return [
         SendMqtt5({
+          expiry_deadline: None,
           rx_permit: None,
           connection_id,
           packet: Disconnect5({ reason: 0x82, properties: [] }),
@@ -60,6 +61,7 @@ fn BrokerRuntime::handle_v5_subscribe(
       | Err(@router.QoS1ResourceLimit(_, _)) =>
         return [
           SendMqtt5({
+            expiry_deadline: None,
             rx_permit: None,
             connection_id,
             packet: Suback5({
@@ -100,6 +102,7 @@ fn BrokerRuntime::handle_v5_subscribe(
   }
   let actions : Array[RuntimeAction] = [
     SendMqtt5({
+      expiry_deadline: None,
       rx_permit: None,
       connection_id,
       packet: Suback5({ packet_id: packet.packet_id, properties: [], reasons }),
@@ -136,6 +139,7 @@ fn BrokerRuntime::handle_v5_unsubscribe(
   }
   [
     SendMqtt5({
+      expiry_deadline: None,
       rx_permit: None,
       connection_id,
       packet: Unsuback5({

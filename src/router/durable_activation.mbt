@@ -89,7 +89,23 @@ pub fn BrokerState::prepare_durable_activation(
     for will_id, record in self.wills {
       if record.client_id == id && record.session_incarnation == incarnation {
         if restoring {
-          cancel_wills.push(will_id)
+          if record.state == WillPending {
+            if record.due is Some(due) && due.remaining_at(now_mono_ms) > 0L {
+              cancel_wills.push(will_id)
+            }
+          } else {
+            let effective_delay = match previous.retention() {
+              @session.DropOnClose => 0U
+              @session.FiniteV5(expiry) if expiry <
+                record.template.delay_seconds => expiry
+              _ => record.template.delay_seconds
+            }
+            if effective_delay == 0U {
+              trigger_wills.push((will_id, previous.retention()))
+            } else {
+              cancel_wills.push(will_id)
+            }
+          }
         } else if record.state == WillArmed {
           trigger_wills.push((will_id, previous.retention()))
         }

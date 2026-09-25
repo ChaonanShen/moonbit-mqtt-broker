@@ -129,6 +129,7 @@ fn BrokerRuntime::mqtt5_publish_failure(
   if packet.qos == @protocol.QoS0 || reason == 0x82 || reason == 0x94 {
     return [
       SendMqtt5({
+        expiry_deadline: None,
         rx_permit: None,
         connection_id,
         packet: Disconnect5({ reason, properties: [] }),
@@ -145,7 +146,15 @@ fn BrokerRuntime::mqtt5_publish_failure(
   } else {
     @protocol.Puback5({ packet_id, reason, properties: [] })
   }
-  [SendMqtt5({ rx_permit, connection_id, packet: reply, close_reason: None })]
+  [
+    SendMqtt5({
+      expiry_deadline: None,
+      rx_permit,
+      connection_id,
+      packet: reply,
+      close_reason: None,
+    }),
+  ]
 }
 
 ///|
@@ -185,6 +194,7 @@ fn BrokerRuntime::handle_v5_publish(
   if duplicate {
     return [
       SendMqtt5({
+        expiry_deadline: None,
         rx_permit: None,
         connection_id,
         packet: Pubrec5({
@@ -227,6 +237,7 @@ fn BrokerRuntime::handle_v5_publish(
       if packet.qos == @protocol.QoS1 {
         actions.push(
           SendMqtt5({
+            expiry_deadline: None,
             rx_permit,
             connection_id,
             packet: Puback5({

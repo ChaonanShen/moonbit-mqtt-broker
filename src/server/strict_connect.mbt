@@ -159,7 +159,12 @@ pub fn BrokerRuntime::prepare_strict_accepted_connect(
       )
     None =>
       self.broker_state.prepare_durable_activation(
-        client_id, mode, principal, old_generation, new_generation,
+        client_id,
+        mode,
+        principal,
+        old_generation,
+        new_generation,
+        now_mono_ms=@budget.monotonic_ms(),
       )
   }
   let activation = match activation_result {
@@ -235,6 +240,7 @@ pub fn BrokerRuntime::prepare_strict_accepted_connect(
       self.inbound_aliases.set(connection_id, Map([]))
       actions.push(
         SendMqtt5({
+          expiry_deadline: None,
           rx_permit: None,
           connection_id,
           packet: mqtt5_connack(plan, self.config, session_present),

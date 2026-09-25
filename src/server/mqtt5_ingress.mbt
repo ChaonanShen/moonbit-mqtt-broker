@@ -20,6 +20,7 @@ fn BrokerRuntime::reject_mqtt5_connect(
   self.connections.remove(connection_id)
   [
     SendMqtt5({
+      expiry_deadline: None,
       rx_permit: None,
       connection_id,
       packet: Connack5({ session_present: false, reason, properties: [] }),
@@ -87,6 +88,9 @@ fn BrokerRuntime::handle_mqtt5_packet(
     None => return []
   }
   if event.rx_error is Some(reason) {
+    if meta.phase is AwaitConnect {
+      return self.reject_mqtt5_connect(event.connection_id, reason)
+    }
     if event.packet is Publish5(publish) && reason == 0x91 {
       return self.mqtt5_publish_failure(
         event.connection_id,
@@ -97,6 +101,7 @@ fn BrokerRuntime::handle_mqtt5_packet(
     }
     return [
       SendMqtt5({
+        expiry_deadline: None,
         rx_permit: None,
         connection_id: event.connection_id,
         packet: Disconnect5({ reason, properties: [] }),
@@ -260,6 +265,7 @@ fn BrokerRuntime::handle_mqtt5_packet(
       })
       [
         SendMqtt5({
+          expiry_deadline: None,
           rx_permit: None,
           connection_id: event.connection_id,
           packet: Pingresp5,
@@ -277,6 +283,7 @@ fn BrokerRuntime::handle_mqtt5_packet(
           if initial.retention == @session.DropOnClose && seconds != 0U {
             return [
               SendMqtt5({
+                expiry_deadline: None,
                 rx_permit: None,
                 connection_id: event.connection_id,
                 packet: Disconnect5({ reason: 0x82, properties: [] }),

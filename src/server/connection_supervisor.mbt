@@ -1,4 +1,31 @@
 ///|
+fn recognized_mqtt5_connect(frame : Bytes) -> Bool {
+  let reader = @protocol.WireReader::new(frame)
+  try {
+    if reader.u8() != 0x10 {
+      return false
+    }
+    ignore(reader.vbi())
+    reader.utf8() == "MQTT" && reader.u8() == 5
+  } catch {
+    _ => false
+  }
+}
+
+///|
+fn mqtt5_decode_reason(error : @protocol.WireError) -> Int {
+  match error {
+    @protocol.Truncated(_)
+    | @protocol.MalformedVariableInteger(_)
+    | @protocol.InvalidWireString(_) => 0x81
+    @protocol.WireLimitExceeded(_) => 0x95
+    @protocol.WireInvalidProtocolLevel(_)
+    | @protocol.WireInvalidProtocolName(_) => 0x84
+    _ => 0x82
+  }
+}
+
+///|
 fn try_report_terminal(
   terminal : @async.Queue[CloseReason],
   reason : CloseReason,
@@ -110,8 +137,14 @@ async fn read_transport(
               b.events
             }
           })
-          let packet_ticket = match
-            reserve_optional(event_pool, decode_cost_bound(frame)) {
+          let v5_frame = decode_phase == Established(@protocol.V5) ||
+            (decode_phase == FirstConnect && recognized_mqtt5_connect(frame))
+          let decode_cost = if v5_frame {
+            decode_cost_bound_v5(frame, config.protocol_config())
+          } else {
+            decode_cost_bound(frame)
+          }
+          let packet_ticket = match reserve_optional(event_pool, decode_cost) {
             Ok(t) => t
             Err(e) => return e
           }
@@ -131,7 +164,70 @@ async fn read_transport(
               @protocol.PacketDirection::ClientToServer,
               limits,
             ) {
-            Err(_) => return ProtocolError
+            Err(error) => {
+              let malformed_connect = decode_phase == FirstConnect &&
+                recognized_mqtt5_connect(frame)
+              if !malformed_connect && decode_phase != Established(@protocol.V5) {
+                return ProtocolError
+              }
+              if sink is None {
+                return ProtocolError
+              }
+              let rejected : Mqtt5PacketReceivedEvent = {
+                connection_id,
+                packet: if malformed_connect {
+                  @protocol.Connect5({
+                    client_id: "",
+                    username: None,
+                    password: None,
+                    keep_alive: 0,
+                    clean_start: true,
+                    properties: [],
+                    will: None,
+                  })
+                } else {
+                  @protocol.Pingreq5
+                },
+                received_at_ms: @async.now(),
+                rx_permit: None,
+                rx_error: Some(mqtt5_decode_reason(error)),
+              }
+              match (bus, packet_ticket) {
+                (Some(bus), Some(ticket)) => {
+                  ticket.commit().unwrap()
+                  if !bus.post_v5_packet(rejected, ticket) {
+                    return ResourceExhausted
+                  }
+                  moved = true
+                }
+                _ =>
+                  events.put(Runtime(Mqtt5PacketReceived(rejected))) catch {
+                    _ => return ServerShutdown
+                  }
+              }
+              if malformed_connect {
+                if connection.is_websocket() {
+                  let mut resolved : Bool? = None
+                  while resolved is None {
+                    resolved = sink.unwrap().try_handshake()
+                    if resolved is None {
+                      let remaining = config.max_receive_buffer_size() -
+                        decoder.buffered_len()
+                      match connection.drain_buffered_controls(remaining) {
+                        Some(reason) => return reason
+                        None => ()
+                      }
+                      @async.sleep(5)
+                    }
+                  }
+                } else {
+                  ignore(sink.unwrap().wait_handshake())
+                }
+                return ConnectRejected
+              }
+              @async.sleep(config.protocol_config().write_timeout_ms + 1000)
+              return ProtocolError
+            }
             Ok(value) => value
           }
           let is_connect = match packet {
@@ -292,8 +388,10 @@ async fn write_transport(
   connection : ConnectionTransport,
   sink : TransportSink,
   bus? : EventBus,
+  timeout_ms? : Int = 10000,
 ) -> CloseReason {
   let mut control_burst = 0
+  let mut mqtt_control_burst = 0
   for ;; {
     if !sink.ws_closing &&
       control_burst < 4 &&
@@ -306,9 +404,16 @@ async fn write_transport(
       control_burst += 1
       continue
     }
-    let command = sink.outbound().get() catch { _ => return ServerShutdown }
+    let (command, prioritized) = sink.next_outbound_command(
+      mqtt_control_burst >= 4,
+    ) catch {
+      _ => return ServerShutdown
+    }
+    mqtt_control_burst = if prioritized { mqtt_control_burst + 1 } else { 0 }
     control_burst = 0
     match command {
+      WritePriorityWake => ()
+      CloseAfterPending(reason) => return reason
       WriteWsWake => sink.ws_wake_pending = false
       WriteWsClose(frame) => {
         let ticket = sink.take_frame_ticket(frame)
@@ -322,9 +427,14 @@ async fn write_transport(
         return PeerEof
       }
       WriteFrame(frame) => {
-        let (ticket, authorization, rx_permit, alias_proposal) = sink.take_owned_frame(
-          frame,
-        )
+        let (
+          ticket,
+          authorization,
+          rx_permit,
+          alias_proposal,
+          logical_v5,
+          expiry_deadline,
+        ) = sink.take_owned_frame(frame)
         defer release_optional(ticket)
         if sink.ws_closing {
           continue
@@ -335,9 +445,54 @@ async fn write_transport(
         let gate : (() -> Bool)? = authorization.map(value => {
           () => sink.authorize(value)
         })
-        connection.write(frame, still_allowed?=gate) catch {
+        let mut wire_frame = frame
+        if logical_v5 is Some(packet) && expiry_deadline is Some(deadline) {
+          if packet is Publish5(publish) &&
+            !publish.dup &&
+            deadline.remaining_at(@budget.monotonic_ms()) == 0L {
+            if publish.qos != @protocol.QoS0 {
+              let owner = match authorization {
+                Some(value) => value
+                None => return WriteFailure
+              }
+              let report = WriteNotStartedEvent::{
+                connection_id: owner.connection_id,
+                client_id: owner.client_id,
+                session_incarnation: owner.session_incarnation,
+                packet_id: publish.packet_id.unwrap(),
+                qos: publish.qos,
+              }
+              if bus is Some(active) && active.post_write_not_started(report) {
+                ()
+              } else {
+                return WriteFailure
+              }
+            }
+            sink.outbound_alias_cancel(alias_proposal)
+            continue
+          }
+          wire_frame = match
+            @protocol.encode_v5(
+              mqtt5_refresh_expiry_packet(
+                packet,
+                deadline,
+                @budget.monotonic_ms(),
+              ),
+              @protocol.ServerToClient,
+              frame.length(),
+            ) {
+            Ok(value) => value
+            Err(_) => return WriteFailure
+          }
+        }
+        let written = @async.with_timeout_opt(timeout_ms, () => {
+          connection.write(wire_frame, still_allowed?=gate)
+        }) catch {
           PolicyWriteRevoked => return PolicyRevoked
           _ => return WriteFailure
+        }
+        if written is None {
+          return WriteFailure
         }
         if rx_permit is Some(permit) {
           ignore(sink.rx_ledger.complete(permit))
@@ -348,9 +503,14 @@ async fn write_transport(
         }
       }
       WriteFrameThenClose(frame, reason) => {
-        let (ticket, authorization, rx_permit, alias_proposal) = sink.take_owned_frame(
-          frame,
-        )
+        let (
+          ticket,
+          authorization,
+          rx_permit,
+          alias_proposal,
+          logical_v5,
+          expiry_deadline,
+        ) = sink.take_owned_frame(frame)
         defer release_optional(ticket)
         if sink.ws_closing {
           continue
@@ -361,9 +521,54 @@ async fn write_transport(
         let gate : (() -> Bool)? = authorization.map(value => {
           () => sink.authorize(value)
         })
-        connection.write(frame, still_allowed?=gate) catch {
+        let mut wire_frame = frame
+        if logical_v5 is Some(packet) && expiry_deadline is Some(deadline) {
+          if packet is Publish5(publish) &&
+            !publish.dup &&
+            deadline.remaining_at(@budget.monotonic_ms()) == 0L {
+            if publish.qos != @protocol.QoS0 {
+              let owner = match authorization {
+                Some(value) => value
+                None => return WriteFailure
+              }
+              let report = WriteNotStartedEvent::{
+                connection_id: owner.connection_id,
+                client_id: owner.client_id,
+                session_incarnation: owner.session_incarnation,
+                packet_id: publish.packet_id.unwrap(),
+                qos: publish.qos,
+              }
+              if bus is Some(active) && active.post_write_not_started(report) {
+                ()
+              } else {
+                return WriteFailure
+              }
+            }
+            sink.outbound_alias_cancel(alias_proposal)
+            return reason
+          }
+          wire_frame = match
+            @protocol.encode_v5(
+              mqtt5_refresh_expiry_packet(
+                packet,
+                deadline,
+                @budget.monotonic_ms(),
+              ),
+              @protocol.ServerToClient,
+              frame.length(),
+            ) {
+            Ok(value) => value
+            Err(_) => return WriteFailure
+          }
+        }
+        let written = @async.with_timeout_opt(timeout_ms, () => {
+          connection.write(wire_frame, still_allowed?=gate)
+        }) catch {
           PolicyWriteRevoked => return PolicyRevoked
           _ => return WriteFailure
+        }
+        if written is None {
+          return WriteFailure
         }
         if rx_permit is Some(permit) {
           ignore(sink.rx_ledger.complete(permit))
@@ -434,7 +639,12 @@ async fn supervise_transport(
       try_report_terminal(terminal, reason)
     }
     let writer = group.spawn(allow_failure=true) <| () => {
-      let reason = write_transport(connection, sink, bus?)
+      let reason = write_transport(
+        connection,
+        sink,
+        bus?,
+        timeout_ms=config.protocol_config().write_timeout_ms,
+      )
       try_report_terminal(terminal, reason)
     }
     let closer = group.spawn(allow_failure=true) <| () => {

@@ -35,6 +35,14 @@ test "C-T32 MQTT5 delayed Will waits and publishes once" {
   assert_true(state.trigger_will(id, 1000L, 10000L, @session.InfiniteV5))
   assert_eq(state.next_due_will(2999L), None)
   assert_eq(state.next_due_will(3000L), Some(id))
+  assert_eq(
+    state.cancel_wills_for_session(
+      source,
+      state.session_incarnation(source).unwrap(),
+      now_mono_ms=3000L,
+    ),
+    0,
+  )
   let actions = state.publish_due_will(id, 3000L, 12000L).unwrap()
   assert_true(actions.any(action => action is DeliverWithMetadata(_)))
   assert_eq(state.will_count(), 0)

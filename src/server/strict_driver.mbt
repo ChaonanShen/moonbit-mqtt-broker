@@ -6,6 +6,7 @@ fn RouterDriver::strict_held_connection(
   let id = match event {
     PacketReceived(packet) => Some(packet.connection_id)
     Mqtt5PacketReceived(packet) => Some(packet.connection_id)
+    WriteNotStarted(skipped) => Some(skipped.connection_id)
     TransportClosed(closed) => Some(closed.connection_id)
     _ => None
   }
@@ -25,6 +26,7 @@ fn RouterDriver::strict_released_connection(
   let id = match event {
     PacketReceived(packet) => Some(packet.connection_id)
     Mqtt5PacketReceived(packet) => Some(packet.connection_id)
+    WriteNotStarted(skipped) => Some(skipped.connection_id)
     TransportClosed(closed) => Some(closed.connection_id)
     _ => None
   }
@@ -388,6 +390,22 @@ fn RouterDriver::handle_strict_runtime_event(
         }
       }
     }
+    WriteNotStarted(skipped) =>
+      if !self.strict_submit_packet_plan(
+          skipped.connection_id,
+          self.runtime.prepare_strict_write_not_started(
+            skipped,
+            self.strict_generations,
+          ),
+        ) {
+        if !coordinator.flush() {
+          self.strict_fence("group-commit-submit")
+        } else if self.enqueue_strict_event(event, ticket) {
+          transferred = true
+        } else {
+          self.strict_fence("commit-queue-limit")
+        }
+      }
     AuthenticationCompleted(completed) => {
       let connection_id = self.runtime.auth_tasks
         .get(completed.request_id)
@@ -583,7 +601,24 @@ fn RouterDriver::handle_strict_runtime_event(
         }
       }
       if !coordinator.has_pending() && !self.strict_fenced {
-        match self.runtime.broker_state().next_durable_promotion() {
+        match
+          self.runtime
+          .broker_state()
+          .next_durable_promotion(can_send=client_id => {
+            let connection_id = match
+              self.runtime.active_by_client.get(client_id) {
+              Some(value) => value
+              None => return false
+            }
+            if self.runtime.v5_active.contains(connection_id) {
+              match self.sinks.get(connection_id) {
+                Some(sink) => sink.tx_window.available() > 0
+                None => false
+              }
+            } else {
+              true
+            }
+          }) {
           None => ()
           Some(client_id) => {
             let generation = self.strict_generations

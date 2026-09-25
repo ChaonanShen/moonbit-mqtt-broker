@@ -21,6 +21,15 @@ pub(all) struct Mqtt5PacketReceivedEvent {
 } derive(Eq, Debug)
 
 ///|
+pub(all) struct WriteNotStartedEvent {
+  connection_id : ConnectionId
+  client_id : @session.ClientId
+  session_incarnation : Int64?
+  packet_id : @protocol.PacketId
+  qos : @protocol.QoS
+} derive(Eq, Debug)
+
+///|
 pub(all) struct TransportClosedEvent {
   connection_id : ConnectionId
   reason : CloseReason
@@ -45,6 +54,7 @@ pub(all) enum RuntimeEvent {
   TransportOpened(TransportOpenedEvent)
   PacketReceived(PacketReceivedEvent)
   Mqtt5PacketReceived(Mqtt5PacketReceivedEvent)
+  WriteNotStarted(WriteNotStartedEvent)
   TransportClosed(TransportClosedEvent)
   CheckDeadlines(Int64)
   AuthenticationPollDue(Int64)

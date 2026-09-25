@@ -152,7 +152,7 @@ for profile in base argon2 tls full; do
     scheme=mqtts
   fi
   docker run --detach "${runtime_options[@]}" --name "${BROKER_CONTAINER}" \
-    "${runtime_image}" --listen 127.0.0.1:1883 "${feature_args[@]}" >/dev/null
+    "${runtime_image}" --listen 127.0.0.1:1883 --mqtt5-enabled true "${feature_args[@]}" >/dev/null
   broker_started=1
   docker run --rm --platform linux/amd64 --network "container:${BROKER_CONTAINER}" \
     --entrypoint node --volume "${SOURCE_VOLUME}:/workspace:ro" \
@@ -170,7 +170,7 @@ for profile in base argon2 tls full; do
   docker rm "${BROKER_CONTAINER}" >/dev/null
   broker_started=0
   docker run --detach "${runtime_options[@]}" --name "${BROKER_CONTAINER}" \
-    "${runtime_image}" --listen 127.0.0.1:1883 "${feature_args[@]}" \
+    "${runtime_image}" --listen 127.0.0.1:1883 --mqtt5-enabled true "${feature_args[@]}" \
     --management-enabled true --management-listen 127.0.0.1:9091 \
     --management-token-file /artifact/management-tokens >/dev/null
   broker_started=1
@@ -194,7 +194,7 @@ for profile in base argon2 tls full; do
   docker rm "${BROKER_CONTAINER}" >/dev/null
   broker_started=0
   docker run --detach "${runtime_options[@]}" --name "$BROKER_CONTAINER" \
-    "$runtime_image" --listen 127.0.0.1:1883 "${feature_args[@]}" \
+    "$runtime_image" --listen 127.0.0.1:1883 --mqtt5-enabled true "${feature_args[@]}" \
     --management-enabled true --management-details-enabled true \
     --management-operations-enabled true --management-max-bytes-total 33554432 \
     --management-listen 127.0.0.1:9091 \
@@ -229,6 +229,8 @@ mode = "strict"
 data_dir = "/data"
 [server]
 max_connections = 32
+[protocol]
+mqtt5_enabled = true
 [[listeners]]
 id = "primary"
 transport = "${primary_transport}"
