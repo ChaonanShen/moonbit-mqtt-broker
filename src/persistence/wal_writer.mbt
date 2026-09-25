@@ -10,12 +10,15 @@ pub(all) enum WalCompletion {
   Failed(Int64, String)
   CheckpointPublished(Int64, Int64)
   CheckpointFailed(String, Bool)
+  PolicyCapabilityReady
+  PolicyCapabilityFailed(String)
 } derive(Eq, Debug)
 
 ///|
 pub(all) enum WalWork {
   WriteBatch(WalSubmission)
   WriteCheckpoint(WalCheckpoint)
+  UpgradePolicyCapability
 }
 
 ///|
@@ -70,6 +73,26 @@ pub fn WalWriter::submit_checkpoint(
   self.requests.try_put(WriteCheckpoint(checkpoint)) catch {
     _ => false
   }
+}
+
+///|
+pub fn WalWriter::submit_policy_capability(self : WalWriter) -> Bool {
+  if self.closed || self.fenced || self.stopped {
+    return false
+  }
+  self.requests.try_put(UpgradePolicyCapability) catch {
+    _ => false
+  }
+}
+
+///|
+pub fn WalWriter::policy_required(self : WalWriter) -> Bool {
+  self.store.manifest().policy_required
+}
+
+///|
+pub fn WalWriter::policy_state(self : WalWriter) -> WalPolicyState? {
+  self.store.policy_state()
 }
 
 ///|
@@ -146,6 +169,18 @@ pub async fn WalWriter::run(self : WalWriter, wake : () -> Unit) -> Unit {
           Err(error) => {
             self.fenced = true
             Failed(submission.writer_epoch, error.category())
+          }
+        }
+      }
+      UpgradePolicyCapability => {
+        let result = @async.protect_from_cancel(() => {
+          self.store.require_policy_capability()
+        })
+        match result {
+          Ok(_) => PolicyCapabilityReady
+          Err(error) => {
+            self.fenced = true
+            PolicyCapabilityFailed(error.category())
           }
         }
       }

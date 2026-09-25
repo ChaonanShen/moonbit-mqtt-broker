@@ -228,8 +228,22 @@ pub async fn encode_wal_checkpoint_sliced(
     }
     let writer = BinaryWriter::new(max_bytes=max_checkpoint_bytes)
     writer.write_raw(wal_checkpoint_magic)
-    writer.write_u16(1, "wal-checkpoint-version")
-    writer.write_u16(3, "wal-logical-schema")
+    writer.write_u16(
+      if checkpoint.policy is Some(_) {
+        2
+      } else {
+        1
+      },
+      "wal-checkpoint-version",
+    )
+    writer.write_u16(
+      if checkpoint.policy is Some(_) {
+        4
+      } else {
+        3
+      },
+      "wal-logical-schema",
+    )
     writer.write_positive_i64(
       checkpoint.generation,
       "wal-checkpoint-generation",
@@ -239,6 +253,18 @@ pub async fn encode_wal_checkpoint_sliced(
     for identity in checkpoint.identities {
       writer.write_string(identity.client_id)
       writer.write_positive_i64(identity.generation, "wal-session-generation")
+    }
+    if checkpoint.policy is Some(policy) {
+      writer.write_positive_i64(policy.sequence, "wal-policy-sequence")
+      writer.write_raw(policy.fingerprint)
+      writer.write_u8(
+        if policy.reconcile_pending {
+          1
+        } else {
+          0
+        },
+        "wal-policy-pending",
+      )
     }
     writer.write_bytes_sliced(snapshot, preempt)
     let prefix = writer.finish()

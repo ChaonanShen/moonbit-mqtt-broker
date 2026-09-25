@@ -8,6 +8,17 @@ import sys
 SAFE_SUFFIXES = {".log", ".txt", ".exit-code", ".json", ".tsv"}
 ROOT_FILES = {"artifacts.sha256", "package.zip"}
 TEST_DIR_PREFIXES = ("commit-", "transports-", "migration-", "dependency-fetch-")
+SAFE_RELOAD_FILES = {
+    "reload-metadata.txt",
+    "lifecycle-summary.txt", "lifecycle-events.log",
+    "tls-summary.txt", "tls-events.log",
+    "durability-summary.txt", "durability-events.log",
+    "security-off-summary.txt", "security-off-events.log",
+    "security-snapshot-summary.txt", "security-snapshot-events.log",
+    "security-strict-summary.txt", "security-strict-events.log",
+    "limits-summary.txt",
+    "shutdown-summary.txt", "shutdown-events.log",
+}
 
 
 def copy_file(source: Path, destination: Path, *, executable: bool = False) -> None:
@@ -41,6 +52,11 @@ def stage(source_root: Path, output_root: Path) -> int:
                     copy_file(broker, output_root / run.name / "runtime" / "broker",
                               executable=True)
                     copied += 1
+            elif entry.is_dir() and entry.name.startswith("reload-"):
+                for result in entry.iterdir():
+                    if result.name in SAFE_RELOAD_FILES:
+                        copy_file(result, output_root / run.name / entry.name / result.name)
+                        copied += 1
             elif entry.is_dir() and entry.name.startswith(TEST_DIR_PREFIXES):
                 for result in entry.iterdir():
                     if (not result.is_symlink() and result.is_file()

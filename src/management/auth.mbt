@@ -235,3 +235,17 @@ pub fn TokenDatabase::authenticate(
     _ => None
   }
 }
+
+///|
+/// Authorize a previously authenticated token identifier for a bounded
+/// service-owned query without exposing the secret token or digest.
+pub fn TokenDatabase::token_has_scope(
+  self : TokenDatabase,
+  token_id : String,
+  scope : AdminScope,
+) -> Bool {
+  match self.entries.get(token_id) {
+    Some(value) => value.scopes.contains(scope)
+    None => false
+  }
+}

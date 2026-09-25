@@ -2,6 +2,8 @@
 pub struct WalRecoveredState {
   state : @router.BrokerState
   identities : Array[WalSessionIdentity]
+  policy : WalPolicyState?
+  policy_required : Bool
   committed_lsn : Int64
 }
 
@@ -25,6 +27,16 @@ pub fn WalRecoveredState::committed_lsn(self : WalRecoveredState) -> Int64 {
 }
 
 ///|
+pub fn WalRecoveredState::policy(self : WalRecoveredState) -> WalPolicyState? {
+  self.policy
+}
+
+///|
+pub fn WalRecoveredState::policy_required(self : WalRecoveredState) -> Bool {
+  self.policy_required
+}
+
+///|
 pub fn WalRecovery::restore_state(
   self : WalRecovery,
   broker_config : @router.BrokerConfig,
@@ -43,6 +55,7 @@ pub fn WalRecovery::restore_state(
     Err(_) => return Err(SnapshotImport("invalid WAL checkpoint state"))
   }
   let mut expected_lsn = initial.lsn
+  let mut policy = initial.policy
   for batch in self.batches {
     if batch.previous_lsn != expected_lsn {
       return Err(InvalidValue(field="wal-replay-lsn", offset=0))
@@ -52,18 +65,45 @@ pub fn WalRecovery::restore_state(
         transaction.lsn != expected_lsn + 1L {
         return Err(InvalidValue(field="wal-replay-lsn", offset=0))
       }
-      let delta = match
-        decode_durable_delta(
-          transaction.delta,
-          limits,
-          max_bytes=max_delta_bytes,
-        ) {
-        Ok(value) => value
-        Err(error) => return Err(error)
-      }
-      match accumulator.apply(delta) {
-        Ok(_) => ()
-        Err(_) => return Err(SnapshotImport("invalid WAL delta state"))
+      if is_wal_policy_record(transaction.delta) {
+        if !self.policy_required {
+          return Err(InvalidValue(field="wal-policy-capability", offset=0))
+        }
+        let record = match decode_wal_policy_record(transaction.delta) {
+          Ok(value) => value
+          Err(error) => return Err(error)
+        }
+        policy = match apply_policy_record(policy, record) {
+          Ok(value) => Some(value)
+          Err(error) => return Err(error)
+        }
+      } else if is_wal_reconcile_record(transaction.delta) {
+        if !self.policy_required ||
+          !(policy is Some({ reconcile_pending: true, .. })) {
+          return Err(InvalidValue(field="wal-reconcile-order", offset=0))
+        }
+        let delta = match decode_wal_reconcile(transaction.delta) {
+          Ok(value) => value
+          Err(error) => return Err(error)
+        }
+        match accumulator.apply_reconcile(delta) {
+          Ok(_) => ()
+          Err(_) => return Err(SnapshotImport("invalid WAL reconcile state"))
+        }
+      } else {
+        let delta = match
+          decode_durable_delta(
+            transaction.delta,
+            limits,
+            max_bytes=max_delta_bytes,
+          ) {
+          Ok(value) => value
+          Err(error) => return Err(error)
+        }
+        match accumulator.apply(delta) {
+          Ok(_) => ()
+          Err(_) => return Err(SnapshotImport("invalid WAL delta state"))
+        }
       }
       expected_lsn = transaction.lsn
     }
@@ -84,5 +124,11 @@ pub fn WalRecovery::restore_state(
     Ok(value) => value
     Err(_) => return Err(SnapshotImport("WAL state exceeds configured limits"))
   }
-  Ok({ state, identities, committed_lsn: expected_lsn })
+  Ok({
+    state,
+    identities,
+    policy,
+    policy_required: self.policy_required,
+    committed_lsn: expected_lsn,
+  })
 }

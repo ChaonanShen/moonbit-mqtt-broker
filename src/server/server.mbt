@@ -7,27 +7,45 @@ async fn run_ticker(
   bus? : EventBus,
   observation_interval_ms? : Int,
   management_maintenance? : Bool = false,
+  generation? : GenerationHandle,
 ) -> Unit {
   let keep_alive_interval = config.keep_alive_check_interval_ms()
   let auth_interval = config.auth_poll_interval_ms()
-  let interval = if keep_alive_interval < auth_interval {
+  let mut metrics_delay = config.system_metrics_interval_ms()
+  let mut observation_delay = observation_interval_ms
+  let mut observed_epoch = -1L
+  if generation is Some(handle) {
+    let current = handle.active()
+    let hot = current.effective.hot()
+    metrics_delay = hot.system_metrics_interval_ms
+    observation_delay = observation_interval_ms.map(_ => {
+      hot.management_snapshot_interval_ms
+    })
+    observed_epoch = current.config_epoch()
+  }
+  let mut interval = if keep_alive_interval < auth_interval {
     keep_alive_interval
   } else {
     auth_interval
   }
-  let interval = match observation_interval_ms {
-    Some(value) if value > 0 && value < interval => value
-    _ => interval
+  if observation_delay is Some(value) && value > 0 && value < interval {
+    interval = value
   }
-  let interval = if management_maintenance && interval > 20 {
-    20
-  } else {
-    interval
+  if generation is Some(_) && interval > 20 {
+    interval = 20
   }
-  let interval = if strict is Some(_) && interval > 2 { 2 } else { interval }
+  if generation is Some(_) && metrics_delay < interval {
+    interval = metrics_delay
+  }
+  if management_maintenance && interval > 20 {
+    interval = 20
+  }
+  if strict is Some(_) && interval > 2 {
+    interval = 2
+  }
   let first_mono = @budget.monotonic_ms()
   let mut next_maintenance_at = first_mono + 20L
-  let mut next_observation_at : Int64? = match observation_interval_ms {
+  let mut next_observation_at : Int64? = match observation_delay {
     Some(value) if value > 0 &&
       first_mono >= 0L &&
       first_mono <= 9223372036854775807L - value.to_int64() =>
@@ -37,11 +55,42 @@ async fn run_ticker(
   let started_at = @async.now()
   let mut next_deadlines_at = started_at + keep_alive_interval.to_int64()
   let mut next_auth_poll_at = started_at + auth_interval.to_int64()
-  let mut next_metrics_at = started_at +
-    config.system_metrics_interval_ms().to_int64()
+  let mut next_metrics_at = started_at + metrics_delay.to_int64()
   for ;; {
     @async.sleep(interval)
     let now_ms = @async.now()
+    if generation is Some(handle) {
+      let current = handle.active()
+      if current.config_epoch() != observed_epoch {
+        observed_epoch = current.config_epoch()
+        let hot = current.effective.hot()
+        metrics_delay = hot.system_metrics_interval_ms
+        observation_delay = observation_interval_ms.map(_ => {
+          hot.management_snapshot_interval_ms
+        })
+        next_metrics_at = current.activated_wall_ms() + metrics_delay.to_int64()
+        next_observation_at = observation_delay.map(value => {
+          current.activated_monotonic_ms() + value.to_int64()
+        })
+        interval = if keep_alive_interval < auth_interval {
+          keep_alive_interval
+        } else {
+          auth_interval
+        }
+        if interval > 20 {
+          interval = 20
+        }
+        if metrics_delay < interval {
+          interval = metrics_delay
+        }
+        if observation_delay is Some(value) && value < interval {
+          interval = value
+        }
+        if strict is Some(_) && interval > 2 {
+          interval = 2
+        }
+      }
+    }
     if strict is Some(runtime) && runtime.coordinator().collecting_due() {
       match bus {
         Some(active) => active.post_wal_flush()
@@ -85,7 +134,7 @@ async fn run_ticker(
             _ => return
           }
       }
-      next_metrics_at = now_ms + config.system_metrics_interval_ms().to_int64()
+      next_metrics_at = now_ms + metrics_delay.to_int64()
     }
     if management_maintenance {
       let current_mono = @budget.monotonic_ms()
@@ -102,12 +151,12 @@ async fn run_ticker(
         if bus is Some(active) {
           active.post_observation()
         }
-        let observation_delay = observation_interval_ms.unwrap().to_int64()
+        let next_delay = observation_delay.unwrap().to_int64()
         next_observation_at = if current_mono < 0L ||
-          current_mono > 9223372036854775807L - observation_delay {
+          current_mono > 9223372036854775807L - next_delay {
           None
         } else {
-          Some(current_mono + observation_delay)
+          Some(current_mono + next_delay)
         }
       }
     }
@@ -132,8 +181,9 @@ fn create_auth_executor(
   config : ServerConfig,
   security : @security.SecurityPolicy,
   ledger : @budget.Ledger,
+  reserve_for_reload? : Bool = false,
 ) -> (@security.AuthExecutor, @budget.Ticket)? raise ResourceStartupFailure {
-  if !security.has_passwords() {
+  if !security.has_passwords() && !reserve_for_reload {
     return None
   }
   let limits = config.broker_config().resources()
@@ -186,7 +236,16 @@ pub async fn serve_listeners(
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
   logger? : @observability.Logger = @observability.Logger::silent(),
   management? : ManagementRuntime,
+  material_provider? : TlsMaterialProvider,
+  generation? : GenerationHandle,
+  reload_enabled? : Bool = false,
+  reload_reconcile_items? : Int = 64,
+  reload_reconcile_bytes? : Int64 = 1048576L,
+  reload? : ReloadStartup,
 ) -> Unit {
+  if reload is Some(_) && generation is None {
+    raise ResourceStartupFailure("reload generation unavailable")
+  }
   if persistence is Some(_) && strict is Some(_) {
     raise ResourceStartupFailure("snapshot and strict cannot run together")
   }
@@ -209,10 +268,35 @@ pub async fn serve_listeners(
   if management is Some(active) && active.command_mailbox is Some(mailbox) {
     bus.attach_management_commands(mailbox)
   }
+  let reload_service : ReloadService? = if reload is Some(startup) {
+    Some(
+      ReloadService::new(
+        management,
+        initial_state.resource_ledger(),
+        if strict is Some(_) {
+          "strict"
+        } else if persistence is Some(_) {
+          "snapshot"
+        } else {
+          "off"
+        },
+        max_generation_bytes=startup.max_generation_bytes,
+        infrastructure_limit=config
+          .broker_config()
+          .resources()
+          .get("max_managed_bytes_total"),
+        generation?,
+      ),
+    )
+  } else {
+    None
+  }
+  defer (if reload_service is Some(value) { value.close() })
   let auth_runtime = create_auth_executor(
     config,
     security,
     initial_state.resource_ledger(),
+    reserve_for_reload=reload_enabled,
   )
   let auth_executor = match auth_runtime {
     Some((executor, _)) => Some(executor)
@@ -231,6 +315,9 @@ pub async fn serve_listeners(
     metrics~,
     logger~,
     async_auth=auth_executor is Some(_),
+    initial_policy_epoch=generation
+      .map(value => value.active().policy_epoch())
+      .unwrap_or(0L),
   )
   let strict_coordinator = strict.map(value => value.coordinator())
   let strict_generations = strict
@@ -246,6 +333,11 @@ pub async fn serve_listeners(
         management?,
         strict?=strict_coordinator,
         strict_generations~,
+        generation?,
+        material_provider?,
+        reload_reconcile_items~,
+        reload_reconcile_bytes~,
+        reload_service?,
       )
     None =>
       RouterDriver::new(
@@ -255,6 +347,11 @@ pub async fn serve_listeners(
         management?,
         strict?=strict_coordinator,
         strict_generations~,
+        generation?,
+        material_provider?,
+        reload_reconcile_items~,
+        reload_reconcile_bytes~,
+        reload_service?,
       )
   }
   if management is Some(active) && active.config.details_enabled() {
@@ -287,12 +384,25 @@ pub async fn serve_listeners(
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         driver.run_budgeted(bus)
       }
+      if reload is Some(startup) && generation is Some(handle) {
+        group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
+          run_reload_signals(
+            startup,
+            bus,
+            handle,
+            strict,
+            logger,
+            shutdown_requested,
+            reload_service.unwrap(),
+          )
+        }
+      }
       group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
         let observation_interval_ms = management.map(active => {
           active.config.snapshot_interval_ms()
         })
         let maintenance = management is Some(active) &&
-          active.config.details_enabled()
+          (active.config.details_enabled() || reload is Some(_))
         run_ticker(
           config,
           events,
@@ -301,6 +411,7 @@ pub async fn serve_listeners(
           bus~,
           observation_interval_ms?,
           management_maintenance=maintenance,
+          generation?,
         )
       }
       let management_task = match management {
@@ -347,9 +458,24 @@ pub async fn serve_listeners(
                     return
                   }
                   defer bus.admission.release(connection_id)
+                  let material = match material_provider {
+                    Some(provider) => provider.acquire(entry.config.id)
+                    None => None
+                  }
+                  defer (if material is Some(lease) { lease.release() })
+                  if material_provider is Some(_) &&
+                    entry.config.tls is Some(_) &&
+                    material is None {
+                    connection.close()
+                    return
+                  }
                   let transport = match entry.config.tls {
                     None => ConnectionTransport::plain(connection)
-                    Some(tls_config) =>
+                    Some(original_config) => {
+                      let tls_config = match material {
+                        Some(lease) => lease.config
+                        None => original_config
+                      }
                       ConnectionTransport::secure(connection, tls_config) catch {
                         error => {
                           metrics.record_tls_handshake_failure()
@@ -369,6 +495,7 @@ pub async fn serve_listeners(
                           return
                         }
                       }
+                    }
                   }
                   let transport = match entry.config.websocket {
                     None => transport
@@ -643,6 +770,15 @@ pub async fn run_listeners(
   security? : @security.SecurityPolicy = @security.SecurityPolicy::permissive(),
   logger? : @observability.Logger = @observability.Logger::new(),
   management? : ManagementStartup,
+  reload_tls? : (
+    @bundle.CapturedBundle,
+    @bundle.ReloadEffectiveCandidate,
+    String,
+  ),
+  reload_enabled? : Bool = false,
+  reload_reconcile_items? : Int = 64,
+  reload_reconcile_bytes? : Int64 = 1048576L,
+  reload? : ReloadStartup,
 ) -> Unit {
   defer (match persistence {
     Some(runtime) => runtime.close()
@@ -677,19 +813,87 @@ pub async fn run_listeners(
       )
     }
   }
-  let materials : Array[TlsMaterialLease] = []
+  let materials = TlsMaterialProvider::new()
+  let generation : GenerationHandle? = match reload_tls {
+    Some((bundle, candidate, _)) => {
+      let fingerprint = bundle.policy_fingerprint(candidate) catch {
+        _ =>
+          raise ResourceStartupFailure("initial policy fingerprint unavailable")
+      }
+      let policy_epoch = match strict {
+        Some(runtime) =>
+          runtime
+          .coordinator()
+          .policy_state()
+          .map(value => value.sequence)
+          .unwrap_or(0L)
+        None => 0L
+      }
+      Some(
+        GenerationHandle::new(
+          ConfigGeneration::initial(
+            bundle,
+            candidate,
+            security,
+            fingerprint,
+            policy_epoch~,
+          ),
+        ),
+      )
+    }
+    None => None
+  }
+  defer (if generation is Some(value) { value.close() })
+  let prepared_tls : PreparedTlsGeneration? = match reload_tls {
+    None => None
+    Some((bundle, candidate, root)) => {
+      let limits = config.broker_config().resources()
+      let pool = initial_state
+        .resource_ledger()
+        .pool(Infrastructure, limits.get("max_managed_bytes_total"))
+        .unwrap()
+      Some(prepare_tls_generation(bundle, candidate, pool, root))
+    }
+  }
+  defer (if prepared_tls is Some(value) { value.release() })
+  let expected_tls_ids : Array[String] = []
+  for entry in listeners {
+    if entry.tls is Some(_) {
+      expected_tls_ids.push(entry.id)
+    }
+  }
+  if prepared_tls is Some(value) &&
+    !value.install_initial(materials, expected_tls_ids) {
+    raise ResourceStartupFailure("prepared TLS listener set mismatch")
+  }
   let material_tickets : Array[@budget.Ticket] = []
   defer (for ticket in material_tickets {
     ticket.release().unwrap()
   })
-  defer (for material in materials {
-    material.release()
-  })
+  defer materials.close()
   let prepared : Array[ListenerConfig] = []
   for entry in listeners {
     match entry.tls {
       None => prepared.push(entry)
       Some(tls) => {
+        if prepared_tls is Some(_) {
+          let captured_config = match materials.current_config(entry.id) {
+            Some(value) => value
+            None =>
+              raise ResourceStartupFailure("prepared TLS listener missing")
+          }
+          prepared.push(
+            ListenerConfig::new(
+              entry.id,
+              entry.listen,
+              entry.max_connections,
+              tls=captured_config,
+              transport=entry.transport,
+              websocket?=entry.websocket,
+            ).unwrap(),
+          )
+          continue
+        }
         let limits = config.broker_config().resources()
         let pool = initial_state
           .resource_ledger()
@@ -705,7 +909,7 @@ pub async fn run_listeners(
         ticket.commit().unwrap()
         material_tickets.push(ticket)
         let lease = TlsMaterialLease::capture(tls)
-        materials.push(lease)
+        materials.add_initial(entry.id, lease)
         validate_tls_config(lease.config) catch {
           _ =>
             raise ResourceStartupFailure(
@@ -780,6 +984,11 @@ pub async fn run_listeners(
     }
   }
   defer (if management_runtime is Some(active) { active.close() })
+  if reload is Some(_) &&
+    management_runtime is Some(active) &&
+    generation is Some(handle) {
+    active.enable_reload(handle, initial_state.resource_ledger())
+  }
   if management_runtime is Some(active) {
     active.set_mqtt_listener_address(bound[0].socket.addr.to_string())
   }
@@ -824,6 +1033,12 @@ pub async fn run_listeners(
       security~,
       logger~,
       management?=management_runtime,
+      material_provider=materials,
+      generation?,
+      reload_enabled~,
+      reload_reconcile_items~,
+      reload_reconcile_bytes~,
+      reload?,
     )
   }
 }

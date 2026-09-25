@@ -1,4 +1,12 @@
 ///|
+priv struct StrictReloadPending {
+  candidate : PreparedReload
+  expected_epoch : Int64
+  reply : @async.Queue[ReloadDriverReply]
+  mut committed : Bool
+}
+
+///|
 pub struct RouterDriver {
   runtime : BrokerRuntime
   sinks : Map[ConnectionId, TransportSink]
@@ -11,6 +19,17 @@ pub struct RouterDriver {
   priv strict_held_connections : Map[ConnectionId, Int]
   priv strict_management_held : @deque.Deque[ManagementCommandEvent]
   priv mut strict_fenced : Bool
+  priv mut reload_barrier : Bool
+  priv generation : GenerationHandle?
+  priv material_provider : TlsMaterialProvider?
+  priv mut retired_generations : Array[ConfigGeneration]
+  priv mut reload_reconciler : @router.PolicyReconciler?
+  priv mut reload_connection_slot : Int?
+  priv mut reload_issue : @router.PolicyIssue?
+  priv mut strict_reload_pending : StrictReloadPending?
+  priv reload_service : ReloadService?
+  priv reload_reconcile_items : Int
+  priv reload_reconcile_bytes : Int64
   priv mut strict_checkpoint_cursor : @router.SnapshotExportCursor?
   priv mut strict_checkpoint_lsn : Int64
   priv mut strict_checkpoint_inflight : Bool
@@ -64,6 +83,11 @@ pub fn RouterDriver::new(
   management? : ManagementRuntime,
   strict? : CommitCoordinator,
   strict_generations? : Map[@session.ClientId, Int64] = Map([]),
+  generation? : GenerationHandle,
+  material_provider? : TlsMaterialProvider,
+  reload_reconcile_items? : Int = 64,
+  reload_reconcile_bytes? : Int64 = 1048576L,
+  reload_service? : ReloadService,
 ) -> RouterDriver {
   let snapshot = snapshot.map(config => SnapshotDriverState::{
     oldest_uncommitted_ms: None,
@@ -88,6 +112,17 @@ pub fn RouterDriver::new(
     strict_held_connections: Map([]),
     strict_management_held: @deque.Deque([]),
     strict_fenced: false,
+    reload_barrier: false,
+    generation,
+    material_provider,
+    retired_generations: [],
+    reload_reconciler: None,
+    reload_connection_slot: None,
+    reload_issue: None,
+    strict_reload_pending: None,
+    reload_service,
+    reload_reconcile_items,
+    reload_reconcile_bytes,
     strict_checkpoint_cursor: None,
     strict_checkpoint_lsn: 0L,
     strict_checkpoint_inflight: false,
@@ -103,6 +138,51 @@ pub fn RouterDriver::new(
     last_progress_monotonic_ms: @budget.monotonic_ms(),
     management,
   }
+}
+
+///|
+/// The single writer stops admitting new business while older transactions
+/// drain and the policy record is committed. A failed entry leaves the driver
+/// untouched; the barrier is released only after activation or final failure.
+pub fn RouterDriver::begin_reload_barrier(self : RouterDriver) -> Bool {
+  let coordinator = match self.strict {
+    Some(value) if !self.strict_fenced && !value.is_fenced() => value
+    _ => return false
+  }
+  if self.reload_barrier ||
+    self.strict_checkpoint_cursor is Some(_) ||
+    self.strict_checkpoint_inflight {
+    return false
+  }
+  if coordinator.is_collecting() && !coordinator.flush() {
+    self.strict_fence("reload-barrier-flush")
+    return false
+  }
+  self.reload_barrier = true
+  true
+}
+
+///|
+pub fn RouterDriver::reload_barrier_ready(self : RouterDriver) -> Bool {
+  let coordinator = match self.strict {
+    Some(value) => value
+    None => return false
+  }
+  self.reload_barrier &&
+  !self.strict_fenced &&
+  !coordinator.is_fenced() &&
+  !coordinator.has_pending() &&
+  self.strict_checkpoint_cursor is None &&
+  !self.strict_checkpoint_inflight
+}
+
+///|
+pub fn RouterDriver::end_reload_barrier(self : RouterDriver) -> Unit {
+  if !self.reload_barrier {
+    return
+  }
+  self.reload_barrier = false
+  self.drain_strict_queues()
 }
 
 ///|
@@ -387,7 +467,13 @@ fn RouterDriver::dispatch(
     match action {
       SendPacket(send) =>
         if self.sinks.get(send.connection_id) is Some(sink) {
-          match self.encode_and_queue(sink, send.packet, None) {
+          match
+            self.encode_and_queue(
+              sink,
+              send.packet,
+              None,
+              connection_id=send.connection_id,
+            ) {
             Err(reason) => {
               if send.packet is Connack(_) {
                 sink.resolve_handshake(false)
@@ -408,6 +494,7 @@ fn RouterDriver::dispatch(
             sink,
             send.packet,
             Some(send.reason),
+            connection_id=send.connection_id,
           )
           if send.packet is Connack(_) {
             sink.resolve_handshake(false)
@@ -545,6 +632,19 @@ fn RouterDriver::dispatch(
 
 ///|
 pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
+  match event {
+    ReloadControl(command) => self.handle_reload_control(command)
+    _ => self.handle_scoped(event)
+  }
+  self.finish_committed_reload()
+  self.advance_reload_reconciliation()
+}
+
+///|
+fn RouterDriver::handle_scoped(
+  self : RouterDriver,
+  event : DriverEvent,
+) -> Unit {
   self.runtime.broker_state().begin_action_scope()
   defer {
     let completed = @budget.monotonic_ms()
@@ -574,6 +674,9 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
       if self.sinks.get(register.connection_id) is Some(_) {
         return
       }
+      register.sink.set_writer_gate(authorization => {
+        self.runtime.authorize_outbound(authorization)
+      })
       self.sinks.set(register.connection_id, register.sink)
       if self.management_connections is Some(index) {
         if index.put(register.connection_id.value().to_string())
@@ -625,6 +728,7 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
         self.handle_management_command(command)
       }
     ManagementMaintenance => self.maintain_management()
+    ReloadControl(_) => abort("reload control entered scoped handler")
     UnregisterTransport(connection_id) => {
       self.sinks.remove(connection_id)
       if self.management_closing.get(connection_id) is Some(watch) {
@@ -637,6 +741,7 @@ pub fn RouterDriver::handle(self : RouterDriver, event : DriverEvent) -> Unit {
     }
   }
   self.poll_authentication()
+  self.retire_released_generations()
   if self.strict is Some(_) {
     self.poll_strict_completion()
     if self.strict is Some(coordinator) &&
@@ -723,8 +828,46 @@ fn RouterDriver::encode_and_queue(
   sink : TransportSink,
   packet : @protocol.Packet,
   close : CloseReason?,
+  connection_id? : ConnectionId,
 ) -> Result[Unit, CloseReason] {
+  let authorization : OutboundAuthorization? = match packet {
+    Publish(value) =>
+      match connection_id {
+        None => None
+        Some(id) => {
+          let client_id = match self.runtime.connections.get(id) {
+            Some({ phase: Active(value), .. }) => value
+            _ => return Err(PolicyRevoked)
+          }
+          let topic = match @topic.TopicName::new(value.topic) {
+            Ok(value) => value
+            Err(_) => return Err(EncodeFailure)
+          }
+          let value : OutboundAuthorization = {
+            connection_id: id,
+            client_id,
+            session_incarnation: self.runtime
+            .broker_state()
+            .policy_session_incarnation(client_id),
+            topic,
+          }
+          if !self.runtime.authorize_outbound(value) {
+            return Err(PolicyRevoked)
+          }
+          Some(value)
+        }
+      }
+    _ => None
+  }
   let bound = wire_cost_bound(packet)
+  let charged = match
+    @budget.checked_add(
+      bound,
+      authorization.map(value => value.cost()).unwrap_or(0L),
+    ) {
+    Ok(value) => value
+    Err(_) => return Err(ResourceExhausted)
+  }
   let prepared = if packet is Connack(_) {
     let value = sink.handshake
     sink.handshake = None
@@ -735,7 +878,7 @@ fn RouterDriver::encode_and_queue(
   let (ticket, temporary) = match prepared {
     Some((frame, scratch)) => (Some(frame), Some(scratch))
     None => {
-      let ticket = match sink.reserve_frame(bound, control_packet(packet)) {
+      let ticket = match sink.reserve_frame(charged, control_packet(packet)) {
         Ok(t) => t
         Err(_) => return Err(SlowConsumer)
       }
@@ -781,7 +924,7 @@ fn RouterDriver::encode_and_queue(
       return Err(EncodeFailure)
     }
   }
-  if sink.enqueue_frame(frame, ticket, close) {
+  if sink.enqueue_frame(frame, ticket, close, authorization?) {
     Ok(())
   } else {
     Err(SlowConsumer)

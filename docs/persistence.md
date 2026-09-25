@@ -18,6 +18,26 @@ Snapshot tuning options without `--data-dir` are configuration errors. Strict
 mode requires a data directory and rejects snapshot debounce/max-delay/retry
 options. Explicit `off` with a data directory is also invalid.
 
+## Reload and recovery
+
+With reload enabled, off mode has only the live generation. Snapshot mode
+applies the current security policy to restored Sessions before accepting
+connections; its snapshot still has the asynchronous durability boundary
+described below. A crash can restore pre-cleanup state, so startup must
+reconcile it against the current bundle before admission.
+
+Strict mode commits a versioned policy transition to the WAL before publishing
+the generation. It durably records subsequent Session eviction, subscription
+and pending-message cleanup, then marks reconciliation complete. Recovery
+replays policy records and finishes unfinished cleanup before listeners bind.
+The current bundle's security fingerprint must match the committed policy;
+otherwise startup fails with `PolicySourceMismatch`. If activation failed
+after source files were replaced, restore the matching previous bundle before
+restarting. Once the policy capability has been committed, old readers that
+lack it cannot open the WAL directory. Keep backups of both the data directory
+and the matching configuration bundle. Reverting a policy is a new reload
+generation; it does not resurrect deleted Sessions or messages.
+
 ## Snapshot files and startup
 
 The canonicalized data directory is mode `0700`. It contains only fixed names:

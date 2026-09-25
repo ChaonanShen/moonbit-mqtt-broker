@@ -412,7 +412,30 @@ MQTT.js 检查四入口 QoS 1 路由及 TCP 到 WSS 的持久会话恢复。
 Upgrade、WebSocket 帧边界、验证证书的 WSS，以及私有 TLS 材料捕获。
 对已提交候选的完整功能与分发记录由 CI 提供；开发侧只做定向检查。
 
+## P1-04 热更新门禁
+
+累计入口依次运行 reload 生命周期、TLS/WSS 材料轮换、strict 恢复和安全撤权进程测试。安全撤权脚本分别以 off、snapshot、strict 模式验证匿名关闭、密码变更时空闲连接断开，以及 ACL 收紧后的投递阻断。reload 限额脚本检查单会话待发队列最大支持边界（4096 接受、4097 拒绝）。另一个 strict 用例在 policy WAL fsync 处暂停，发送 SIGTERM，放行写入后核对退出与匹配 bundle 的恢复接入。分发证据只放行各模式的摘要和脱敏事件日志；密码库、manifest 和私钥不得上传。导出的二进制还在 base、argon2、tls、full 四种运行镜像中分别执行启用 reload 的 check-config：普通 reload 仅在具备 Argon2 的环境成功，TLS reload 仅在 full 成功；每种 profile 的预期结果写入 `evidence.txt`。
+
+固定硬件的 reload 性能对照另由用户运行：
+`PERF_EXPECTED_SHA=<候选SHA> scripts/run-p1-04-performance.sh`。
+脚本对 off、snapshot、strict 各做三轮配对，比较静态 TLS/密码认证、
+启用 reload 但空闲，以及同时轮换密码与 TLS 材料；每个场景预热 10 秒、
+测量 30 秒。空闲吞吐须不低于静态基线的 90%；QoS 1 ACK P99 须不超过
+max(基线 2 倍、基线 +20 ms)。激活期间 ACK P99 须不超过
+max(空闲 3 倍、空闲 +50 ms)，reload Operation 须在 10 秒内完成。
+各场景 JSON、Broker 日志、资源采样、二进制哈希、宿主环境、命令及最终
+退出码保存在 `.local/manual-verification/p1-04/<SHA>/`。
+`PERF_QUICK=1` 只运行两秒夹具检查，不计正式测量。性能对照与分发
+soak 分开执行。
+
 ## P1-01 强持久性门禁
+
+扩展 strict transport soak 每 100 条发布记录一次进度。客户端截止时间与
+shell timeout 限制负载时长；负载失败后另有 10 秒 watchdog 限制 Broker
+停机等待。缺少 `DURABILITY_SOAK_PASS`、`soak.json` 或 Broker 退出码
+非零时，soak 属失败或未完成，不能因前面的正确性门禁通过而标为通过。
+Native 测试还覆盖 checkpoint 与在线事件交错，避免重新排队的事件独占
+driver 本轮执行。
 
 已提交候选的 `verify-release.sh` 各调用一次 `durability_transports.sh`
 与 `durability_commit.sh`：覆盖 TCP、TLS、WS、WSS，QoS 1/2 重启恢复，

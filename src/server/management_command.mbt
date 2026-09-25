@@ -145,6 +145,10 @@ fn RouterDriver::accept_management_command(
   if !mailbox.valid(ticket) {
     return
   }
+  if spec.kind == @management.Reload {
+    self.accept_reload_command(ticket, spec, actor, active, mailbox)
+    return
+  }
   if actor.token_id() != spec.actor_token_id ||
     !actor.allows(@management.Operator) {
     mailbox.produce(
@@ -479,5 +483,127 @@ fn RouterDriver::handle_management_command(
         @management.Kick => self.run_management_kick(operation_id, spec)
         @management.Reload => ()
       }
+  }
+}
+
+///|
+fn RouterDriver::accept_reload_command(
+  self : RouterDriver,
+  ticket : ManagementCommandTicket,
+  spec : @management.CommandSpec,
+  actor : @management.AdminPrincipal,
+  active : ManagementRuntime,
+  mailbox : ManagementCommandMailbox,
+) -> Unit {
+  if actor.token_id() != spec.actor_token_id ||
+    !actor.allows(@management.ConfigAdmin) {
+    mailbox.produce(
+      ticket,
+      management_command_error(@http_transport.Forbidden, "forbidden"),
+    )
+    return
+  }
+  if active.context.lifecycle != @management.Serving || self.strict_fenced {
+    mailbox.produce(
+      ticket,
+      management_command_error(
+        @http_transport.ServiceUnavailable,
+        "unavailable",
+      ),
+    )
+    return
+  }
+  let service = match self.reload_service {
+    Some(value) => value
+    None => {
+      mailbox.produce(
+        ticket,
+        management_command_error(
+          @http_transport.ServiceUnavailable,
+          "reload_disabled",
+        ),
+      )
+      return
+    }
+  }
+  let generation = self.generation.unwrap()
+  let parsed = @management.parse_strong_etag(spec.if_match, "g")
+  if parsed is Err(_) {
+    mailbox.produce(
+      ticket,
+      management_command_error(@http_transport.BadRequest, "bad_request"),
+    )
+    return
+  }
+  let etag = parsed.unwrap()
+  if etag.boot_id != active.context.boot_id ||
+    spec.target != etag.target.to_string() {
+    mailbox.produce(
+      ticket,
+      management_command_error(
+        @http_transport.PreconditionFailed,
+        "precondition_failed",
+      ),
+    )
+    return
+  }
+  let fingerprint = spec.normalized()
+  match
+    service.operations.lookup_key(
+      spec.actor_token_id,
+      spec.idempotency_key,
+      fingerprint,
+    ) {
+    @management.KeyMatch(record) => {
+      mailbox.produce(
+        ticket,
+        management_operation_reply(
+          record,
+          if record.state == @management.Succeeded ||
+            record.state == @management.Failed {
+            @http_transport.Ok
+          } else {
+            @http_transport.Accepted
+          },
+        ),
+      )
+      return
+    }
+    @management.KeyConflict => {
+      mailbox.produce(
+        ticket,
+        management_command_error(
+          @http_transport.Conflict,
+          "idempotency_conflict",
+        ),
+      )
+      return
+    }
+    @management.KeyUnused => ()
+  }
+  match
+    service.admit_http(
+      spec,
+      generation.active().config_epoch(),
+      active.config.operation_timeout_ms().to_int64(),
+    ) {
+    Ok(record) =>
+      mailbox.produce(
+        ticket,
+        management_operation_reply(record, @http_transport.Accepted),
+      )
+    Err(ReloadServiceStale) =>
+      mailbox.produce(
+        ticket,
+        management_command_error(
+          @http_transport.PreconditionFailed,
+          "precondition_failed",
+        ),
+      )
+    Err(ReloadServiceBusy) | Err(ReloadServiceCapacity) =>
+      mailbox.produce(
+        ticket,
+        management_command_error(@http_transport.TooManyRequests, "reload_busy"),
+      )
   }
 }

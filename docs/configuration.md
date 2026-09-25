@@ -84,6 +84,56 @@ with an approximately 2 ms collection delay. Checkpoints are attempted every
 `--print-effective-config` also applies CLI overrides and prints canonical TOML
 with private-key/password-file values replaced by `<redacted>`.
 
+## Live configuration reload
+
+Reload is disabled by default. Start with an absolute `--config` path and an
+absolute, private version 1 bundle manifest. The manifest lists the effective
+config and every referenced password, ACL, and MQTT TLS/WSS certificate/key
+file, each with its absolute path and SHA-256 digest. Publish the complete
+material set and manifest before sending SIGHUP or requesting a
+[config-admin reload](management.md). `scripts/build-config-bundle.sh`
+stages an immutable version directory and manifest; its four arguments are
+`SOURCE_DIR VERSION_DIR CONFIG_TARGET MANIFEST_TARGET`. The target paths must
+match the paths the running Broker reads. Keep prior material available for
+rollback and strict recovery.
+
+```toml
+[reload]
+enabled = true
+manifest_file = "/etc/moonbit-mqtt-broker/manifest.toml"
+# Required when any MQTT TLS or WSS listener is configured.
+material_runtime_dir = "/var/lib/moonbit-mqtt-broker/tls-material"
+prepare_timeout_ms = 30000
+max_source_bytes = 16777216
+max_generation_bytes = 67108864
+max_reconcile_items_per_turn = 64
+max_reconcile_bytes_per_turn = 1048576
+max_accounts = 4096
+max_acl_rules = 4096
+```
+
+Reload requires `max_pending_per_session <= 4096` so revocation can
+copy and discard one queued pointer array within its fixed per-turn budget.
+
+The material runtime directory must be a private, writable absolute path
+outside the source and persistence directories. The Broker captures a checked
+bundle before preparing a candidate; an invalid or changed source leaves the
+active generation intact. `--check-config` validates a configured bundle
+without activating it or creating runtime TLS material. CLI overrides keep
+their startup precedence when a new TOML bundle is evaluated.
+
+Hot fields are the anonymous setting, password and ACL files, existing
+MQTT TLS/WSS certificate/key bytes, log level/format, system metrics interval,
+and management snapshot timing. All other effective scalar settings,
+listener topology/address/transport, management tokens and reload limits
+require restart. A mixed hot and restart-only edit is rejected as a whole.
+A no-change request does not advance the config epoch. SIGHUP works with
+management disabled; the HTTP route requires an enabled management listener
+and a `config_admin` token. Existing TLS connections retain their material
+lease while new handshakes use the new generation. See
+[security revocation](security.md#live-security-revocation) and
+[persistence recovery](persistence.md#reload-and-recovery).
+
 ## Named MQTT listeners and WS/WSS
 
 Use `[[listeners]]` to bind TCP, TLS, WS and WSS in one Broker process. This

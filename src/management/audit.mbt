@@ -95,6 +95,7 @@ pub fn AuditRing::page(
   after_sequence : Int64,
   limit : Int,
   scan_limit : Int,
+  include_local_signal? : Bool = false,
 ) -> AuditPage {
   let items : Array[AuditEvent] = []
   let oldest = self.oldest_available_sequence()
@@ -112,7 +113,10 @@ pub fn AuditRing::page(
     let offset = (sequence - oldest).to_int()
     let index = (self.head + offset) % self.slots.length()
     if self.slots[index] is Some(event) &&
-      event.actor_token_id == actor_token_id {
+      (
+        event.actor_token_id == actor_token_id ||
+        (include_local_signal && event.actor_token_id == "local_signal")
+      ) {
       items.push(event)
     }
     sequence += 1L

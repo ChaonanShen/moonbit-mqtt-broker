@@ -270,3 +270,62 @@ async test "authentication infrastructure is charged until executor destroy" {
   driver.shutdown_authentication()
   assert_eq(state.managed_bytes(), baseline)
 }
+
+///|
+async test "queued MQTT publish is denied at writer start after policy change" {
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  defer listener.close()
+  let client = @socket.Tcp::connect(listener.addr)
+  defer client.close()
+  let (connection, _) = listener.accept()
+  defer connection.close()
+  let sink = TransportSink::new(2)
+  defer sink.close()
+  let mut permitted = true
+  sink.set_writer_gate(_ => permitted)
+  let authorization : OutboundAuthorization = {
+    connection_id: ConnectionId::new(1L),
+    client_id: @session.ClientId::new("client").unwrap(),
+    session_incarnation: Some(1L),
+    topic: @topic.TopicName::new("private/value").unwrap(),
+  }
+  assert_true(sink.enqueue_frame(b"must-not-write", None, None, authorization~))
+  permitted = false
+  assert_eq(
+    write_transport(ConnectionTransport::plain(connection), sink),
+    PolicyRevoked,
+  )
+  connection.close()
+  assert_eq(client.read_some(), None)
+}
+
+///|
+async test "partial TCP publish stops before the next chunk when policy changes" {
+  let listener = @socket.TcpServer(@socket.Addr::parse("127.0.0.1:0"))
+  defer listener.close()
+  let client = @socket.Tcp::connect(listener.addr)
+  defer client.close()
+  let (connection, _) = listener.accept()
+  let mut checks = 0
+  let payload = Bytes::make(32768, b'x')
+  let interrupted = try {
+    ConnectionTransport::plain(connection).write(payload, still_allowed=() => {
+      checks += 1
+      checks == 1
+    })
+    false
+  } catch {
+    _ => true
+  }
+  assert_true(interrupted)
+  assert_eq(checks, 2)
+  connection.close()
+  let mut received = 0
+  for ;; {
+    match client.read_some(max_len=32768) {
+      Some(bytes) => received += bytes.length()
+      None => break
+    }
+  }
+  assert_eq(received, 16384)
+}

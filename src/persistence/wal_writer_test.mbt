@@ -19,6 +19,7 @@ fn wal_writer_empty_checkpoint() -> WalCheckpoint {
     generation: 1L,
     lsn: 0L,
     identities: [],
+    policy: None,
     snapshot: { version: 3, sessions: [], retained: [] },
   }
 }
@@ -97,6 +98,7 @@ async test "checkpoint encoding yields to a queued WAL batch before publication"
       generation: 2L,
       lsn: 1L,
       identities: [],
+      policy: None,
       snapshot: {
         version: 3,
         sessions: [],

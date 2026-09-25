@@ -18,6 +18,7 @@ pub struct CachedObservation {
 /// cache entry across await.
 pub struct ObservationCache {
   config : ManagementConfig
+  mut snapshot_max_age_ms : Int
   owner : ManagementBudget
   mut current : CachedObservation?
   mut latest_driver_progress_ms : Int64
@@ -34,12 +35,32 @@ pub fn ObservationCache::new(
   }
   Ok({
     config: owner.config(),
+    snapshot_max_age_ms: owner.config().snapshot_max_age_ms(),
     owner,
     current: None,
     latest_driver_progress_ms: -1L,
     stopping: false,
     closed: false,
   })
+}
+
+///|
+/// Updated at the non-awaiting generation publication boundary.
+pub fn ObservationCache::update_reload_max_age(
+  self : ObservationCache,
+  interval_ms : Int,
+  max_age_ms : Int,
+) -> Bool {
+  if self.closed ||
+    interval_ms < 100 ||
+    interval_ms > 10000 ||
+    max_age_ms < 300 ||
+    max_age_ms > 60000 ||
+    max_age_ms < 3 * interval_ms {
+    return false
+  }
+  self.snapshot_max_age_ms = max_age_ms
+  true
 }
 
 ///|
@@ -70,8 +91,8 @@ pub fn ObservationCache::publish(
   let status = encode_status(
     sample,
     sample.captured_monotonic_ms,
-    self.config.snapshot_max_age_ms().to_int64(),
-    self.config.snapshot_max_age_ms().to_int64(),
+    self.snapshot_max_age_ms.to_int64(),
+    self.snapshot_max_age_ms.to_int64(),
   )
   if status.length() > self.config.max_response_bytes() {
     return false
@@ -117,8 +138,8 @@ pub fn ObservationCache::health(
   let decision = evaluate_health(
     entry.sample,
     now_monotonic_ms,
-    self.config.snapshot_max_age_ms().to_int64(),
-    self.config.snapshot_max_age_ms().to_int64(),
+    self.snapshot_max_age_ms.to_int64(),
+    self.snapshot_max_age_ms.to_int64(),
     driver_progress_override=self.latest_driver_progress_ms,
   )
   if self.stopping {
@@ -165,6 +186,7 @@ pub fn ObservationCache::status_body(
   details_enabled? : Bool = false,
   operations_enabled? : Bool = false,
   details_available? : Bool = false,
+  reload_enabled? : Bool = false,
 ) -> Result[Bytes, CacheError] {
   let entry = match self.readable(now_monotonic_ms) {
     Ok(value) => value
@@ -173,12 +195,13 @@ pub fn ObservationCache::status_body(
   let body = encode_status(
     entry.sample,
     now_monotonic_ms,
-    self.config.snapshot_max_age_ms().to_int64(),
-    self.config.snapshot_max_age_ms().to_int64(),
+    self.snapshot_max_age_ms.to_int64(),
+    self.snapshot_max_age_ms.to_int64(),
     driver_progress_override=self.latest_driver_progress_ms,
     details_enabled~,
     operations_enabled~,
     details_available~,
+    reload_enabled~,
   )
   if body.length() > self.config.max_response_bytes() {
     return Err(ResponseTooLarge)

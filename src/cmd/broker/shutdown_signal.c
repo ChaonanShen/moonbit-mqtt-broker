@@ -20,6 +20,36 @@ int32_t moonbit_utf8_encode_from_utf16(
 
 static volatile sig_atomic_t moonbit_mqtt_shutdown_signal = 0;
 
+// The exchange is lock-free on the supported Linux/amd64 target. A signal on
+// any runtime thread can safely set the flag without a read-clear lost wakeup.
+_Static_assert(__atomic_always_lock_free(sizeof(sig_atomic_t), 0),
+               "SIGHUP flag must be lock-free");
+static volatile sig_atomic_t moonbit_mqtt_reload_signal = 0;
+
+static void moonbit_mqtt_handle_reload_signal(int signal_number) {
+  (void)signal_number;
+  __atomic_store_n(&moonbit_mqtt_reload_signal, 1, __ATOMIC_RELEASE);
+}
+
+MOONBIT_FFI_EXPORT
+void moonbit_mqtt_install_reload_handler(void) {
+  struct sigaction action;
+  memset(&action, 0, sizeof(action));
+  action.sa_handler = moonbit_mqtt_handle_reload_signal;
+  sigemptyset(&action.sa_mask);
+  sigaction(SIGHUP, &action, NULL);
+}
+
+MOONBIT_FFI_EXPORT
+int32_t moonbit_mqtt_take_reload_signal(void) {
+  return __atomic_exchange_n(&moonbit_mqtt_reload_signal, 0, __ATOMIC_ACQ_REL);
+}
+
+MOONBIT_FFI_EXPORT
+int32_t moonbit_mqtt_test_send_reload_signal(void) {
+  return raise(SIGHUP);
+}
+
 static void moonbit_mqtt_handle_shutdown_signal(int signal_number) {
   if (moonbit_mqtt_shutdown_signal == 0) {
     moonbit_mqtt_shutdown_signal = signal_number;

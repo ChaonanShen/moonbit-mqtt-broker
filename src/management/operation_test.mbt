@@ -197,3 +197,43 @@ test "strict operation records committed LSN only after durable success" {
   assert_eq(done.completion_scope, "durable")
   assert_true(done.to_json().stringify().contains("committed_lsn_at_finish"))
 }
+
+///|
+test "reload operation preserves activation fact across later failure" {
+  let table = OperationTable::new("boot", 2, 1000L)
+  let accepted = table
+    .insert(
+      "admin",
+      Reload,
+      "0",
+      "POST:/v1/config/reload0",
+      "Key_0123456789abc",
+      "strict",
+      10L,
+      100L,
+    )
+    .unwrap()
+  assert_true(table.start(accepted.id, Preparing, 11L))
+  assert_true(table.advance_reload(accepted.id, WaitingBarrier, false, None))
+  assert_true(table.advance_reload(accepted.id, Reconciling, true, Some(1L)))
+  let progress = table.get_internal(accepted.id).unwrap()
+  assert_eq(progress.stage, Reconciling)
+  assert_true(progress.effect_applied)
+  assert_eq(progress.state_revision_after, Some(1L))
+  assert_true(
+    table.finish(
+      accepted.id,
+      false,
+      true,
+      false,
+      false,
+      Some("durability_failed"),
+      Some(1L),
+      None,
+      20L,
+      20L,
+    ),
+  )
+  assert_eq(table.get_internal(accepted.id).unwrap().state, Failed)
+  assert_true(table.get_internal(accepted.id).unwrap().effect_applied)
+}

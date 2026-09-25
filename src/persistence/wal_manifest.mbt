@@ -16,6 +16,7 @@ pub(all) struct WalManifest {
   sealed_segments : Array[WalSealedSegment]
   active_segment_id : Int64
   active_start_lsn : Int64
+  policy_required : Bool
 } derive(Eq, Debug)
 
 ///|
@@ -55,8 +56,22 @@ pub fn encode_wal_manifest(
     validate_wal_manifest(manifest)
     let writer = BinaryWriter::new(max_bytes=32768)
     writer.write_raw(wal_manifest_magic)
-    writer.write_u16(1, "wal-manifest-version")
-    writer.write_u16(3, "wal-logical-schema")
+    writer.write_u16(
+      if manifest.policy_required {
+        2
+      } else {
+        1
+      },
+      "wal-manifest-version",
+    )
+    writer.write_u16(
+      if manifest.policy_required {
+        4
+      } else {
+        3
+      },
+      "wal-logical-schema",
+    )
     writer.write_positive_i64(manifest.generation, "wal-manifest-generation")
     writer.write_positive_i64(
       manifest.checkpoint_generation,
@@ -96,10 +111,10 @@ pub fn decode_wal_manifest(
       raise InvalidMagic
     }
     let version = reader.read_u16()
-    if version != 1 {
+    if version != 1 && version != 2 {
       raise UnsupportedEnvelopeVersion(version)
     }
-    if reader.read_u16() != 3 {
+    if reader.read_u16() != (if version == 2 { 4 } else { 3 }) {
       raise wal_corrupt("manifest-logical-schema", 10)
     }
     let generation = reader.read_positive_i64("wal-manifest-generation")
@@ -140,6 +155,7 @@ pub fn decode_wal_manifest(
       sealed_segments,
       active_segment_id,
       active_start_lsn,
+      policy_required: version == 2,
     }
     validate_wal_manifest(manifest)
     Ok(manifest)

@@ -18,11 +18,21 @@ struct AclRule {
   principal : Principal
   access : AccessKind
   filter : @topic.TopicFilter
-}
+} derive(Eq)
 
 ///|
 pub struct AclPolicy {
   rules : Array[AclRule]
+}
+
+///|
+pub fn AclPolicy::same_rules(self : AclPolicy, other : AclPolicy) -> Bool {
+  self.rules == other.rules
+}
+
+///|
+pub fn AclPolicy::rule_count(self : AclPolicy) -> Int {
+  self.rules.length()
 }
 
 ///|

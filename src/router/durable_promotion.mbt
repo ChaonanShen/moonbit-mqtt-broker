@@ -20,6 +20,9 @@ pub fn BrokerState::next_durable_promotion(
     if session.is_attached() &&
       session.pending_count() > 0 &&
       session.inflight_count() < self.config.max_inflight_per_session() {
+      if !self.pending_head_authorized(session) {
+        continue
+      }
       let head = session.pending_head_cost().unwrap()
       let limits = self.config.resources
       if head <=

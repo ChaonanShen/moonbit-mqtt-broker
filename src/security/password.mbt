@@ -7,6 +7,7 @@ pub(all) enum PasswordFileError {
   InvalidHash(Int)
   HashCostExceeded(Int)
   Argon2Unavailable
+  AccountLimitExceeded
 } derive(Eq, Debug)
 
 ///|
@@ -64,8 +65,9 @@ fn verify_argon2id(encoded : String, password : Bytes) -> Int {
 }
 
 ///|
-pub fn PasswordDatabase::parse(
+fn parse_password_database(
   contents : String,
+  validate_hashes : Bool,
 ) -> Result[PasswordDatabase, PasswordFileError] {
   let hashes : Map[String, PasswordHash] = Map([])
   let mut fallback_hash : PasswordHash? = None
@@ -106,13 +108,15 @@ pub fn PasswordDatabase::parse(
       Invalid => return Err(InvalidHash(index + 1))
       Exceeded => return Err(HashCostExceeded(index + 1))
     }
-    let status = verify_argon2id(encoded, b"")
-    if status == -1000 {
-      return Err(Argon2Unavailable)
-    }
-    // libargon2 returns -35 when a well-formed hash does not match.
-    if status != 0 && status != -35 {
-      return Err(InvalidHash(index + 1))
+    if validate_hashes {
+      let status = verify_argon2id(encoded, b"")
+      if status == -1000 {
+        return Err(Argon2Unavailable)
+      }
+      // libargon2 returns -35 when a well-formed hash does not match.
+      if status != 0 && status != -35 {
+        return Err(InvalidHash(index + 1))
+      }
     }
     let entry : PasswordHash = { encoded, workspace_cost }
     hashes.set(username, entry)
@@ -124,8 +128,77 @@ pub fn PasswordDatabase::parse(
 }
 
 ///|
+pub fn PasswordDatabase::parse(
+  contents : String,
+) -> Result[PasswordDatabase, PasswordFileError] {
+  parse_password_database(contents, true)
+}
+
+///|
+/// This type cannot authenticate clients. Real Argon2 validation must finish
+/// on a dedicated executor before it can yield an installable database.
+pub struct PasswordDatabaseCandidate {
+  database : PasswordDatabase
+}
+
+///|
+pub fn PasswordDatabaseCandidate::parse(
+  contents : String,
+  max_accounts? : Int = 4096,
+) -> Result[PasswordDatabaseCandidate, PasswordFileError] {
+  match parse_password_database(contents, false) {
+    Ok(database) =>
+      if max_accounts < 1 ||
+        max_accounts > 4096 ||
+        database.user_count() > max_accounts {
+        Err(AccountLimitExceeded)
+      } else {
+        Ok({ database, })
+      }
+    Err(error) => Err(error)
+  }
+}
+
+///|
 pub fn PasswordDatabase::user_count(self : PasswordDatabase) -> Int {
   self.hashes.length()
+}
+
+///|
+pub fn PasswordDatabase::contains_user(
+  self : PasswordDatabase,
+  username : String,
+) -> Bool {
+  self.hashes.contains(username)
+}
+
+///|
+pub fn PasswordDatabase::same_credential(
+  self : PasswordDatabase,
+  other : PasswordDatabase,
+  username : String,
+) -> Bool {
+  match (self.hashes.get(username), other.hashes.get(username)) {
+    (Some(left), Some(right)) => left.encoded == right.encoded
+    _ => false
+  }
+}
+
+///|
+pub fn PasswordDatabase::same_contents(
+  self : PasswordDatabase,
+  other : PasswordDatabase,
+) -> Bool {
+  if self.hashes.length() != other.hashes.length() {
+    return false
+  }
+  for username, entry in self.hashes {
+    match other.hashes.get(username) {
+      Some(value) if value.encoded == entry.encoded => ()
+      _ => return false
+    }
+  }
+  true
 }
 
 ///|

@@ -88,6 +88,16 @@ fn print_help() -> Unit {
   println("  --management-command-burst N  Default 10")
   println("  --management-max-index-bytes N  Default 8388608")
   println("  --management-max-bytes-total N  Default 8388608")
+  println("  --reload-enabled true|false  Default false")
+  println("  --reload-manifest-file PATH  Fixed versioned bundle manifest")
+  println("  --reload-material-runtime-dir PATH  Private TLS material root")
+  println("  --reload-prepare-timeout-ms N  Default 30000")
+  println("  --reload-max-source-bytes N  Default 16777216")
+  println("  --reload-max-generation-bytes N  Default 67108864")
+  println("  --reload-max-reconcile-items-per-turn N  Default 64")
+  println("  --reload-max-reconcile-bytes-per-turn N  Default 1048576")
+  println("  --reload-max-accounts N  Default 4096")
+  println("  --reload-max-acl-rules N  Default 4096")
   println("  --max-connections N                Default 128")
   println("  --max-packet-size N                Default 1048576")
   println("  --max-receive-buffer-size N        Default 1048576")
@@ -249,6 +259,7 @@ async fn run_main() -> Unit {
     return
   }
   let mut config_path : String? = None
+  let mut loaded_config_text : String? = None
   let mut check_config = false
   let mut print_effective_config = false
   let cli_args : Array[String] = []
@@ -302,6 +313,7 @@ async fn run_main() -> Unit {
       let contents = bytes.text() catch {
         _ => raise CliError("--config must be UTF-8")
       }
+      loaded_config_text = Some(contents)
       @config.parse_config_file(contents) catch {
         @config.ConfigFileError(message) =>
           raise CliError("configuration file: " + message)
@@ -406,6 +418,16 @@ async fn run_main() -> Unit {
   let mut management_command_burst = 10
   let mut management_max_index_bytes = 8388608L
   let mut management_max_bytes_total = 8388608L
+  let mut reload_enabled = false
+  let mut reload_manifest_file = ""
+  let mut reload_material_runtime_dir = ""
+  let mut reload_prepare_timeout_ms = 30000
+  let mut reload_max_source_bytes = 16777216
+  let mut reload_max_generation_bytes = 67108864L
+  let mut reload_max_reconcile_items_per_turn = 64
+  let mut reload_max_reconcile_bytes_per_turn = 1048576
+  let mut reload_max_accounts = 4096
+  let mut reload_max_acl_rules = 4096
   let mut once = false
   let mut index = 1
   while index < args.length() {
@@ -921,6 +943,66 @@ async fn run_main() -> Unit {
         )
         index += 2
       }
+      "--reload-enabled" => {
+        reload_enabled = parse_bool_option(args, index, "--reload-enabled")
+        index += 2
+      }
+      "--reload-manifest-file" => {
+        if index + 1 >= args.length() {
+          raise CliError("--reload-manifest-file requires a path")
+        }
+        reload_manifest_file = args[index + 1]
+        index += 2
+      }
+      "--reload-material-runtime-dir" => {
+        if index + 1 >= args.length() {
+          raise CliError("--reload-material-runtime-dir requires a path")
+        }
+        reload_material_runtime_dir = args[index + 1]
+        index += 2
+      }
+      "--reload-prepare-timeout-ms" => {
+        reload_prepare_timeout_ms = parse_bounded_int(
+          args, index, "--reload-prepare-timeout-ms", 1,
+        )
+        index += 2
+      }
+      "--reload-max-source-bytes" => {
+        reload_max_source_bytes = parse_bounded_int(
+          args, index, "--reload-max-source-bytes", 16384,
+        )
+        index += 2
+      }
+      "--reload-max-generation-bytes" => {
+        reload_max_generation_bytes = parse_bounded_int64(
+          args, index, "--reload-max-generation-bytes", 1L,
+        )
+        index += 2
+      }
+      "--reload-max-reconcile-items-per-turn" => {
+        reload_max_reconcile_items_per_turn = parse_bounded_int(
+          args, index, "--reload-max-reconcile-items-per-turn", 1,
+        )
+        index += 2
+      }
+      "--reload-max-reconcile-bytes-per-turn" => {
+        reload_max_reconcile_bytes_per_turn = parse_bounded_int(
+          args, index, "--reload-max-reconcile-bytes-per-turn", 131328,
+        )
+        index += 2
+      }
+      "--reload-max-accounts" => {
+        reload_max_accounts = parse_bounded_int(
+          args, index, "--reload-max-accounts", 1,
+        )
+        index += 2
+      }
+      "--reload-max-acl-rules" => {
+        reload_max_acl_rules = parse_bounded_int(
+          args, index, "--reload-max-acl-rules", 1,
+        )
+        index += 2
+      }
       "--listener-id" => {
         if index + 1 >= args.length() || args[index + 1] == "" {
           raise CliError("--listener-id requires a non-empty ID")
@@ -1188,6 +1270,7 @@ async fn run_main() -> Unit {
   } else {
     None
   }
+  let use_captured_tls = reload_enabled || reload_manifest_file != ""
   let tls = match (tls_certificate_file, tls_private_key_file) {
     (None, None) => {
       if tls_timeout_option_used {
@@ -1198,32 +1281,36 @@ async fn run_main() -> Unit {
       None
     }
     (Some(certificate_file), Some(private_key_file)) => {
-      let certificate_kind = @fs.kind(certificate_file, follow_symlink=false) catch {
-        _ => raise CliError("--tls-cert must name a readable regular file")
-      }
-      if certificate_kind != @fs.Regular {
-        raise CliError("--tls-cert must name a readable regular file")
-      }
-      match private_key_status(private_key_file) {
-        0 => ()
-        1 => raise CliError("--tls-key must name a readable regular file")
-        2 =>
-          raise CliError(
-            "--tls-key must be a regular file, not a symlink or special file",
-          )
-        3 =>
-          raise CliError(
-            "--tls-key must not grant permissions to group or other users",
-          )
-        _ => raise CliError("--tls-key validation failed")
+      if !use_captured_tls {
+        let certificate_kind = @fs.kind(certificate_file, follow_symlink=false) catch {
+          _ => raise CliError("--tls-cert must name a readable regular file")
+        }
+        if certificate_kind != @fs.Regular {
+          raise CliError("--tls-cert must name a readable regular file")
+        }
+        match private_key_status(private_key_file) {
+          0 => ()
+          1 => raise CliError("--tls-key must name a readable regular file")
+          2 =>
+            raise CliError(
+              "--tls-key must be a regular file, not a symlink or special file",
+            )
+          3 =>
+            raise CliError(
+              "--tls-key must not grant permissions to group or other users",
+            )
+          _ => raise CliError("--tls-key validation failed")
+        }
       }
       let value = @server.TlsServerConfig::new(
         certificate_file,
         private_key_file,
         handshake_timeout_ms=tls_handshake_timeout_ms,
       ).unwrap()
-      @server.validate_tls_config(value) catch {
-        _ => raise CliError("TLS certificate/private key validation failed")
+      if !use_captured_tls {
+        @server.validate_tls_config(value) catch {
+          _ => raise CliError("TLS certificate/private key validation failed")
+        }
       }
       Some(value)
     }
@@ -1275,22 +1362,27 @@ async fn run_main() -> Unit {
         if draft.cert == "" || draft.key == "" {
           raise CliError("TLS listener requires tls_cert and tls_key")
         }
-        let certificate_kind = @fs.kind(draft.cert, follow_symlink=false) catch {
-          _ => raise CliError("listener TLS certificate is unavailable")
-        }
-        if certificate_kind != @fs.Regular || private_key_status(draft.key) != 0 {
-          raise CliError("listener TLS material must be safe regular files")
+        if !use_captured_tls {
+          let certificate_kind = @fs.kind(draft.cert, follow_symlink=false) catch {
+            _ => raise CliError("listener TLS certificate is unavailable")
+          }
+          if certificate_kind != @fs.Regular ||
+            private_key_status(draft.key) != 0 {
+            raise CliError("listener TLS material must be safe regular files")
+          }
         }
         let value = @server.TlsServerConfig::new(
           draft.cert,
           draft.key,
           handshake_timeout_ms=draft.handshake_timeout_ms,
         ).unwrap()
-        @server.validate_tls_config(value) catch {
-          _ =>
-            raise CliError(
-              "listener TLS certificate/private key validation failed",
-            )
+        if !use_captured_tls {
+          @server.validate_tls_config(value) catch {
+            _ =>
+              raise CliError(
+                "listener TLS certificate/private key validation failed",
+              )
+          }
         }
         Some(value)
       } else {
@@ -1342,67 +1434,118 @@ async fn run_main() -> Unit {
   if !allow_anonymous && password_file is None {
     raise CliError("--allow-anonymous false requires --password-file")
   }
-  let passwords = match password_file {
-    None => None
-    Some(path) => {
-      let kind = @fs.kind(path, follow_symlink=false) catch {
-        _ => raise CliError("--password-file must name a readable regular file")
+  let startup_sources : (
+    @bundle.CapturedBundle,
+    @bundle.ReloadEffectiveCandidate,
+    Bytes,
+  )? = if reload_enabled || reload_manifest_file != "" {
+    let selected_config = match config_path {
+      Some(path) if path.has_prefix("/") => path
+      _ => raise CliError("reload manifest requires an absolute --config path")
+    }
+    if !reload_manifest_file.has_prefix("/") {
+      raise CliError("reload manifest path must be absolute")
+    }
+    let bundle = @bundle.capture_bundle(
+      reload_manifest_file,
+      max_source_bytes=reload_max_source_bytes,
+    ) catch {
+      _ => raise CliError("reload bundle capture failed")
+    }
+    let captured = match bundle.material_bytes("config") {
+      Some(value) => value
+      None => raise CliError("reload bundle lacks config")
+    }
+    let captured_text = @utf8.decode(captured) catch {
+      _ => raise CliError("reload config must be UTF-8")
+    }
+    if Some(captured_text) != loaded_config_text {
+      raise CliError("reload config changed during startup")
+    }
+    let candidate = bundle.evaluate(selected_config, cli_args) catch {
+      _ => raise CliError("reload bundle does not match effective config")
+    }
+    let hot = candidate.hot()
+    if hot.allow_anonymous != allow_anonymous ||
+      hot.password_file != password_file ||
+      hot.acl_file != acl_file {
+      raise CliError("reload security sources differ from startup config")
+    }
+    let fingerprint = bundle.policy_fingerprint(candidate) catch {
+      _ => raise CliError("reload policy fingerprint unavailable")
+    }
+    Some((bundle, candidate, fingerprint))
+  } else {
+    None
+  }
+  let security = match startup_sources {
+    Some((bundle, candidate, _)) =>
+      bundle.prepare_security_isolated(candidate) catch {
+        _ => raise CliError("reload security validation failed")
       }
-      if kind != @fs.Regular {
-        raise CliError("--password-file must name a readable regular file")
+    None => {
+      let passwords = match password_file {
+        None => None
+        Some(path) => {
+          let kind = @fs.kind(path, follow_symlink=false) catch {
+            _ =>
+              raise CliError(
+                "--password-file must name a readable regular file",
+              )
+          }
+          if kind != @fs.Regular {
+            raise CliError("--password-file must name a readable regular file")
+          }
+          let bytes = @fs.read_file(path) catch {
+            _ => raise CliError("failed to read --password-file")
+          }
+          if bytes.binary().length() > 1048576 {
+            raise CliError("--password-file exceeds 1048576 bytes")
+          }
+          let contents = bytes.text() catch {
+            _ => raise CliError("--password-file must be UTF-8")
+          }
+          Some(
+            match @security.PasswordDatabase::parse(contents) {
+              Ok(value) => value
+              Err(@security.PasswordFileError::Argon2Unavailable) =>
+                raise CliError(
+                  "Argon2id authentication requires libargon2.so.1: install libargon2-1 on Ubuntu/Debian or use the project Docker image",
+                )
+              Err(_) => raise CliError("invalid --password-file")
+            },
+          )
+        }
       }
-      let bytes = @fs.read_file(path) catch {
-        _ => raise CliError("failed to read --password-file")
+      let acl = match acl_file {
+        None => None
+        Some(path) => {
+          let kind = @fs.kind(path, follow_symlink=false) catch {
+            _ => raise CliError("--acl-file must name a readable regular file")
+          }
+          if kind != @fs.Regular {
+            raise CliError("--acl-file must name a readable regular file")
+          }
+          let bytes = @fs.read_file(path) catch {
+            _ => raise CliError("failed to read --acl-file")
+          }
+          if bytes.binary().length() > 1048576 {
+            raise CliError("--acl-file exceeds 1048576 bytes")
+          }
+          let contents = bytes.text() catch {
+            _ => raise CliError("--acl-file must be UTF-8")
+          }
+          Some(
+            match @security.AclPolicy::parse(contents) {
+              Ok(value) => value
+              Err(_) => raise CliError("invalid --acl-file")
+            },
+          )
+        }
       }
-      if bytes.binary().length() > 1048576 {
-        raise CliError("--password-file exceeds 1048576 bytes")
-      }
-      let contents = bytes.text() catch {
-        _ => raise CliError("--password-file must be UTF-8")
-      }
-      Some(
-        match @security.PasswordDatabase::parse(contents) {
-          Ok(value) => value
-          Err(@security.PasswordFileError::Argon2Unavailable) =>
-            raise CliError(
-              "Argon2id authentication requires libargon2.so.1: install libargon2-1 on Ubuntu/Debian or use the project Docker image",
-            )
-          Err(_) => raise CliError("invalid --password-file")
-        },
-      )
+      @security.SecurityPolicy::new(allow_anonymous~, passwords?, acl?)
     }
   }
-  let acl = match acl_file {
-    None => None
-    Some(path) => {
-      let kind = @fs.kind(path, follow_symlink=false) catch {
-        _ => raise CliError("--acl-file must name a readable regular file")
-      }
-      if kind != @fs.Regular {
-        raise CliError("--acl-file must name a readable regular file")
-      }
-      let bytes = @fs.read_file(path) catch {
-        _ => raise CliError("failed to read --acl-file")
-      }
-      if bytes.binary().length() > 1048576 {
-        raise CliError("--acl-file exceeds 1048576 bytes")
-      }
-      let contents = bytes.text() catch {
-        _ => raise CliError("--acl-file must be UTF-8")
-      }
-      Some(
-        match @security.AclPolicy::parse(contents) {
-          Ok(value) => value
-          Err(_) => raise CliError("invalid --acl-file")
-        },
-      )
-    }
-  }
-  let security = @security.SecurityPolicy::new(
-    allow_anonymous~,
-    passwords?,
-    acl?,
-  )
   let logger = @observability.Logger::new(
     minimum_level=log_level,
     format=log_format,
@@ -1450,6 +1593,17 @@ async fn run_main() -> Unit {
           raise CliError("persistence configuration: " + error.category())
       }
     None => ()
+  }
+  if check_config || print_effective_config {
+    if startup_sources is Some((bundle, candidate, _)) &&
+      !candidate.hot().tls_sources.is_empty() {
+      if !reload_material_runtime_dir.has_prefix("/") {
+        raise CliError("reload TLS requires an absolute private material root")
+      }
+      @server.validate_tls_bundle(bundle, candidate) catch {
+        _ => raise CliError("reload TLS material validation failed")
+      }
+    }
   }
   if print_effective_config {
     let quote = fn(value : String) { @json.to_json(value).stringify() }
@@ -1611,6 +1765,26 @@ async fn run_main() -> Unit {
     println("command_burst = " + management_command_burst.to_string())
     println("max_index_bytes = " + management_max_index_bytes.to_string())
     println("max_bytes_total = " + management_max_bytes_total.to_string())
+    println("[reload]")
+    println("enabled = " + reload_enabled.to_string())
+    println(
+      "manifest_file = " +
+      quote(if reload_manifest_file == "" { "" } else { "<redacted>" }),
+    )
+    println("material_runtime_dir = " + quote(reload_material_runtime_dir))
+    println("prepare_timeout_ms = " + reload_prepare_timeout_ms.to_string())
+    println("max_source_bytes = " + reload_max_source_bytes.to_string())
+    println("max_generation_bytes = " + reload_max_generation_bytes.to_string())
+    println(
+      "max_reconcile_items_per_turn = " +
+      reload_max_reconcile_items_per_turn.to_string(),
+    )
+    println(
+      "max_reconcile_bytes_per_turn = " +
+      reload_max_reconcile_bytes_per_turn.to_string(),
+    )
+    println("max_accounts = " + reload_max_accounts.to_string())
+    println("max_acl_rules = " + reload_max_acl_rules.to_string())
     println("[resources]")
     print_resource_section_values(resources, "resources")
     println("[limits]")
@@ -1663,26 +1837,102 @@ async fn run_main() -> Unit {
     }
     return
   }
+  if reload_enabled {
+    if once {
+      raise CliError("--once cannot be combined with reload.enabled")
+    }
+    if config_path is None ||
+      reload_manifest_file == "" ||
+      !reload_manifest_file.has_prefix("/") {
+      raise CliError("reload requires --config and an absolute manifest path")
+    }
+    if !config_path.unwrap().has_prefix("/") {
+      raise CliError("reload requires an absolute --config path")
+    }
+    if effective_listeners.any(listener => listener.tls is Some(_)) &&
+      !reload_material_runtime_dir.has_prefix("/") {
+      raise CliError("reload TLS requires an absolute private material root")
+    }
+    if max_pending_qos1_per_session > 4096 {
+      raise CliError("reload requires max_pending_per_session at most 4096")
+    }
+    if reload_prepare_timeout_ms > 300000 ||
+      reload_max_source_bytes > 67108864 ||
+      reload_max_generation_bytes > 268435456L ||
+      reload_max_reconcile_items_per_turn > 256 ||
+      reload_max_reconcile_bytes_per_turn > 4194304 ||
+      reload_max_accounts > 4096 ||
+      reload_max_acl_rules > 4096 {
+      raise CliError("reload resource limit exceeds supported range")
+    }
+  }
   if check_config {
     println("configuration valid")
     return
+  }
+  let reload_tls : (
+    @bundle.CapturedBundle,
+    @bundle.ReloadEffectiveCandidate,
+    String,
+  )? = match startup_sources {
+    Some((bundle, candidate, _)) => {
+      if !candidate.hot().tls_sources.is_empty() &&
+        !reload_material_runtime_dir.has_prefix("/") {
+        raise CliError("reload TLS requires an absolute private material root")
+      }
+      Some((bundle, candidate, reload_material_runtime_dir))
+    }
+    None => None
+  }
+  let reload : @server.ReloadStartup? = if reload_enabled {
+    install_reload_signal_handler()
+    Some({
+      config_path: config_path.unwrap(),
+      manifest_path: reload_manifest_file,
+      cli_args,
+      runtime_root: reload_material_runtime_dir,
+      prepare_timeout_ms: reload_prepare_timeout_ms,
+      max_source_bytes: reload_max_source_bytes,
+      max_generation_bytes: reload_max_generation_bytes,
+      max_accounts: reload_max_accounts,
+      max_acl_rules: reload_max_acl_rules,
+      signal_pending: take_reload_signal,
+    })
+  } else {
+    None
   }
   let management : @server.ManagementStartup? = management_tokens.map(tokens => {
     config: management_config,
     tokens,
   })
   match data_dir {
-    None =>
+    None => {
+      let initial_state = @router.BrokerState::new(broker_config)
+      if startup_sources is Some(_) {
+        @server.bootstrap_runtime_policy(
+          initial_state,
+          security,
+          1L,
+          reload_max_reconcile_items_per_turn,
+          reload_max_reconcile_bytes_per_turn.to_int64(),
+        )
+      }
       @server.run_listeners(
         effective_listeners,
         config,
-        @router.BrokerState::new(broker_config),
+        initial_state,
         shutdown_requested~,
         once~,
         security~,
         logger~,
         management?,
+        reload_tls?,
+        reload_enabled~,
+        reload_reconcile_items=reload_max_reconcile_items_per_turn,
+        reload_reconcile_bytes=reload_max_reconcile_bytes_per_turn.to_int64(),
+        reload?,
       )
+    }
     Some(path) => {
       let persistence_config = match
         @persistence.PersistenceConfig::new(
@@ -1765,7 +2015,7 @@ async fn run_main() -> Unit {
           let wal_store = match
             @persistence.WalStore::bootstrap(
               store,
-              { generation: 1L, lsn: 0L, identities, snapshot },
+              { generation: 1L, lsn: 0L, identities, policy: None, snapshot },
               disk_max_bytes=wal_disk_max_bytes,
               disk_reserve_bytes=wal_disk_reserve_bytes,
             ) {
@@ -1776,6 +2026,37 @@ async fn run_main() -> Unit {
             }
           }
           (wal_store, initial_state, identities, 0L)
+        }
+        let (identities, committed_lsn) = if wal_store.manifest().policy_required ||
+          reload_enabled {
+          let fingerprint = match startup_sources {
+            Some((_, _, value)) => value
+            None => {
+              wal_store.close()
+              raise CliError(
+                "strict policy source requires a matching reload bundle",
+              )
+            }
+          }
+          let boot = match
+            @server.bootstrap_strict_policy_checked(
+              wal_store,
+              initial_state,
+              identities,
+              security,
+              fingerprint,
+              reload_max_reconcile_items_per_turn,
+              reload_max_reconcile_bytes_per_turn.to_int64(),
+            ) {
+            Ok(value) => value
+            Err(category) => {
+              wal_store.close()
+              raise CliError("strict policy startup: " + category)
+            }
+          }
+          (boot.identities, boot.committed_lsn)
+        } else {
+          (identities, committed_lsn)
         }
         let strict = match
           @server.StrictPersistenceRuntime::new(
@@ -1806,6 +2087,11 @@ async fn run_main() -> Unit {
           security~,
           logger~,
           management?,
+          reload_tls?,
+          reload_enabled~,
+          reload_reconcile_items=reload_max_reconcile_items_per_turn,
+          reload_reconcile_bytes=reload_max_reconcile_bytes_per_turn.to_int64(),
+          reload?,
         )
         return
       }
@@ -1815,6 +2101,20 @@ async fn run_main() -> Unit {
         Err(error) => {
           store.close()
           raise CliError("snapshot recovery: " + error.category())
+        }
+      }
+      if startup_sources is Some(_) {
+        @server.bootstrap_runtime_policy(
+          initial_state,
+          security,
+          1L,
+          reload_max_reconcile_items_per_turn,
+          reload_max_reconcile_bytes_per_turn.to_int64(),
+        ) catch {
+          error => {
+            store.close()
+            raise CliError("snapshot policy startup: " + error.to_string())
+          }
         }
       }
       let snapshot_bytes = match store.snapshot_size() {
@@ -1859,6 +2159,11 @@ async fn run_main() -> Unit {
         security~,
         logger~,
         management?,
+        reload_tls?,
+        reload_enabled~,
+        reload_reconcile_items=reload_max_reconcile_items_per_turn,
+        reload_reconcile_bytes=reload_max_reconcile_bytes_per_turn.to_int64(),
+        reload?,
       )
     }
   }

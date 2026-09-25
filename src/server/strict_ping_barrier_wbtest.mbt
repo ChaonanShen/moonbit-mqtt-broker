@@ -40,6 +40,7 @@ async test "strict pending WAL lets another MQTT PING progress without overtakin
       generation: 1L,
       lsn: 0L,
       identities: [],
+      policy: None,
       snapshot: { version: 3, sessions: [], retained: [] },
     }).unwrap(),
   )

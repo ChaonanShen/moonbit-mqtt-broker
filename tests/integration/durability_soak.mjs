@@ -54,6 +54,11 @@ try {
       'durability/soak', payload, { qos },
       error => error ? reject(error) : resolve()))
     ackMs.push(Date.now() - sentAt)
+    if ((i + 1) % 100 === 0) {
+      console.log('DURABILITY_SOAK_PROGRESS sent=' + (i + 1) +
+        ' received=' + received.size + ' elapsed_ms=' +
+        (Date.now() - startedAt))
+    }
   }
   for (let i = 0; i < 100 && received.size < publications; i++) await pause(100)
   assert.equal(received.size, publications, 'confirmed publications must arrive')

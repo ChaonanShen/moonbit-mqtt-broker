@@ -3,9 +3,12 @@ fn replay_wal_batches(
   accumulator : @router.DurableAccumulator,
   batches : Array[WalBatch],
   starting_lsn : Int64,
+  starting_policy : WalPolicyState?,
+  policy_required : Bool,
   limits : SnapshotDecodeLimits,
-) -> Result[Int64, PersistenceError] {
+) -> Result[(Int64, WalPolicyState?), PersistenceError] {
   let mut lsn = starting_lsn
+  let mut policy = starting_policy
   for batch in batches {
     if batch.previous_lsn != lsn {
       return Err(InvalidValue(field="wal-replay-batch-chain", offset=0))
@@ -14,18 +17,46 @@ fn replay_wal_batches(
       if lsn == 9223372036854775807L || transaction.lsn != lsn + 1L {
         return Err(InvalidValue(field="wal-replay-transaction-chain", offset=0))
       }
-      let delta = match decode_durable_delta(transaction.delta, limits) {
-        Ok(value) => value
-        Err(error) => return Err(error)
-      }
-      match accumulator.apply(delta) {
-        Ok(_) => ()
-        Err(_) => return Err(SnapshotImport("WAL delta violates state limits"))
+      if is_wal_policy_record(transaction.delta) {
+        if !policy_required {
+          return Err(InvalidValue(field="wal-policy-capability", offset=0))
+        }
+        let record = match decode_wal_policy_record(transaction.delta) {
+          Ok(value) => value
+          Err(error) => return Err(error)
+        }
+        policy = match apply_policy_record(policy, record) {
+          Ok(value) => Some(value)
+          Err(error) => return Err(error)
+        }
+      } else if is_wal_reconcile_record(transaction.delta) {
+        if !policy_required ||
+          !(policy is Some({ reconcile_pending: true, .. })) {
+          return Err(InvalidValue(field="wal-reconcile-order", offset=0))
+        }
+        let delta = match decode_wal_reconcile(transaction.delta) {
+          Ok(value) => value
+          Err(error) => return Err(error)
+        }
+        match accumulator.apply_reconcile(delta) {
+          Ok(_) => ()
+          Err(_) => return Err(SnapshotImport("invalid WAL reconcile state"))
+        }
+      } else {
+        let delta = match decode_durable_delta(transaction.delta, limits) {
+          Ok(value) => value
+          Err(error) => return Err(error)
+        }
+        match accumulator.apply(delta) {
+          Ok(_) => ()
+          Err(_) =>
+            return Err(SnapshotImport("WAL delta violates state limits"))
+        }
       }
       lsn = transaction.lsn
     }
   }
-  Ok(lsn)
+  Ok((lsn, policy))
 }
 
 ///|
@@ -63,7 +94,8 @@ pub async fn WalStore::recover_state(
       Err(error) => raise error
     }
     if checkpoint.generation != manifest.checkpoint_generation ||
-      checkpoint.lsn != manifest.checkpoint_lsn {
+      checkpoint.lsn != manifest.checkpoint_lsn ||
+      (!manifest.policy_required && checkpoint.policy is Some(_)) {
       raise wal_corrupt("checkpoint-manifest-mismatch", 0)
     }
     let generations = checkpoint.identities.map(item => item.generation)
@@ -77,6 +109,7 @@ pub async fn WalStore::recover_state(
       Err(_) => raise SnapshotImport("invalid WAL checkpoint state")
     }
     let mut previous_lsn = checkpoint.lsn
+    let mut policy = checkpoint.policy
     for sealed_segment in manifest.sealed_segments {
       let path = dir + "/" + wal_segment_name(sealed_segment.segment_id)
       let scan = match
@@ -94,11 +127,20 @@ pub async fn WalStore::recover_state(
         scan.committed_lsn != sealed_segment.end_lsn {
         raise wal_corrupt("sealed-manifest-mismatch", 0)
       }
-      previous_lsn = match
-        replay_wal_batches(accumulator, scan.batches, previous_lsn, limits) {
+      let (replayed_lsn, replayed_policy) = match
+        replay_wal_batches(
+          accumulator,
+          scan.batches,
+          previous_lsn,
+          policy,
+          manifest.policy_required,
+          limits,
+        ) {
         Ok(value) => value
         Err(error) => raise error
       }
+      previous_lsn = replayed_lsn
+      policy = replayed_policy
     }
     let active_path = dir + "/" + wal_segment_name(manifest.active_segment_id)
     let active_bytes = bounded_read_regular(active_path, max_segment_bytes)
@@ -111,8 +153,15 @@ pub async fn WalStore::recover_state(
       scan.header.previous_lsn != previous_lsn {
       raise wal_corrupt("active-manifest-mismatch", 0)
     }
-    let committed_lsn = match
-      replay_wal_batches(accumulator, scan.batches, previous_lsn, limits) {
+    let (committed_lsn, policy) = match
+      replay_wal_batches(
+        accumulator,
+        scan.batches,
+        previous_lsn,
+        policy,
+        manifest.policy_required,
+        limits,
+      ) {
       Ok(value) => value
       Err(error) => raise error
     }
@@ -174,10 +223,17 @@ pub async fn WalStore::recover_state(
           disk_dirty: false,
           fault: None,
           committed_lsn,
+          policy_state: policy,
           fenced: false,
           closed: false,
         },
-        { state, identities, committed_lsn },
+        {
+          state,
+          identities,
+          policy,
+          policy_required: manifest.policy_required,
+          committed_lsn,
+        },
       ),
     )
   } catch {

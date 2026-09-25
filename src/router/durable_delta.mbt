@@ -1,4 +1,18 @@
 ///|
+pub(all) enum DurablePolicyChange {
+  DropSubscription(String)
+  DropPendingHead(String, Int, Int)
+  DropPendingAt(Int, String, Int, Int)
+} derive(Eq)
+
+///|
+pub(all) struct DurableReconcileDelta {
+  client_id : String
+  expected_generation : Int64
+  change : DurablePolicyChange
+} derive(Eq)
+
+///|
 pub(all) struct DurableSessionPut {
   expected_generation : Int64
   generation : Int64
@@ -330,6 +344,67 @@ pub fn DurableAccumulator::apply(
     self.retained.set(put.topic, copy_durable_retained(put))
   }
   self.bytes = next_bytes
+  Ok(())
+}
+
+///|
+
+///|
+/// A local security cleanup record updates only the named subscription or
+/// pending head. It never clones a whole large Session into one WAL delta.
+pub fn DurableAccumulator::apply_reconcile(
+  self : DurableAccumulator,
+  delta : DurableReconcileDelta,
+) -> Result[Unit, SnapshotError] {
+  let existing = match self.sessions.get(delta.client_id) {
+    Some(value) if value.generation == delta.expected_generation => value
+    _ => return Err(InvalidState("policy reconcile Session generation changed"))
+  }
+  let session = existing.session
+  let change = match delta.change {
+    DropPendingHead(topic, qos, payload_bytes) =>
+      DropPendingAt(0, topic, qos, payload_bytes)
+    value => value
+  }
+  let (replacement, released) = match change {
+    DropSubscription(filter) => {
+      if !session.subscriptions.any(item => item.filter == filter) {
+        return Err(InvalidState("policy reconcile subscription missing"))
+      }
+      let remaining = session.subscriptions.filter(item => item.filter != filter)
+      (
+        { ..session, subscriptions: remaining },
+        @budget.subscription_cost(filter),
+      )
+    }
+    DropPendingAt(index, topic, qos, payload_bytes) => {
+      if index < 0 ||
+        index >= session.pending.length() ||
+        session.pending[index].topic != topic ||
+        session.pending[index].qos != qos ||
+        session.pending[index].payload.length() != payload_bytes {
+        return Err(InvalidState("policy reconcile pending item changed"))
+      }
+      let remaining : Array[SnapshotMessageV3] = []
+      for position in 0..<session.pending.length() {
+        if position != index {
+          remaining.push(session.pending[position])
+        }
+      }
+      let cost = match @budget.message_cost(topic, payload_bytes.to_int64()) {
+        Ok(value) => value
+        Err(_) => return Err(LimitExceeded("policy reconcile message cost"))
+      }
+      ({ ..session, pending: remaining }, cost)
+    }
+    DropPendingHead(_, _, _) =>
+      return Err(InvalidState("unreachable policy head conversion"))
+  }
+  if released < 0L || released > self.bytes {
+    return Err(InvalidState("policy reconcile byte count"))
+  }
+  self.sessions.set(delta.client_id, { ..existing, session: replacement })
+  self.bytes -= released
   Ok(())
 }
 
