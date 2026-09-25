@@ -135,7 +135,20 @@ pub fn BrokerState::prepare_durable_publish(
     Err(error) => return Err(error)
   }
   let delivery_changed = self.planned_changes_snapshot(planned)
-  let prepared = match self.prepare_deliveries(planned, deferred=true) {
+  let expiry_delta = if input.retain {
+    self.retained.expiry_put_delta(
+      input.topic,
+      if input.payload.length() == 0 {
+        @session.MessageMetadata::empty()
+      } else {
+        metadata
+      },
+    )
+  } else {
+    0L
+  }
+  let prepared = match
+    self.prepare_deliveries(planned, deferred=true, expiry_delta~) {
     Ok(value) => value
     Err(error) => return Err(error)
   }

@@ -91,6 +91,15 @@ fn ExpiryScheduler::sift_down(self : ExpiryScheduler, index : Int) -> Unit {
 }
 
 ///|
+pub fn ExpiryScheduler::projected_set_delta(
+  self : ExpiryScheduler,
+  key : String,
+) -> Int64 {
+  let cost = 96L + @utf8.encode(key).length().to_int64()
+  cost - self.get(key).map(entry => entry.cost_bytes).unwrap_or(0L)
+}
+
+///|
 pub fn ExpiryScheduler::can_set(self : ExpiryScheduler, key : String) -> Bool {
   if key == "" {
     return false

@@ -43,7 +43,10 @@ pub fn BrokerState::prepare_durable_will_trigger(
     Err(_) => return Err(InvariantViolation("Will delay clock overflow"))
   }
   if before.revision == 9223372036854775807L ||
-    !self.will_expiry.can_set(id.to_string()) {
+    !self.will_expiry.can_set(id.to_string()) ||
+    !self.expiry_index_fits(
+      self.will_expiry.projected_set_delta(id.to_string()),
+    ) {
     return Err(InvariantViolation("Will expiry index capacity reached"))
   }
   Ok({

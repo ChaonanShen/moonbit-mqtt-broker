@@ -149,7 +149,12 @@ pub fn BrokerState::prepare_durable_lifecycle(
   if candidate is Some(value) &&
     value.retention() is @session.FiniteV5(_) &&
     !value.is_attached() &&
-    !self.session_expiry.can_set(client_id.value()) {
+    (
+      !self.session_expiry.can_set(client_id.value()) ||
+      !self.expiry_index_fits(
+        self.session_expiry.projected_set_delta(client_id.value()),
+      )
+    ) {
     scratch.release().unwrap()
     return Err(InvariantViolation("session expiry index capacity reached"))
   }

@@ -755,6 +755,11 @@ pub fn ClientSession::pending_head_reference(
 }
 
 ///|
+pub fn ClientSession::pending_expiry_bytes(self : ClientSession) -> Int64 {
+  self.pending_expiry.used_bytes()
+}
+
+///|
 pub fn ClientSession::next_expired_pending_id(
   self : ClientSession,
   now_mono_ms : Int64,
