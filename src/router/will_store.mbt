@@ -250,6 +250,26 @@ pub fn BrokerState::next_due_will(
 }
 
 ///|
+pub fn BrokerState::next_due_will_cost(
+  self : BrokerState,
+  now_mono_ms : Int64,
+) -> Int64? {
+  let id = match self.next_due_will(now_mono_ms) {
+    Some(value) => value
+    None => return None
+  }
+  let record = self.wills.get(id).unwrap()
+  Some(
+    @budget.message_cost(
+      record.template.topic.value(),
+      record.template.payload.length().to_int64(),
+    ).unwrap() +
+    record.template.metadata.cost() +
+    256L,
+  )
+}
+
+///|
 pub fn BrokerState::publish_due_will(
   self : BrokerState,
   id : Int64,

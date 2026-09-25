@@ -8,7 +8,7 @@ fn BrokerState::expire_sessions_v5(
   if max_work < 1 {
     return Err(InvariantViolation("invalid MQTT5 expiry work limit"))
   }
-  let actions = match self.expire_sessions(now_wall_ms, max_items=max_work) {
+  let actions = match self.expire_sessions(now_wall_ms, max_items=1) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -19,9 +19,10 @@ fn BrokerState::expire_sessions_v5(
     }
   }
   let remaining = max_work - completed
-  if remaining <= 0 {
+  if remaining <= 0 || completed > 0 {
     return Ok(actions)
   }
+  let mut work_bytes = 0L
   for _ in 0..<remaining {
     let entry = match self.session_expiry.peek_due(now_mono_ms) {
       Some(value) => value
@@ -39,10 +40,17 @@ fn BrokerState::expire_sessions_v5(
       !session.logically_expired(now_mono_ms) {
       return Err(InvariantViolation("session expiry identity changed"))
     }
+    let cost = session.state_bytes() +
+      self.subscriptions.subscription_count_for(client_id).to_int64() * 192L +
+      128L
+    if work_bytes > 0L && cost > 262144L - work_bytes {
+      break
+    }
     match self.remove_session(client_id) {
       Ok(removed) => {
         actions.append(removed)
         actions.push(SessionExpired(client_id))
+        work_bytes += cost
       }
       Err(error) => return Err(error)
     }

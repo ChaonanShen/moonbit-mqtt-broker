@@ -17,6 +17,16 @@ pub fn BrokerState::next_expired_retained(
 }
 
 ///|
+pub fn BrokerState::next_expired_retained_cost(
+  self : BrokerState,
+  now_mono_ms : Int64,
+) -> Int64? {
+  self
+  .next_expired_retained(now_mono_ms)
+  .map(topic => self.retained.cost_at(topic))
+}
+
+///|
 pub fn BrokerState::prepare_durable_retained_expiry(
   self : BrokerState,
   topic : @topic.TopicName,
