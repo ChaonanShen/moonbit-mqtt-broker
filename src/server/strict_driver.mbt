@@ -316,7 +316,14 @@ fn RouterDriver::handle_strict_runtime_event(
           return
         }
       }
-      self.dispatch(self.runtime.apply(Mqtt5PacketReceived(packet)))
+      if packet.packet is @protocol.PacketV5::Connect5(_) &&
+        self.runtime.config.protocol_config().mqtt5_enabled {
+        self.dispatch(
+          self.runtime.reject_mqtt5_connect(packet.connection_id, 0x83),
+        )
+      } else {
+        self.dispatch(self.runtime.apply(Mqtt5PacketReceived(packet)))
+      }
     }
     PacketReceived(packet) => {
       if packet.packet is Connect(_) &&
