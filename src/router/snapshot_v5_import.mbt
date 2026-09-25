@@ -109,10 +109,7 @@ pub fn BrokerState::from_snapshot_v5(
   now_wall_ms : Int64,
   ledger? : @budget.Ledger,
 ) -> Result[BrokerState, SnapshotError] {
-  if now_mono_ms < 0L ||
-    now_wall_ms < 0L ||
-    !saved.groups.is_empty() ||
-    !saved.wills.is_empty() {
+  if now_mono_ms < 0L || now_wall_ms < 0L || !saved.groups.is_empty() {
     return Err(InvalidState("unsupported V5 snapshot state"))
   }
   let stripped_sessions : Array[SnapshotSessionV3] = []
@@ -257,6 +254,7 @@ pub fn BrokerState::from_snapshot_v5(
       Err(_) => return Err(InvalidState("invalid restored V5 session"))
     }
     state.sessions.set(client_id, restored)
+    state.session_incarnations.set(client_id, session.incarnation)
     for item in session.subscriptions {
       if item.kind == 1 ||
         item.group_id is Some(_) ||
@@ -304,11 +302,110 @@ pub fn BrokerState::from_snapshot_v5(
       return Err(InvalidState("retained recovery failed"))
     }
   }
+  for stored_will in saved.wills {
+    let client_id = match @session.ClientId::new(stored_will.client_id) {
+      Ok(value) => value
+      Err(_) => return Err(InvalidClientId(stored_will.client_id))
+    }
+    let owner = match
+      @security.Principal::from_storage_value(stored_will.owner_principal) {
+      Some(value) => value
+      None => return Err(InvalidState("invalid Will owner"))
+    }
+    let message = match
+      v5_restore_message(
+        stored_will.message_template,
+        0L,
+        [],
+        now_mono_ms,
+        now_wall_ms,
+        saved.clock_floor_wall_ms,
+      ) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    let due = match stored_will.due_clock {
+      None => None
+      Some(clock) =>
+        Some(
+          match
+            v5_restore_deadline(
+              clock,
+              now_mono_ms,
+              now_wall_ms,
+              saved.clock_floor_wall_ms,
+            ) {
+            Ok(value) => value
+            Err(error) => return Err(error)
+          },
+        )
+    }
+    let template : Mqtt5WillTemplate = {
+      topic: message.topic,
+      payload: message.payload,
+      qos: message.qos,
+      retain: message.retain,
+      metadata: message.metadata,
+      delay_seconds: stored_will.delay_seconds,
+      message_expiry_seconds: stored_will.will_message_expiry_seconds,
+    }
+    let record : Mqtt5WillRecord = {
+      id: stored_will.id,
+      owner,
+      client_id,
+      session_incarnation: stored_will.session_incarnation,
+      state: if stored_will.state == 0 {
+        WillArmed
+      } else {
+        WillPending
+      },
+      template,
+      trigger_wall_ms: stored_will.trigger_wall_ms,
+      due,
+      policy_sequence: stored_will.policy_sequence,
+      revision: stored_will.revision,
+    }
+    if record.state == WillArmed {
+      if state.session_incarnation(client_id) !=
+        Some(record.session_incarnation) ||
+        state.active_will_by_client.contains(client_id) {
+        return Err(InvalidState("orphan or duplicate armed Will"))
+      }
+      state.active_will_by_client.set(client_id, record.id)
+    }
+    let cost = @budget.message_cost(
+        record.template.topic.value(),
+        record.template.payload.length().to_int64(),
+      ).unwrap() +
+      record.template.metadata.cost() +
+      256L
+    let pool = state.resources.ledger
+      .pool(Will, config.resources().get("max_will_bytes_total"))
+      .unwrap()
+    let ticket = match pool.reserve(cost) {
+      Ok(value) => value
+      Err(_) => return Err(LimitExceeded("restored Will byte budget"))
+    }
+    ticket.commit().unwrap()
+    state.will_tickets.set(record.id, ticket)
+    state.wills.set(record.id, record)
+  }
+  state.next_will_id = saved.next_will_id
+  for will in saved.wills {
+    if will.state == 0 {
+      let client_id = @session.ClientId::new(will.client_id).unwrap()
+      let retention = state.sessions.get(client_id).unwrap().retention()
+      if !state.trigger_will(will.id, now_mono_ms, now_wall_ms, retention) {
+        return Err(InvalidState("recovery Will transition failed"))
+      }
+    }
+  }
   if !state.subscriptions.ensure_next_identity(saved.next_subscription_identity) ||
     !state.retained.ensure_next_revision(saved.next_retained_revision) {
     return Err(InvalidState("invalid V5 high-water mark"))
   }
   state.next_delivery_id = saved.next_delivery_id
+  state.next_session_incarnation = saved.next_session_incarnation
   state.storage_v5 = true
   state.clock_floor_wall_ms = if now_wall_ms > saved.clock_floor_wall_ms {
     now_wall_ms

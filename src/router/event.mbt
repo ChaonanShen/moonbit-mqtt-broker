@@ -56,6 +56,7 @@ pub(all) enum BrokerEvent {
   UpdateV5Retention(UpdateV5RetentionRequest)
   ExpireSessions(Int64)
   ExpireSessionsV5(ExpireSessionsV5Request)
+  PublishDueWill(PublishDueWillRequest)
   Subscribe(SubscribeRequest)
   SubscribeV5(SubscribeV5Request)
   Unsubscribe(UnsubscribeRequest)
@@ -127,4 +128,11 @@ pub(all) struct ExpireSessionsV5Request {
 pub(all) struct UpdateV5RetentionRequest {
   client_id : @session.ClientId
   retention : @session.Retention
+} derive(Eq, Debug)
+
+///|
+pub(all) struct PublishDueWillRequest {
+  id : Int64
+  now_mono_ms : Int64
+  now_wall_ms : Int64
 } derive(Eq, Debug)

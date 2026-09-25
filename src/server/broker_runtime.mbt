@@ -23,6 +23,7 @@ pub struct BrokerRuntime {
   v5_pending : Map[ConnectionId, PreparedMqtt5Connect]
   v5_active : Map[ConnectionId, PreparedMqtt5Connect]
   inbound_aliases : Map[ConnectionId, Map[Int, String]]
+  v5_will_ids : Map[ConnectionId, Int64]
   active_by_client : Map[@session.ClientId, ConnectionId]
   mut security : @security.SecurityPolicy
   mut policy_epoch : Int64
@@ -63,6 +64,7 @@ pub fn BrokerRuntime::new(
     v5_pending: Map([]),
     v5_active: Map([]),
     inbound_aliases: Map([]),
+    v5_will_ids: Map([]),
     security,
     policy_epoch: initial_policy_epoch,
     retired_security: Map([]),
@@ -549,6 +551,15 @@ fn BrokerRuntime::terminate(
     Some(meta) => meta
   }
   let v5_plan = self.v5_active.get(connection_id)
+  let v5_will_id = self.v5_will_ids.get(connection_id)
+  let v5_retention = match (v5_plan, meta.phase) {
+    (Some(plan), Active(client_id)) =>
+      Some(
+        self.broker_state.session_retention(client_id).unwrap_or(plan.retention),
+      )
+    _ => None
+  }
+  self.v5_will_ids.remove(connection_id)
   let will_ticket = self.will_tickets.get(connection_id)
   self.will_tickets.remove(connection_id)
   self.v5_pending.remove(connection_id)
@@ -631,6 +642,24 @@ fn BrokerRuntime::terminate(
               )
             None => ()
           }
+        }
+      }
+      if v5_will_id is Some(id) {
+        if reason == NormalDisconnect {
+          ignore(self.broker_state.cancel_will(id))
+        } else if !suppress_will {
+          ignore(
+            self.broker_state.trigger_will(
+              id,
+              @budget.monotonic_ms(),
+              if observed_at_ms >= 0L {
+                observed_at_ms
+              } else {
+                @async.now()
+              },
+              v5_retention.unwrap_or(@session.DropOnClose),
+            ),
+          )
         }
       }
       let publish_will = !suppress_will &&
@@ -894,6 +923,18 @@ fn BrokerRuntime::finalize_connect(
     }
     None => ()
   }
+  let prepared_v5_will = match v5_plan {
+    None => None
+    Some(plan) =>
+      match self.prepare_v5_will(plan, client_id, principal) {
+        Ok(value) => value
+        Err(reason) => return self.reject_mqtt5_connect(connection_id, reason)
+      }
+  }
+  let mut v5_will_committed = false
+  defer (if !v5_will_committed && prepared_v5_will is Some(value) {
+    self.broker_state.cancel_prepared_will(value)
+  })
   let mut will_ticket : @budget.Ticket? = None
   let mut will_installed = false
   defer (if !will_installed { release_optional(will_ticket) })
@@ -989,6 +1030,8 @@ fn BrokerRuntime::finalize_connect(
   let actions : Array[RuntimeAction] = []
   let mut old_will : StoredWill? = None
   let mut old_will_ticket : @budget.Ticket? = None
+  let mut old_v5_will_id : Int64? = None
+  let mut old_v5_retention : @session.Retention? = None
   defer release_optional(old_will_ticket)
   if self.active_by_client.get(client_id) is Some(old_id) &&
     old_id != connection_id {
@@ -996,6 +1039,8 @@ fn BrokerRuntime::finalize_connect(
       Some(meta) => meta.will
       None => None
     }
+    old_v5_will_id = self.v5_will_ids.get(old_id)
+    old_v5_retention = self.broker_state.session_retention(client_id)
     old_will_ticket = self.will_tickets.get(old_id)
     self.will_tickets.remove(old_id)
     actions.append(
@@ -1011,10 +1056,37 @@ fn BrokerRuntime::finalize_connect(
   if !session_present {
     self.admission.reset_publisher(client_id)
   }
+  if old_v5_will_id is Some(id) {
+    if session_present {
+      ignore(self.broker_state.cancel_will(id))
+    } else {
+      ignore(
+        self.broker_state.trigger_will(
+          id,
+          @budget.monotonic_ms(),
+          received_at_ms,
+          old_v5_retention.unwrap_or(@session.DropOnClose),
+        ),
+      )
+    }
+  }
+  if session_present {
+    ignore(
+      self.broker_state.cancel_wills_for_session(
+        client_id,
+        self.broker_state.session_incarnation(client_id).unwrap(),
+      ),
+    )
+  }
   if will_ticket is Some(ticket) {
     self.will_tickets.set(connection_id, ticket)
   }
   will_installed = true
+  if prepared_v5_will is Some(value) {
+    let id = self.broker_state.commit_prepared_will(value)
+    self.v5_will_ids.set(connection_id, id)
+  }
+  v5_will_committed = true
   self.active_by_client.set(client_id, connection_id)
   self.retain_policy_epoch(self.policy_epoch)
   self.connections.set(connection_id, {
@@ -1476,6 +1548,20 @@ fn BrokerRuntime::check_deadlines(
     Ok(expiration_actions) =>
       actions.append(self.map_broker_actions(expiration_actions))
     Err(_) => ()
+  }
+  let now_mono_ms = @budget.monotonic_ms()
+  for _ in 0..<self.config.protocol_config().max_expiry_work_per_turn {
+    let will_id = match self.broker_state.next_due_will(now_mono_ms) {
+      Some(value) => value
+      None => break
+    }
+    match
+      self.broker_state.apply(
+        @router.PublishDueWill({ id: will_id, now_mono_ms, now_wall_ms: now_ms }),
+      ) {
+      Ok(published) => actions.append(self.map_broker_actions(published))
+      Err(_) => break
+    }
   }
   for pair in expired {
     let (connection_id, reason) = pair
