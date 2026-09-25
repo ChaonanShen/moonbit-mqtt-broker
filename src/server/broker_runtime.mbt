@@ -22,6 +22,7 @@ pub struct BrokerRuntime {
   connections : Map[ConnectionId, ConnectionMeta]
   v5_pending : Map[ConnectionId, PreparedMqtt5Connect]
   v5_active : Map[ConnectionId, PreparedMqtt5Connect]
+  inbound_aliases : Map[ConnectionId, Map[Int, String]]
   active_by_client : Map[@session.ClientId, ConnectionId]
   mut security : @security.SecurityPolicy
   mut policy_epoch : Int64
@@ -61,6 +62,7 @@ pub fn BrokerRuntime::new(
     active_by_client: Map([]),
     v5_pending: Map([]),
     v5_active: Map([]),
+    inbound_aliases: Map([]),
     security,
     policy_epoch: initial_policy_epoch,
     retired_security: Map([]),
@@ -419,6 +421,35 @@ fn BrokerRuntime::map_broker_actions(
             }
           }
         }
+      DeliverWithMetadata(item) => {
+        let mapped = self.map_broker_actions([@router.Deliver(item.delivery)])
+        for action in mapped {
+          match action {
+            SendPacket(send) if send.packet is Publish(publish) &&
+              self.v5_active.contains(send.connection_id) =>
+              actions.push(
+                SendMqtt5({
+                  connection_id: send.connection_id,
+                  packet: Publish5({
+                    topic: publish.topic,
+                    payload: publish.payload,
+                    qos: publish.qos,
+                    packet_id: publish.packet_id,
+                    dup: publish.dup,
+                    retain: publish.retain,
+                    properties: mqtt5_message_properties(
+                      item.metadata,
+                      @budget.monotonic_ms(),
+                      subscription_identifiers=item.subscription_identifiers,
+                    ),
+                  }),
+                  close_reason: None,
+                }),
+              )
+            _ => actions.push(action)
+          }
+        }
+      }
       SendPubrec(ack) | SendPubrel(ack) | SendPubcomp(ack) =>
         if self.active_by_client.get(ack.client_id) is Some(connection_id) {
           let id = @protocol.PacketId::new(ack.packet_id.value()).unwrap()
@@ -488,6 +519,7 @@ fn BrokerRuntime::terminate(
   self.will_tickets.remove(connection_id)
   self.v5_pending.remove(connection_id)
   self.v5_active.remove(connection_id)
+  self.inbound_aliases.remove(connection_id)
   defer release_optional(will_ticket)
   self.connections.remove(connection_id)
   if meta.phase is Active(_) {
@@ -961,6 +993,7 @@ fn BrokerRuntime::finalize_connect(
   if v5_plan is Some(plan) {
     self.v5_pending.remove(connection_id)
     self.v5_active.set(connection_id, plan)
+    self.inbound_aliases.set(connection_id, Map([]))
     actions.push(
       SendMqtt5({
         connection_id,
@@ -1082,7 +1115,8 @@ fn BrokerRuntime::handle_subscribe(
                   QoS2 => GrantedQoS2
                 },
               )
-            RejectedLimit(_) => return_codes.push(Failure)
+            RejectedLimit(_) | RejectedSharedUnsupported =>
+              return_codes.push(Failure)
           }
         }
       }

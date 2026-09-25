@@ -45,3 +45,41 @@ fn legacy_packet_to_v5(packet : @protocol.Packet) -> @protocol.PacketV5? {
     _ => None
   }
 }
+
+///|
+fn mqtt5_message_properties(
+  metadata : @session.MessageMetadata,
+  now_mono_ms : Int64,
+  subscription_identifiers? : Array[Int] = [],
+) -> Array[@protocol.Property] {
+  let properties : Array[@protocol.Property] = []
+  if metadata.payload_format is Some(value) {
+    properties.push({ id: 0x01, value: @protocol.ByteValue(value) })
+  }
+  if metadata.expiry is Some(deadline) {
+    let remaining = deadline.remaining_at(now_mono_ms)
+    let seconds = if remaining / 1000L > 4294967295L {
+      0xffffffffU
+    } else {
+      (remaining / 1000L).to_int().reinterpret_as_uint()
+    }
+    properties.push({ id: 0x02, value: @protocol.FourByteValue(seconds) })
+  }
+  if metadata.content_type is Some(value) {
+    properties.push({ id: 0x03, value: @protocol.StringValue(value) })
+  }
+  if metadata.response_topic is Some(value) {
+    properties.push({ id: 0x08, value: @protocol.StringValue(value.value()) })
+  }
+  if metadata.correlation_data is Some(value) {
+    properties.push({ id: 0x09, value: @protocol.BinaryValue(value) })
+  }
+  for id in subscription_identifiers {
+    properties.push({ id: 0x0b, value: @protocol.VariableValue(id) })
+  }
+  for pair in metadata.user_properties {
+    let (key, value) = pair
+    properties.push({ id: 0x26, value: @protocol.StringPair(key, value) })
+  }
+  properties
+}

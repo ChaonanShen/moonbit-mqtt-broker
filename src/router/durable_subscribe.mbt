@@ -117,6 +117,8 @@ pub fn BrokerState::prepare_durable_subscribe(
         payload: message.payload,
         qos: @session.min_qos(message.qos, qos),
         retain: true,
+        metadata: message.metadata.copy(),
+        subscription_identifiers: [],
       })
     }
   }

@@ -103,7 +103,7 @@ pub fn BrokerState::prepare_durable_publish(
   let strict = input.origin is Client(_)
   let planned = match
     self.preflight_deliveries(
-      self.delivery_candidates(input, false),
+      self.delivery_candidates(input),
       strict,
       retained_delta~,
     ) {
@@ -165,7 +165,12 @@ pub fn BrokerState::prepare_durable_publish(
     old_retained is Some(_)
   } else {
     old_retained !=
-    Some({ topic: input.topic, payload: input.payload, qos: input.qos })
+    Some({
+      topic: input.topic,
+      payload: input.payload,
+      qos: input.qos,
+      metadata: @session.MessageMetadata::empty(),
+    })
   }
   let retained_puts : Array[SnapshotRetainedV3] = []
   let retained_deletes : Array[String] = []

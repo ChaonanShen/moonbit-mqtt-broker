@@ -22,14 +22,21 @@ pub fn RetainedStore::put(
   payload : Bytes,
   qos : @session.DeliveryQoS,
   max_count : Int,
+  metadata? : @session.MessageMetadata = @session.MessageMetadata::empty(),
 ) -> Bool {
   if self.messages.get(topic) is None && self.messages.length() >= max_count {
     return false
   }
   self.bytes = self.bytes -
     self.cost_at(topic) +
-    @budget.message_cost(topic.value(), payload.length().to_int64()).unwrap()
-  self.messages.set(topic, { topic, payload: copy_bytes(payload), qos })
+    @budget.message_cost(topic.value(), payload.length().to_int64()).unwrap() +
+    metadata.cost()
+  self.messages.set(topic, {
+    topic,
+    payload: copy_bytes(payload),
+    qos,
+    metadata: metadata.copy(),
+  })
   true
 }
 
@@ -48,7 +55,12 @@ pub fn RetainedStore::get(
   topic : @topic.TopicName,
 ) -> RetainedMessage? {
   match self.messages.get(topic) {
-    Some(message) => Some({ ..message, payload: copy_bytes(message.payload) })
+    Some(message) =>
+      Some({
+        ..message,
+        payload: copy_bytes(message.payload),
+        metadata: message.metadata.copy(),
+      })
     None => None
   }
 }
@@ -73,7 +85,11 @@ pub fn RetainedStore::matching(
       }
     }
     if matched {
-      result.push({ ..message, payload: copy_bytes(message.payload) })
+      result.push({
+        ..message,
+        payload: copy_bytes(message.payload),
+        metadata: message.metadata.copy(),
+      })
     }
   }
   result.sort_by(fn(left, right) {
@@ -90,6 +106,7 @@ fn RetainedStore::all_messages(self : RetainedStore) -> Array[RetainedMessage] {
       topic: message.topic,
       payload: copy_bytes(message.payload),
       qos: message.qos,
+      metadata: message.metadata.copy(),
     })
   }
   result.sort_by(fn(left, right) {
@@ -115,7 +132,8 @@ fn RetainedStore::cost_at(
   match self.messages.get(topic) {
     None => 0L
     Some(m) =>
-      @budget.message_cost(m.topic.value(), m.payload.length().to_int64()).unwrap()
+      @budget.message_cost(m.topic.value(), m.payload.length().to_int64()).unwrap() +
+      m.metadata.cost()
   }
 }
 
@@ -133,7 +151,8 @@ fn RetainedStore::recomputed_cost(self : RetainedStore) -> Int64 {
       @budget.message_cost(
         message.topic.value(),
         message.payload.length().to_int64(),
-      ).unwrap(),
+      ).unwrap() +
+      message.metadata.cost(),
     ).unwrap()
   }
   total

@@ -276,7 +276,8 @@ pub fn BrokerRuntime::prepare_strict_active_packet(
                     @session.QoS2 => GrantedQoS2
                   },
                 )
-              @router.RejectedLimit(_) => return_codes.push(Failure)
+              @router.RejectedLimit(_) | @router.RejectedSharedUnsupported =>
+                return_codes.push(Failure)
             }
             result_index += 1
           }

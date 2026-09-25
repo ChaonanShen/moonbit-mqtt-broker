@@ -352,15 +352,19 @@ pub fn BrokerState::resume_pending(self : BrokerState) -> Array[BrokerAction] {
           for delivery in deliveries {
             let message = delivery.message.unwrap()
             actions.push(
-              Deliver({
-                recipient: id,
-                topic: message.topic,
-                payload: copy_router_bytes(message.payload),
-                qos: message.qos,
-                retain: message.retain,
-                packet_id: Some(delivery.packet_id),
-                dup: false,
-              }),
+              delivery_with_metadata(
+                {
+                  recipient: id,
+                  topic: message.topic,
+                  payload: copy_router_bytes(message.payload),
+                  qos: message.qos,
+                  retain: message.retain,
+                  packet_id: Some(delivery.packet_id),
+                  dup: false,
+                },
+                message.metadata,
+                message.subscription_identifiers,
+              ),
             )
           }
         }

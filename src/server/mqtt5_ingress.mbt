@@ -119,6 +119,64 @@ fn BrokerRuntime::handle_mqtt5_packet(
       }
       self.handle_connect(event.connection_id, legacy, event.received_at_ms)
     }
+    (Active(client_id), Publish5(packet)) if self.v5_active.contains(
+        event.connection_id,
+      ) => {
+      if self.active_by_client.get(client_id) != Some(event.connection_id) {
+        return []
+      }
+      if !self.connection_credential_current(event.connection_id) {
+        return self.terminate(event.connection_id, PolicyRevoked)
+      }
+      let current = self.connections.get(event.connection_id).unwrap()
+      self.connections.set(event.connection_id, {
+        ..current,
+        last_control_at_ms: event.received_at_ms,
+      })
+      self.handle_v5_publish(
+        event.connection_id,
+        client_id,
+        current.principal.unwrap(),
+        packet,
+      )
+    }
+    (Active(client_id), Subscribe5(packet)) if self.v5_active.contains(
+        event.connection_id,
+      ) => {
+      if self.active_by_client.get(client_id) != Some(event.connection_id) {
+        return []
+      }
+      if !self.connection_credential_current(event.connection_id) {
+        return self.terminate(event.connection_id, PolicyRevoked)
+      }
+      let current = self.connections.get(event.connection_id).unwrap()
+      self.connections.set(event.connection_id, {
+        ..current,
+        last_control_at_ms: event.received_at_ms,
+      })
+      self.handle_v5_subscribe(
+        event.connection_id,
+        client_id,
+        current.principal.unwrap(),
+        packet,
+      )
+    }
+    (Active(client_id), Unsubscribe5(packet)) if self.v5_active.contains(
+        event.connection_id,
+      ) => {
+      if self.active_by_client.get(client_id) != Some(event.connection_id) {
+        return []
+      }
+      if !self.connection_credential_current(event.connection_id) {
+        return self.terminate(event.connection_id, PolicyRevoked)
+      }
+      let current = self.connections.get(event.connection_id).unwrap()
+      self.connections.set(event.connection_id, {
+        ..current,
+        last_control_at_ms: event.received_at_ms,
+      })
+      self.handle_v5_unsubscribe(event.connection_id, client_id, packet)
+    }
     (Active(client_id), packet) if self.v5_active.contains(event.connection_id) &&
       mqtt5_legacy_input(packet) is Some(legacy) => {
       if self.active_by_client.get(client_id) != Some(event.connection_id) {
