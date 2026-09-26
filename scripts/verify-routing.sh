@@ -27,7 +27,12 @@ done
 
 moon test --target native
 moon build --target native
-if grep -REn 'async|socket|server|framing|filesystem|clock|random' src/topic src/session src/router; then
+# MQTT 5 keeps deadline fields and uses the budget clock adapter. Plain words
+# in identifiers are not runtime imports; reject actual package/API boundaries.
+readonly FORBIDDEN_RUNTIME='async|socket|server|framing|filesystem|clock|random'
+if grep -En "^[[:space:]]*\"[^\"]*/(${FORBIDDEN_RUNTIME})(/[^\"]*)?\"" src/topic/moon.pkg src/session/moon.pkg src/router/moon.pkg ||
+  grep -REn --include='*.mbt' "(^|[^[:alnum:]_])@(${FORBIDDEN_RUNTIME})\." src/topic src/session src/router ||
+  grep -REn --include='*.mbt' '^[[:space:]]*(pub[[:space:]]+)?async[[:space:]]+fn' src/topic src/session src/router; then
   echo 'ROUTING pure-state packages imported a forbidden runtime concern' >&2
   exit 1
 fi
