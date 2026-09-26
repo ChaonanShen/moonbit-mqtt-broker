@@ -1,6 +1,6 @@
 # moonbit-mqtt-broker
 
-[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/README.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/README.zh_CN.md) | **English**
 
 [![CI](https://github.com/ChaonanShen/moonbit-mqtt-broker/actions/workflows/ci.yml/badge.svg)](https://github.com/ChaonanShen/moonbit-mqtt-broker/actions/workflows/ci.yml)
 
@@ -12,19 +12,19 @@ supports TCP, TLS, WS or WSS clients, QoS 0/1/2, wildcard subscriptions, retaine
 messages, Wills, Keep Alive, persistent Sessions, optional restart persistence,
 authentication, ACLs, metrics, structured logs, and TOML configuration.
 
-The optional [management API](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.md) provides loopback health,
+The optional [management API](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/management.md) provides loopback health,
 scoped Prometheus metrics, bounded detail queries, and protected connection
 kick/offline Session deletion. Detail and write routes have separate switches
 and are disabled by default. The listener uses a private token file.
 
-## What is new in 0.3.0
+## What is new in 0.4.0
 
-- Add opt-in strict local WAL durability for defined persistent MQTT state, with commit-before-ACK recovery and fail-closed fencing.
-- Add multiple TCP, TLS, WS and WSS listeners sharing one Broker state.
-- Add bounded management detail, kick and offline Session deletion operations, plus protected configuration administration.
-- Add opt-in live configuration reload for verified password, ACL, TLS/WSS and supported runtime settings. Reload is disabled by default.
+- Add opt-in MQTT 5 on the existing TCP, TLS, WS and WSS listeners while retaining MQTT 3.1.1.
+- Add Clean Start, Session and Message Expiry, Will Delay, subscription options, Topic Alias, Receive Maximum and MQTT 5 properties.
+- Add V5 snapshots and schema 6 WAL with guarded migration and strict crash recovery.
+- Keep shared subscriptions unavailable; MQTT 5 advertises Shared Subscription Available 0.
 
-Before upgrading a persistent deployment, read the [V3 migration and rollback notes](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.md) and review the [default resource and rate limits](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.md).
+Before upgrading a persistent deployment, read the [V5 migration and rollback notes](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/persistence.md) and review the [default resource and rate limits](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/configuration.md).
 
 ## Quick start
 
@@ -44,7 +44,7 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 ```
 
 For a guided setup, configuration file, persistence, and production-oriented
-security example, read the [getting-started guide](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/getting-started.md).
+security example, read the [getting-started guide](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/getting-started.md).
 
 ## Features
 
@@ -61,20 +61,20 @@ security example, read the [getting-started guide](https://github.com/ChaonanShe
 
 MQTT 5 is opt-in and shares listeners and Client IDs with MQTT 3.1.1.
 Shared subscriptions, bridges, plugins, clustering and external databases
-remain out of scope. See the [MQTT 5 support guide](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.md). `--data-dir` defaults to latest-committed
+remain out of scope. See the [MQTT 5 support guide](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/mqtt5.md). `--data-dir` defaults to latest-committed
 snapshot recovery; explicit `--persistence-mode strict` adds local WAL commit
 barriers for the documented persistent state. It is not replication or an
-end-to-end delivery guarantee. See the [compatibility matrix](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.md)
-and [persistence contract](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.md).
+end-to-end delivery guarantee. See the [compatibility matrix](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/compatibility.md)
+and [persistence contract](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/persistence.md).
 
 Optional live reload replaces a verified configuration bundle without restarting
 MQTT listeners. It can rotate passwords, ACLs and existing TLS/WSS material;
-see the [reload configuration and deployment contract](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.md#live-configuration-reload).
+see the [reload configuration and deployment contract](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/configuration.md#live-configuration-reload).
 The feature is disabled by default.
 
 ## Configuration
 
-The broker enforces [logical byte budgets and admission policies](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md).
+The broker enforces [logical byte budgets and admission policies](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/resource-budgets.md).
 Global and per-IP limits apply before TLS; already accepted QoS 2 handshakes do not
 consume new-publication tokens. Logical bytes are not an RSS cap. Password
 verification runs on a bounded native worker executor so routing stays responsive.
@@ -169,7 +169,7 @@ sudo apt-get install libargon2-1 argon2
 ```
 
 If a native test reports that Argon2id requires `libargon2.so.1`, install the
-runtime or use the Docker commands above. See [security](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.md) for
+runtime or use the Docker commands above. See [security](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/security.md) for
 the reproducible password fixture and the missing-runtime regression check.
 
 The cumulative verifier also runs protocol/reference matrices, bounded workloads,
@@ -178,7 +178,7 @@ documentation checks, and a clean-room mooncakes package build.
 
 ## Strict distribution verification
 
-For preparation, stage criteria, troubleshooting, evidence checks and the release record template, see the [release verification runbook](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/release-verification.md).
+For preparation, stage criteria, troubleshooting, evidence checks and the release record template, see the [release verification runbook](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/release-verification.md).
 
 Before a release, commit all candidate changes and run:
 
@@ -214,22 +214,22 @@ the committed archive. Keep the verified commit/package unchanged until release.
 
 ## Documentation
 
-- [Getting started](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/getting-started.md)
-- [Configuration](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.md)
-- [Security](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.md)
-- [Release verification runbook](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/release-verification.md)
-- [Local persistence](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.md)
-- [Compatibility and limitations](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.md)
-- [Architecture](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/architecture.md)
+- [Getting started](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/getting-started.md)
+- [Configuration](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/configuration.md)
+- [Security](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/security.md)
+- [Release verification runbook](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/release-verification.md)
+- [Local persistence](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/persistence.md)
+- [Compatibility and limitations](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/compatibility.md)
+- [Architecture](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/architecture.md)
 
 ## License and provenance
 
 Licensed under the Apache License 2.0. Runtime dependencies, test-only tools,
 standards, behavioral references, versions, licenses, and how each is used are
-recorded in [THIRD_PARTY_NOTICES.md](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/THIRD_PARTY_NOTICES.md). The broker is
+recorded in [THIRD_PARTY_NOTICES.md](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/THIRD_PARTY_NOTICES.md). The broker is
 original MoonBit code; no Aedes or Mosquitto implementation source is copied.
 
 QoS 2 uses Method B deduplication and stage-aware persistent recovery. In
 snapshot mode PUBREC/PUBCOMP do not imply fsync; in strict mode their persistent
-state changes pass the WAL barrier first. See [compatibility](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.md)
-and [mode migration](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.md).
+state changes pass the WAL barrier first. See [compatibility](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/compatibility.md)
+and [mode migration](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/persistence.md).
