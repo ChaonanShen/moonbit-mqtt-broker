@@ -213,3 +213,78 @@ async test "active checkpoint drains a held runtime event without requeue spin" 
     @fs.rmdir(path, recursive=true)
   }
 }
+
+///|
+async test "V5 checkpoint completion matches the submitted nonzero LSN" {
+  let path = "_build/server-v5-checkpoint-completion"
+  if @fs.exists(path) {
+    @fs.rmdir(path, recursive=true)
+  }
+  let broker_config = @router.BrokerConfig::new(4, 16, 4).unwrap()
+  let base = ServerConfig::new(4, 1024, 2048, 8, 32, 1000, 100, broker_config).unwrap()
+  let config : ServerConfig = {
+    ..base,
+    protocol_config: @config.ProtocolConfig::new(mqtt5_enabled=true).unwrap(),
+  }
+  let broker = @router.BrokerState::new(broker_config)
+  broker.enable_v5_storage()
+  let runtime = BrokerRuntime::new(config, broker)
+  let lock = @persistence.SnapshotStore::open(
+    @persistence.PersistenceConfig::new(path).unwrap(),
+  ).unwrap()
+  let snapshot = @persistence.convert_v3_snapshot_to_v5({
+    version: 3,
+    sessions: [],
+    retained: [],
+  }).unwrap()
+  let wal = @persistence.WalStore::bootstrap_v5(lock, {
+    generation: 1L,
+    lsn: 0L,
+    identities: [],
+    required_features: @persistence.feature_mqtt5_model,
+    policy: None,
+    snapshot,
+  }).unwrap()
+  let delta = @persistence.encode_durable_delta_v5(
+    @router.DurableDeltaV5::empty(),
+  ).unwrap()
+  assert_eq(
+    wal.append_batch({ previous_lsn: 0L, transactions: [{ lsn: 1L, delta }] }),
+    Ok(1L),
+  )
+  let writer = @persistence.WalWriter::new(wal)
+  let coordinator = CommitCoordinator::new(
+    writer,
+    broker.resource_ledger(),
+    33554432L,
+    1048576,
+    1L,
+    1L,
+  ).unwrap()
+  let driver = RouterDriver::new(runtime, strict=coordinator)
+  driver.strict_checkpoint_next_ms = @async.now() - 1L
+  driver.poll_strict_checkpoint()
+  assert_true(driver.strict_checkpoint_inflight)
+  assert_eq(driver.strict_checkpoint_lsn, 1L)
+  @async.with_task_group() <| group => {
+    let task = group.spawn(() => writer.run(() => ()))
+    let mut completed = false
+    for _ in 0..<2000 {
+      driver.handle(WalCompletionDue)
+      if coordinator.checkpoint_lsn() == 1L &&
+        !driver.strict_checkpoint_inflight {
+        completed = true
+        break
+      }
+      @async.sleep(1)
+    }
+    assert_true(completed)
+    assert_false(driver.strict_fenced)
+    writer.close_requests()
+    task.wait()
+    writer.close_store()
+  }
+  if @fs.exists(path) {
+    @fs.rmdir(path, recursive=true)
+  }
+}

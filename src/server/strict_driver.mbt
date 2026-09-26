@@ -720,6 +720,7 @@ fn RouterDriver::poll_strict_checkpoint(self : RouterDriver) -> Unit {
       snapshot,
     }
     if coordinator.submit_checkpoint_v5(checkpoint) {
+      self.strict_checkpoint_lsn = checkpoint.lsn
       self.strict_checkpoint_inflight = true
     } else {
       self.strict_checkpoint_degraded = true
