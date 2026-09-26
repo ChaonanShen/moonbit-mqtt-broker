@@ -1,6 +1,6 @@
 # moonbit-mqtt-broker
 
-**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/README.md)
+**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/README.md)
 
 [![CI](https://github.com/ChaonanShen/moonbit-mqtt-broker/actions/workflows/ci.yml/badge.svg)](https://github.com/ChaonanShen/moonbit-mqtt-broker/actions/workflows/ci.yml)
 
@@ -11,18 +11,19 @@
 QoS 0/1/2、通配符订阅、保留消息、Will、Keep Alive、持久会话、可选的重启
 持久化、身份认证、ACL、指标、结构化日志和 TOML 配置。
 
-可选的[管理 API](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/management.zh_CN.md)提供 loopback 健康检查、按角色
+可选的[管理 API](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/management.zh_CN.md)提供 loopback 健康检查、按角色
 授权的 Prometheus 指标、有界明细，以及受保护的精确连接关闭和离线持久
 Session 删除。明细与写路由分别开关且默认关闭，令牌存放在独立私有文件。
 
-## 0.3.0 新增功能
+## 0.4.0 新增功能
 
-- 新增可选 strict 本机 WAL 持久化，对约定的 MQTT 持久状态实现提交后确认、恢复和故障封锁。
-- 新增共享同一 Broker 状态的多个 TCP、TLS、WS 和 WSS 监听器。
-- 新增有界管理明细、连接关闭和离线 Session 删除操作，以及受保护的配置管理。
-- 新增可选的在线配置热更新，可核验并切换密码、ACL、TLS/WSS 和受支持的运行时配置；默认关闭。
+- 同一 TCP、TLS、WS 和 WSS 监听器增加可选 MQTT 5，同时保留 MQTT 3.1.1。
+- 增加 Clean Start、Session/Message Expiry、Will Delay、订阅选项、
+  Topic Alias、Receive Maximum 和 MQTT 5 消息属性。
+- 增加 V5 快照和 schema 6 WAL、受检旧格式迁移与 strict 崩溃恢复。
+- 共享订阅仍不可用；MQTT 5 宣告 Shared Subscription Available 0。
 
-持久化部署升级前，请阅读 [V3 迁移与回滚说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.zh_CN.md)，并核对[默认资源与限流配置](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.zh_CN.md)。
+持久化部署升级前，请阅读 [V5 迁移与回滚说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/persistence.zh_CN.md)，并核对[默认资源与限流配置](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/configuration.zh_CN.md)。
 
 ## 快速开始
 
@@ -42,7 +43,7 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 ```
 
 如需完整了解安装、配置文件、持久化和带 TLS 的认证部署，请阅读
-[入门指南](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/getting-started.zh_CN.md)。
+[入门指南](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/getting-started.zh_CN.md)。
 
 ## 功能
 
@@ -59,20 +60,20 @@ mosquitto_pub -h 127.0.0.1 -p 1883 -t demo/hello -m world -q 1
 
 MQTT 5 默认关闭，开启后与 3.1.1 共用监听器及 Client ID 命名空间。
 共享订阅、Bridge、插件、集群与外部数据库仍不在本次范围内。
-详见 [MQTT 5 支持说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.zh_CN.md)。
+详见 [MQTT 5 支持说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/mqtt5.zh_CN.md)。
 `--data-dir` 默认按最近成功快照恢复；显式 `--persistence-mode strict`
 对约定的持久状态增加本机 WAL 提交屏障，不等于复制或端到端投递保证。
-详细边界见[兼容性矩阵](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.zh_CN.md)和
-[持久化说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.zh_CN.md)。
+详细边界见[兼容性矩阵](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/compatibility.zh_CN.md)和
+[持久化说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/persistence.zh_CN.md)。
 
 可选热更新可在不重启 MQTT 监听器的情况下替换已核验的配置 bundle，
 轮换密码、ACL 和既有 TLS/WSS 材料。详见
-[热更新配置与部署约定](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.zh_CN.md#在线配置热更新)。
+[热更新配置与部署约定](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/configuration.zh_CN.md#在线配置热更新)。
 此功能默认关闭。
 
 ## 配置
 
-Broker 已接入[逻辑字节预算与准入策略](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/resource-budgets.md)。全局/IP 连接
+Broker 已接入[逻辑字节预算与准入策略](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/resource-budgets.md)。全局/IP 连接
 准入在 TLS 前生效，已接纳的 QoS 2 握手不重复扣新发布额度。逻辑字节不是 RSS
 上限；密码校验在有界原生 worker 执行器中运行，路由主循环不会同步执行哈希。
 
@@ -175,11 +176,11 @@ sudo apt-get install libargon2-1 argon2
 ```
 
 测试提示缺少 `libargon2.so.1` 时，应安装依赖或使用上述 Docker 命令。
-密码 fixture 的生成方法和缺库回归检查见[安全文档](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.zh_CN.md)。
+密码 fixture 的生成方法和缺库回归检查见[安全文档](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/security.zh_CN.md)。
 
 ## 严格发布验证
 
-操作步骤、每一阶段的通过标准、失败排查、证据核对与发布记录模板见[发布前测试与验收操作手册](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/release-verification.zh_CN.md)。
+操作步骤、每一阶段的通过标准、失败排查、证据核对与发布记录模板见[发布前测试与验收操作手册](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/release-verification.zh_CN.md)。
 
 发布前先提交候选代码，再运行：
 
@@ -212,21 +213,21 @@ Argon2、只有 OpenSSL、两者齐全。Broker 环境没有 MoonBit、编译器
 
 ## 文档
 
-- [入门指南](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/getting-started.zh_CN.md)
-- [配置](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/configuration.zh_CN.md)
-- [安全](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.zh_CN.md)
-- [发布前测试与验收操作手册](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/release-verification.zh_CN.md)
-- [本地持久化](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.zh_CN.md)
-- [兼容性和限制](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.zh_CN.md)
-- [架构](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/architecture.zh_CN.md)
+- [入门指南](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/getting-started.zh_CN.md)
+- [配置](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/configuration.zh_CN.md)
+- [安全](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/security.zh_CN.md)
+- [发布前测试与验收操作手册](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/release-verification.zh_CN.md)
+- [本地持久化](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/persistence.zh_CN.md)
+- [兼容性和限制](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/compatibility.zh_CN.md)
+- [架构](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/architecture.zh_CN.md)
 
 ## 许可证和来源
 
 项目使用 Apache License 2.0。运行时依赖、仅测试工具、标准、行为参考、
 版本、许可证和使用方式记录在
-[THIRD_PARTY_NOTICES.md](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/THIRD_PARTY_NOTICES.md) 中。Broker 为原创 MoonBit
+[THIRD_PARTY_NOTICES.md](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/THIRD_PARTY_NOTICES.md) 中。Broker 为原创 MoonBit
 代码，没有复制 Aedes 或 Mosquitto 的实现源码。
 
 QoS 2 采用 Method B 去重和按阶段恢复。快照模式的 PUBREC/PUBCOMP 不代表
 已 fsync；strict 模式会先提交对应的持久状态。详见
-[兼容性](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.zh_CN.md)及[模式迁移](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.zh_CN.md)。
+[兼容性](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/compatibility.zh_CN.md)及[模式迁移](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/persistence.zh_CN.md)。

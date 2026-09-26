@@ -1,6 +1,6 @@
 # 发布前测试与验收操作手册
 
-**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/release-verification.md)
+**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/release-verification.md)
 
 本手册规定本项目的发布前验证流程，目标是尽早发现开发环境、发布包和实际运行环境之间的差异。它是本项目的工程约定，不是 Mooncakes 对所有模块统一规定的测试清单。
 
@@ -107,7 +107,7 @@ docker run --rm --platform linux/amd64 --entrypoint bash \
   moonbit-mqtt-broker-dev tests/integration/argon2_environment.sh
 ```
 
-该脚本会调用 `scripts/check-argon2.sh`，将内嵌密码哈希与参考 CLI 比较，再对子进程模拟缺库。它不会覆盖预期哈希。不要通过删除断言、跳过认证测试或使用 `moon test --update` 接受错误结果来“修好”fixture；生成方法见 [安全文档](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/security.zh_CN.md)。
+该脚本会调用 `scripts/check-argon2.sh`，将内嵌密码哈希与参考 CLI 比较，再对子进程模拟缺库。它不会覆盖预期哈希。不要通过删除断言、跳过认证测试或使用 `moon test --update` 接受错误结果来“修好”fixture；生成方法见 [安全文档](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/security.zh_CN.md)。
 
 ### 3.2 CI 完整验证与正式候选证据
 
@@ -269,10 +269,10 @@ CI 先将明确允许的结果文件整理到 runner 可读的 `test-results/dis
 
 新增外部库时，应同时补充：库名称与支持版本、安装说明、正常功能用例、缺库负向用例，以及相关 profile 的实际库清单断言。若开始声称支持新的系统或工具链，应扩展矩阵，而不是沿用 Ubuntu 24.04 的通过结论。
 
-0.3.0 的版本元数据会在 manifest、CLI、系统指标、包文件名、CHANGELOG、文档和相关测试中显式核对：
+0.4.0 的版本元数据会在 manifest、CLI、系统指标、包文件名、CHANGELOG、文档和相关测试中显式核对：
 
 ```bash
-git grep -n 0\.3\.0 -- moon.mod src/cmd/broker scripts tests/integration README.md README.zh_CN.md CHANGELOG.md
+git grep -n 0\.4\.0 -- moon.mod src/cmd/broker scripts tests/integration README.md README.zh_CN.md CHANGELOG.md
 ```
 
 不要盲目替换测试数据或第三方版本字符串。版本号更新本身也改变候选包，因此不能在验证成功后再临时改版本发布。
@@ -478,5 +478,7 @@ Broker 镜像不安装客户端测试库。
 可选的 RELEASE_SOAK=1 路径执行 strict 模式 600 秒、至少 20,000 条
 已接纳消息的 MQTT 3.1.1/MQTT 5 混合 QoS 1/2 和 V5 属性负载。
 2 秒/20 条短夹具只用于验证接线。固定硬件的 0.3.0 性能对照使用
-scripts/run-mqtt5-performance.sh，与 CI 门禁分开；详见
-[MQTT 5 支持说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.zh_CN.md)。
+scripts/run-mqtt5-performance.sh，与 CI 门禁分开。基线与候选须均为
+release 构建；以三轮配对吞吐比和 ACK P99 的中位数判定，
+各轮原始结果仍保留。详见
+[MQTT 5 支持说明](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/mqtt5.zh_CN.md)。
