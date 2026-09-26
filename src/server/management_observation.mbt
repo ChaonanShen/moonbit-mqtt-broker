@@ -94,7 +94,7 @@ pub fn RouterDriver::capture_observation(
   let (armed_wills, pending_wills) = state.will_counts()
   {
     boot_id: context.boot_id,
-    version: "0.3.0",
+    version: "0.4.0",
     boot_monotonic_ms: context.boot_monotonic_ms,
     captured_monotonic_ms: now_monotonic_ms,
     captured_unix_ms: now_unix_ms,

@@ -607,7 +607,7 @@ pub fn worst_case_response_bytes() -> Int {
   }
   let sample : ObservationSnapshot = {
     boot_id: "0123456789abcdef0123456789abcdef",
-    version: "0.3.0",
+    version: "0.4.0",
     boot_monotonic_ms: 0L,
     captured_monotonic_ms: 0L,
     captured_unix_ms: max,
