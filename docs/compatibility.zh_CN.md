@@ -1,6 +1,6 @@
 # 兼容性和支持矩阵
 
-**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.md)
+**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/compatibility.md)
 
 | 能力 | 当前状态 | 说明 |
 | --- | --- | --- |
@@ -39,7 +39,7 @@
 | 文本/JSON 结构化日志 | 支持 | error/warn/info/debug，字段稳定并隐藏 secret/payload |
 | TOML 配置 | 支持 | CLI > TOML > 默认值；未知/重复键致命；支持检查/打印模式 |
 | QoS 2 | 支持 | Method B 入站去重、有界状态、按阶段重连和 V3 恢复 |
-| MQTT 5 | 可选开启 | 双版本监听器、会话与消息过期、属性、订阅选项、别名、流控和 Will Delay；见 [MQTT 5](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.zh_CN.md) |
+| MQTT 5 | 可选开启 | 双版本监听器、会话与消息过期、属性、订阅选项、别名、流控和 Will Delay；见 [MQTT 5](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/mqtt5.zh_CN.md) |
 | WebSocket / WSS | 可选支持 | MQTT 二进制帧、mqtt 子协议、Origin 允许列表与有界 Upgrade |
 | 共享订阅 / Bridge / 插件 / 集群 | 不支持 | MQTT 5 宣告共享不可用，共享订阅返回 SUBACK 9E |
 | 在线配置热更新 | 可选支持 | 已核验 bundle；SIGHUP 或 config_admin；密码、ACL、TLS/WSS 和受支持的运行时字段；默认关闭 |

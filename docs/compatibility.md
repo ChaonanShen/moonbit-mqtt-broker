@@ -1,6 +1,6 @@
 # Compatibility and support matrix
 
-[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/compatibility.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/compatibility.zh_CN.md) | **English**
 
 | Capability | Current status | Notes |
 | --- | --- | --- |
@@ -39,7 +39,7 @@
 | Text/JSON structured logs | Supported | error/warn/info/debug with stable fields and secret/payload redaction |
 | TOML configuration | Supported | CLI > TOML > defaults; unknown/duplicate keys fatal; check/print modes |
 | QoS 2 | Supported | Method B inbound deduplication, bounded state, phase-aware reconnect and V3 recovery |
-| MQTT 5 | Opt-in | Dual-version listeners; session expiry, message properties, subscription options, aliases, flow limits and Will Delay; see [MQTT 5](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.md) |
+| MQTT 5 | Opt-in | Dual-version listeners; session expiry, message properties, subscription options, aliases, flow limits and Will Delay; see [MQTT 5](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/mqtt5.md) |
 | WebSocket / WSS | Supported, opt-in | Binary MQTT frames, mqtt subprotocol, Origin allowlist and bounded Upgrade |
 | Shared subscriptions / Bridge / plugins / cluster | Unsupported | MQTT 5 declares shared unavailable and returns SUBACK 9E for shared filters |
 | Live configuration reload | Supported, opt-in | Verified bundle; SIGHUP or config-admin; passwords, ACLs, TLS/WSS and supported runtime fields; disabled by default |

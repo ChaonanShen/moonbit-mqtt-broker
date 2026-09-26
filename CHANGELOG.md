@@ -4,6 +4,36 @@ All notable user-visible changes are documented here.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-26
+
+- Add opt-in MQTT 5 on the existing TCP, TLS, WS and WSS listeners while
+  retaining MQTT 3.1.1 clients and the established QoS 0/1/2 behavior.
+- Replace the production MQTT 3.1.1 codec with an owned dual-version wire
+  codec; validate MQTT 5 properties, reason codes, packet direction and size.
+- Add Clean Start and Session Expiry, Message Expiry, Will Delay, Topic Alias,
+  Receive Maximum, subscription options and metadata across live, retained
+  and offline delivery.
+- Persist MQTT 5 sessions, subscriptions, messages and delayed Wills in V5
+  snapshots and schema 6 WAL, with guarded migration from older formats,
+  bounded expiry indexing and strict crash recovery.
+- Add dual-version interoperability, migration and fault tests, including
+  a 600-second mixed MQTT 3.1.1/MQTT 5 strict soak option and four isolated
+  runtime profiles in the release verification chain.
+- Keep shared subscriptions unavailable in this release; MQTT 5 advertises
+  Shared Subscription Available 0 and rejects shared filters.
+
+### Upgrade notes
+
+- MQTT 5 remains disabled by default. Set mqtt5_enabled=true to allow
+  MQTT 5 and MQTT 3.1.1 on the same listeners.
+- Back up the complete persistence directory and security configuration
+  before enabling MQTT 5 on existing data. The migration is one-way for
+  older binaries: rollback requires restoring the pre-upgrade backup.
+- Strict local WAL gates acknowledgements on committed state but cannot
+  make socket delivery and storage atomic. QoS exchanges may replay after
+  a crash; application-level exactly-once processing is not promised.
+
+
 ## [0.3.0]
 
 - Add multiple TCP, TLS, WS and WSS listeners sharing one Broker state, with bounded WebSocket upgrade and Origin policy.

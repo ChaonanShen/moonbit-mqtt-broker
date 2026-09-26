@@ -1,6 +1,6 @@
 # Architecture
 
-[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/architecture.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/architecture.zh_CN.md) | **English**
 
 The broker uses a single-writer runtime for all mutable MQTT state. Connection
 tasks own sockets and byte buffers; they cannot mutate Sessions, subscriptions,
@@ -74,7 +74,7 @@ file and imports state before creating the listener. This is the default
 snapshot mode. Opt-in strict mode uses a local WAL to commit defined persistent
 state before related acknowledgements; uncertain writes fence further persistent
 mutations. See
-[local persistence](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.3.0/docs/persistence.md) for the exact failure contract.
+[local persistence](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/persistence.md) for the exact failure contract.
 
 ## Security and operations
 

@@ -1,6 +1,6 @@
 # MQTT 5 support
 
-[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.zh_CN.md) | **English**
+[中文](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/mqtt5.zh_CN.md) | **English**
 
 MQTT 5 is opt-in. Set the CLI option --mqtt5-enabled true or set
 [protocol] mqtt5_enabled = true. The same TCP, TLS, WS or WSS listener
@@ -88,8 +88,8 @@ credentials and User Properties are never metric labels.
 Run scripts/verify-mqtt5-docker.sh to check the unit suite and the network
 matrix across off, snapshot and strict modes and TCP/TLS/WS/WSS, plus
 Mosquitto 2.0.18 client interoperability in both protocol directions. The
-test prints its remote MQTT5_EVIDENCE_DIR. See [compatibility](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/compatibility.md)
-and [persistence](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/persistence.md) for other broker guarantees.
+test prints its remote MQTT5_EVIDENCE_DIR. See [compatibility](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/compatibility.md)
+and [persistence](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/persistence.md) for other broker guarantees.
 
 ## Fixed-hardware performance comparison
 
@@ -100,8 +100,12 @@ candidate executable on the same host. The script checks 3.1.1 throughput
 ratio at least 0.90 and ACK P99 no higher than the larger of baseline times
 1.25 or baseline plus 5 ms. It reports MQTT 5 strict ACK latency separately.
 
+Use release-built broker binaries for both sides. Compare the median
+of three paired throughput ratios and the paired ACK P99 medians; individual
+rounds and raw samples remain in the evidence directory.
+
 ~~~bash
-BASELINE_BROKER=/absolute/path/to/0.3.0/broker   PERF_WARM_SECONDS=10 PERF_MEASURE_SECONDS=60 PERF_REPEATS=3   scripts/run-mqtt5-performance.sh
+BASELINE_BROKER=/absolute/path/to/0.3.0/release/broker MQTT5_CANDIDATE_BROKER=/absolute/path/to/0.4.0/release/broker PERF_WARM_SECONDS=10 PERF_MEASURE_SECONDS=60 PERF_REPEATS=3   scripts/run-mqtt5-performance.sh
 ~~~
 
 The runner prints a unique RUN_DIR with raw ACK samples, RSS time series,
