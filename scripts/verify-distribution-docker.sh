@@ -46,6 +46,7 @@ finish() {
 trap finish EXIT
 trap 'printf "DISTRIBUTION_FAILED_AT_LINE=%s\n" "$LINENO" >&2' ERR
 python3 -B tools/runtime_reference_test.py
+python3 -B tests/integration/mqtt5_performance_summary_test.py
 scripts/test-dependency-retry.sh
 printf 'source_commit=%s\nstarted_at=%s\nsoak=%s\n' "${SOURCE_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${RELEASE_SOAK:-0}" >"${RESULTS}/evidence.txt"
 readonly RUNTIME_REFERENCE="${DISTRIBUTION_RUNTIME_REFERENCE:-}"
