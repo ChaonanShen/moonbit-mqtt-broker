@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import signal
+import statistics
 import socket
 import subprocess
 import sys
@@ -39,11 +40,29 @@ def rss_sampler(pid, output, stopped):
                 pass
             stopped.wait(1)
 
+def aggregate_paired_rows(rows):
+    paired_modes = []
+    for mode in ("off", "snapshot", "strict"):
+        samples = [row for row in rows if row["mode"] == mode]
+        if {row["round"] for row in samples} != {1, 2, 3} or len(samples) != 3:
+            raise RuntimeError("incomplete paired rounds for " + mode)
+        ratio = statistics.median(row["throughput_ratio"] for row in samples)
+        p99 = statistics.median(row["candidate_p99_ms"] for row in samples)
+        p99_limit = statistics.median(row["p99_limit_ms"] for row in samples)
+        paired_modes.append({
+            "mode": mode,
+            "throughput_ratio_median": ratio,
+            "candidate_p99_ms_median": p99,
+            "p99_limit_ms_median": p99_limit,
+            "pass": ratio >= 0.90 and p99 <= p99_limit,
+        })
+    return paired_modes
+
 def main():
     baseline = os.environ.get("BASELINE_BROKER")
     candidate = os.environ.get(
         "MQTT5_CANDIDATE_BROKER",
-        str(ROOT / "_build/native/debug/build/cmd/broker/broker.exe"),
+        str(ROOT / "_build/native/release/build/cmd/broker/broker.exe"),
     )
     if not baseline or not os.access(baseline, os.X_OK):
         raise RuntimeError("BASELINE_BROKER must be an executable remote 0.3.0 broker")
@@ -166,11 +185,14 @@ def main():
                     "p99_limit_ms": p99_limit,
                     "pass": ratio >= 0.90 and right["ack_ms_p99"] <= p99_limit,
                 })
+        paired_modes = aggregate_paired_rows(rows)
         summary = {
             "source_sha": sha,
+            "aggregation": "median-of-three-paired-rounds",
             "rows": rows,
+            "paired_modes": paired_modes,
             "strict_v5": json.loads((run / "strict-1-candidate-v5.json").read_text()),
-            "pass": all(row["pass"] for row in rows),
+            "pass": all(mode["pass"] for mode in paired_modes),
             "fixture": fixture,
         }
         (run / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
@@ -181,6 +203,14 @@ def main():
                     f'{row["mode"]}\t{row["round"]}\t{row["throughput_ratio"]:.4f}\t'
                     f'{row["candidate_p99_ms"]:.3f}\t{row["p99_limit_ms"]:.3f}\t'
                     f'{row["pass"]}\n'
+                )
+        with open(run / "paired-median.tsv", "w", encoding="utf8") as output:
+            output.write("mode\tthroughput_ratio_median\tcandidate_p99_ms_median\tp99_limit_ms_median\tpass\n")
+            for mode in paired_modes:
+                output.write(
+                    f'{mode["mode"]}\t{mode["throughput_ratio_median"]:.4f}\t'
+                    f'{mode["candidate_p99_ms_median"]:.3f}\t'
+                    f'{mode["p99_limit_ms_median"]:.3f}\t{mode["pass"]}\n'
                 )
         status = 0 if fixture or summary["pass"] else 1
         if fixture:
