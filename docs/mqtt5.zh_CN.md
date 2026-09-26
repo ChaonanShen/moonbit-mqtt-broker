@@ -1,6 +1,6 @@
 # MQTT 5 支持
 
-**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/mqtt5.md)
+**中文** | [English](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/mqtt5.md)
 
 MQTT 5 默认关闭。启动时传入 --mqtt5-enabled true，或在 TOML 的
 [protocol] 中设置 mqtt5_enabled = true。开启后，同一个 TCP、TLS、WS
@@ -78,7 +78,7 @@ off 只保留内存状态。snapshot 恢复最近一次完成写入的 V5 快照
 运行 scripts/verify-mqtt5-docker.sh 可验证单测、三种持久化模式与
 TCP/TLS/WS/WSS 网络矩阵，以及 Mosquitto 2.0.18 客户端的双版本互操作。
 脚本输出远端 MQTT5_EVIDENCE_DIR。
-其他保证见[兼容性](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/compatibility.zh_CN.md)与[持久化](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/feat/mqtt5-protocol/docs/persistence.zh_CN.md)。
+其他保证见[兼容性](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/compatibility.zh_CN.md)与[持久化](https://github.com/ChaonanShen/moonbit-mqtt-broker/blob/release/0.4.0/docs/persistence.zh_CN.md)。
 
 ## 固定硬件性能对照
 
@@ -87,8 +87,11 @@ CI runner 的 CPU/磁盘条件不稳定，0.3.0 基线对照由用户在同一�
 3.1.1 吞吐比门槛为 0.90；ACK P99 不高于
 max(基线×1.25，基线+5ms)。MQTT 5 strict ACK 延迟单独报告。
 
+基线与候选均使用 release 构建。以三轮配对吞吐比和 ACK P99
+的中位数判定阈值，同时保留每轮与原始样本。
+
 ~~~bash
-BASELINE_BROKER=/absolute/path/to/0.3.0/broker   PERF_WARM_SECONDS=10 PERF_MEASURE_SECONDS=60 PERF_REPEATS=3   scripts/run-mqtt5-performance.sh
+BASELINE_BROKER=/absolute/path/to/0.3.0/release/broker MQTT5_CANDIDATE_BROKER=/absolute/path/to/0.4.0/release/broker PERF_WARM_SECONDS=10 PERF_MEASURE_SECONDS=60 PERF_REPEATS=3   scripts/run-mqtt5-performance.sh
 ~~~
 
 脚本输出唯一 RUN_DIR，保存原始 ACK 样本、RSS 时序、二进制哈希、环境、
